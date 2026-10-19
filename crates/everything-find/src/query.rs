@@ -3,7 +3,7 @@
 use std::path::Path;
 
 /// Folders excluded inside Everything so its totals stay close to accurate.
-const DEFAULT_EXCLUDES: &str = r"!\.git\ !\node_modules\ !\target\ !\bin\ !\obj\";
+const DEFAULT_EXCLUDES: [&str; 5] = [".git", "node_modules", "target", "bin", "obj"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -16,9 +16,12 @@ pub enum Kind {
 /// root, kind and exclude filters.
 pub fn build_query(user_query: &str, root: Option<&Path>, kind: Kind, default_excludes: bool) -> String {
     let mut parts = Vec::new();
+    let mut root_lower = String::new();
     if let Some(root) = root {
         let root = root.to_string_lossy();
-        parts.push(format!("\"{}\\\"", root.trim_end_matches('\\')));
+        let root = root.trim_end_matches('\\');
+        root_lower = format!("{}\\", root.to_lowercase());
+        parts.push(format!("\"{root}\\\""));
     }
     match kind {
         Kind::File => parts.push("file:".to_string()),
@@ -26,7 +29,12 @@ pub fn build_query(user_query: &str, root: Option<&Path>, kind: Kind, default_ex
         Kind::Any => {}
     }
     if default_excludes {
-        parts.push(DEFAULT_EXCLUDES.to_string());
+        // An exclude matching a folder in the root itself would hide everything.
+        for name in DEFAULT_EXCLUDES {
+            if !root_lower.contains(&format!("\\{name}\\")) {
+                parts.push(format!("!\\{name}\\"));
+            }
+        }
     }
     parts.push(format!("<{user_query}>"));
     parts.join(" ")
@@ -47,6 +55,14 @@ mod tests {
             build_query("foo | bar", Some(Path::new(r"C:\Source\app")), Kind::File, true),
             r#""C:\Source\app\" file: !\.git\ !\node_modules\ !\target\ !\bin\ !\obj\ <foo | bar>"#
         );
+    }
+
+    #[test]
+    fn excludes_skip_folders_in_root() {
+        let q = build_query("x", Some(Path::new(r"C:\Proj\BIN\app")), Kind::Any, true);
+        assert!(!q.contains(r"!\bin\"), "{q}");
+        assert!(q.contains(r"!\obj\"), "{q}");
+        assert!(q.contains(r"!\node_modules\"), "{q}");
     }
 
     #[test]

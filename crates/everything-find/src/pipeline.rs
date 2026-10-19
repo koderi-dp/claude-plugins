@@ -97,11 +97,19 @@ impl Context {
     }
 }
 
+/// Canonical so 8.3 short names and `..` match the long paths Everything returns.
 pub(crate) fn repo_root(ctx: &Context) -> PathBuf {
-    match &ctx.project_dir {
+    let dir = match &ctx.project_dir {
         Some(dir) if dir.is_dir() => dir.clone(),
         _ => ctx.cwd.clone(),
-    }
+    };
+    dunce::canonicalize(&dir).unwrap_or(dir)
+}
+
+/// The nearest ancestor (inclusive) holding `.git`, so a session started in a
+/// subfolder still honours the repo's top-level `.gitignore`.
+fn git_root(start: &Path) -> Option<PathBuf> {
+    start.ancestors().find(|d| d.join(".git").exists()).map(Path::to_path_buf)
 }
 
 /// `Err` carries the full user-facing "not indexed" message.
@@ -144,7 +152,7 @@ pub fn run_find(params: &FindParams, ctx: &Context, s: &dyn Searcher) -> Result<
         (Some(search_root), true) => {
             let repo = repo_root(ctx);
             let base = if strip_root_ci(search_root, &repo).is_some() { repo } else { search_root.clone() };
-            Some(IgnoreFilter::new(&base))
+            Some(IgnoreFilter::new(&git_root(&base).unwrap_or(base)))
         }
         _ => None,
     };
@@ -205,11 +213,14 @@ pub fn run_find(params: &FindParams, ctx: &Context, s: &dyn Searcher) -> Result<
     let root_label = root.as_ref().map(|r| r.display().to_string()).unwrap_or_else(|| "all drives".to_string());
     let hidden_note = if hidden > 0 {
         format!(" ({hidden} hidden by .gitignore — retry with include_ignored: true)")
+    } else if filtering {
+        " (build/vendor folders excluded — retry with include_ignored: true)".to_string()
     } else {
         String::new()
     };
     if kept.is_empty() {
-        return Ok(format!("0 matches for {} in {root_label}{hidden_note}", params.query));
+        let warning = if status.db_loaded { "" } else { "Everything is still indexing; results may be incomplete.\n" };
+        return Ok(format!("{warning}0 matches for {} in {root_label}{hidden_note}", params.query));
     }
 
     let (count, count_is_upper_bound) = match (hidden, examined_all) {
@@ -503,6 +514,44 @@ mod tests {
         let fake = FakeSearcher::new(vec![]);
         run_find(&FindParams { sort: SortParam::Modified, ..params("x") }, &ctx, &fake).unwrap();
         assert_eq!(fake.last_opts().sort, SortKey::Modified);
+    }
+
+    #[test]
+    fn repo_root_is_canonicalized() {
+        let (_d, root, _ctx) = repo();
+        let ctx = Context { cwd: root.join(r"src\.."), project_dir: None };
+        assert_eq!(repo_root(&ctx), root);
+        // tempfile hands out the raw (8.3 short-name on this machine) %TEMP% form.
+        let raw = tempfile::tempdir().unwrap();
+        let long = dunce::canonicalize(raw.path()).unwrap();
+        assert_eq!(repo_root(&Context { cwd: raw.path().to_path_buf(), project_dir: None }), long);
+    }
+
+    #[test]
+    fn zero_with_default_excludes_hints_include_ignored() {
+        let (_d, _root, ctx) = repo();
+        let out = run_find(&params("nothing"), &ctx, &FakeSearcher::new(vec![])).unwrap();
+        assert!(out.ends_with(" (build/vendor folders excluded — retry with include_ignored: true)"), "{out}");
+    }
+
+    #[test]
+    fn subfolder_session_applies_git_root_gitignore() {
+        let (_d, root, _ctx) = repo();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let ctx = Context { cwd: root.join("src"), project_dir: None };
+        let fake = FakeSearcher::new(vec![file(&root.join(r"src\a.log")), file(&root.join(r"src\b.rs"))]);
+        let out = run_find(&params("*"), &ctx, &fake).unwrap();
+        assert!(out.contains("b.rs"), "{out}");
+        assert!(!out.contains("a.log"), "{out}");
+    }
+
+    #[test]
+    fn zero_results_keep_indexing_warning() {
+        let (_d, _root, ctx) = repo();
+        let mut fake = FakeSearcher::new(vec![]);
+        fake.status.db_loaded = false;
+        let out = run_find(&params("a"), &ctx, &fake).unwrap();
+        assert!(out.starts_with("Everything is still indexing; results may be incomplete.\n0 matches"), "{out}");
     }
 
     #[test]
