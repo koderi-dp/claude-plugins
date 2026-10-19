@@ -1,6 +1,6 @@
 //! Tests against a running Everything instance. Run with `cargo test -- --ignored`.
 
-use everything_find::pipeline::{Context, FindParams, SearchOpts, Searcher, SortKey, SortParam, run_find};
+use everything_find::pipeline::{Context, FindParams, KindParam, SearchOpts, Searcher, SortKey, SortParam, run_find};
 use everything_find::sdk::EverythingSdk;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -96,6 +96,43 @@ fn live_sort_modified() {
     let out = wait_for(&p, &d.ctx(), "new.txt");
     let (new, old) = (out.find("new.txt").expect(&out), out.find("old.txt").expect(&out));
     assert!(new < old, "{out}");
+}
+
+#[test]
+#[ignore]
+fn live_git_folder_itself_hidden() {
+    let d = LiveDir::new("git");
+    fs::create_dir_all(d.0.join(".git")).unwrap();
+    fs::create_dir_all(d.0.join("src")).unwrap();
+    fs::write(d.0.join(r"src\sentinel.txt"), "").unwrap();
+    let out = wait_for(&FindParams { kind: KindParam::Dir, ..params("*") }, &d.ctx(), "src/");
+    assert!(out.contains("src/"), "{out}");
+    assert!(!out.contains(".git"), "{out}");
+}
+
+#[test]
+#[ignore]
+fn live_user_exclude_glob() {
+    let d = LiveDir::new("excl");
+    for sub in ["keep", r"worktrees\copy"] {
+        fs::create_dir_all(d.0.join(sub)).unwrap();
+        fs::write(d.0.join(sub).join("compose.yml"), "").unwrap();
+    }
+    let p = FindParams { exclude: vec!["*/worktrees/*".into()], ..params("compose.yml") };
+    let out = wait_for(&p, &d.ctx(), "keep/");
+    assert!(out.contains("keep/"), "{out}");
+    assert!(!out.contains("worktrees"), "{out}");
+}
+
+#[test]
+#[ignore]
+fn live_date_query_lists_files_only() {
+    let d = LiveDir::new("dm");
+    fs::create_dir_all(d.0.join("sub")).unwrap();
+    fs::write(d.0.join(r"sub\today.txt"), "").unwrap();
+    let out = wait_for(&params("dm:today"), &d.ctx(), "today.txt");
+    assert!(out.contains("today.txt"), "{out}");
+    assert!(!out.contains("  sub/"), "folder entry listed: {out}");
 }
 
 #[test]

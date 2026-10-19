@@ -1,6 +1,6 @@
 [package]
 name = "everything-find"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "MCP server exposing the voidtools Everything index as a `find` tool"
 license = "MIT"
