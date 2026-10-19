@@ -388,7 +388,7 @@ Registry order final: dotnet, cargo, tsc, jstest, node_install, docker_build, do
 
 README contents: what it does (the before/after example from the spec), the one-time allow rule `Bash(output-trim *)` with how to add it (`/permissions` or `permissions.allow` in `~/.claude/settings.json`), why it is safe (reads stdin only, never executes anything), that the full log path is in the footer, and the limitation that unpiped failing commands are not trimmed.
 
-`release.ps1`: loop over `everything-find`, `output-trim`. Build each with `cargo build --release -p <name>`, throw on a non-zero exit code, and copy `target\release\<name>.exe` into `plugins\<name>\bin\`.
+No build-script change is needed: the root `justfile` recipes are generic, because the crate name equals the plugin folder name. Do not run `just publish` (it commits, tags and pushes; that is the user's call). Commit locally only.
 
 - [ ] **Step 1: Write the files** above.
 - [ ] **Step 2: Run** `just test`, then `just release output-trim`. Expected: tests pass; `Released output-trim.exe` printed; `plugins/output-trim/bin/output-trim.exe` exists.
