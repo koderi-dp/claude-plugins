@@ -79,7 +79,8 @@ publish plugin version:
     if ($LASTEXITCODE -ne 0) { throw 'release build failed' }
     git add -A
     git commit -m "release: {{plugin}} v{{version}}"
-    git tag "{{plugin}}-v{{version}}"
+    # Annotated, so `git push --follow-tags` sends it.
+    git tag -a "{{plugin}}-v{{version}}" -m "{{plugin}} v{{version}}"
     git push --follow-tags
     if ($LASTEXITCODE -ne 0) { throw 'push failed' }
     just --justfile $j update {{plugin}}
