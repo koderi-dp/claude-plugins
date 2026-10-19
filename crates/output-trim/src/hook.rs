@@ -225,6 +225,33 @@ mod tests {
     }
 
     #[test]
+    fn silent_for_non_build_subcommands() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = fixture("logs_repetitive");
+        for cmd in [
+            "cargo run",
+            "cargo test -- --nocapture",
+            "cargo test -- --list",
+            "cargo metadata",
+            "dotnet run",
+            "dotnet test --list-tests",
+            "dotnet ef database update",
+            "tsc --showConfig",
+        ] {
+            assert!(post(&input(cmd, &big, None), dir.path()).is_none(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn trims_commands_the_rules_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = fixture("logs_repetitive");
+        for cmd in ["docker-compose logs api", "docker buildx build ."] {
+            assert!(post(&input(cmd, &big, None), dir.path()).is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
     fn silent_when_already_piped() {
         let dir = tempfile::tempdir().unwrap();
         let big = fixture("logs_repetitive");

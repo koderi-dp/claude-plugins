@@ -187,11 +187,28 @@ impl Rule for Cargo {
         "cargo"
     }
 
+    /// Build, check, lint, test, bench, doc and install subcommands only
+    /// (`cargo run`, `metadata`, `tree` … print program or data output).
     fn matches_command(&self, first_segment: &str) -> bool {
-        matches!(
-            first_segment.split_whitespace().next(),
-            Some("cargo") | Some("cargo.exe")
-        )
+        let mut words = first_segment.split_whitespace();
+        matches!(words.next(), Some("cargo" | "cargo.exe"))
+            && matches!(
+                // Skip `+toolchain` and global flags.
+                words.find(|w| !w.starts_with(['+', '-'])),
+                Some(
+                    "build"
+                        | "b"
+                        | "check"
+                        | "c"
+                        | "clippy"
+                        | "test"
+                        | "t"
+                        | "nextest"
+                        | "bench"
+                        | "doc"
+                        | "install"
+                )
+            )
     }
 
     fn matches_content(&self, lines: &[String]) -> bool {

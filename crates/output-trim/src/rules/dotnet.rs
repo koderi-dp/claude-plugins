@@ -74,10 +74,17 @@ impl Rule for Dotnet {
         "dotnet"
     }
 
+    /// Build, test, restore, publish, pack and clean only (`dotnet run`,
+    /// `dotnet ef` … print program or tool output).
     fn matches_command(&self, first_segment: &str) -> bool {
+        let words: Vec<&str> = first_segment.split_whitespace().collect();
         matches!(
-            first_segment.split_whitespace().next(),
-            Some("dotnet") | Some("dotnet.exe")
+            words.as_slice(),
+            [
+                "dotnet" | "dotnet.exe",
+                "build" | "test" | "restore" | "publish" | "pack" | "clean",
+                ..
+            ]
         )
     }
 

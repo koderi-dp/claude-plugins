@@ -1,22 +1,5 @@
 //! Command-string parsing shared by rule selection and the hook gates.
 
-/// Commands whose output the hook considers noisy (matched on word boundaries).
-const NOISY: &[&str] = &[
-    "dotnet",
-    "cargo",
-    "npm",
-    "pnpm",
-    "yarn",
-    "npx",
-    "tsc",
-    "vitest",
-    "jest",
-    "docker logs",
-    "docker compose logs",
-    "docker build",
-    "docker compose build",
-];
-
 /// Commands that already trim or filter what they receive on stdin (lowercase).
 const VIEWERS: &[&str] = &[
     "output-trim",
@@ -126,13 +109,28 @@ pub fn pipes_into_view(cmd: &str) -> bool {
     })
 }
 
-/// True when the first segment starts with an entry of the noisy-command list.
-pub fn is_noisy(cmd: &str) -> bool {
-    let seg = first_segment(cmd)
+/// Flags (and their prefixes) that make a tool list, describe or stream its
+/// output instead of building or testing.
+const LISTING_FLAGS: &[&str] = &[
+    "--list",
+    "--nocapture",
+    "--showConfig",
+    "--version",
+    "--help",
+];
+
+/// True when the segment carries a listing/streaming flag (`--list-tests`, …).
+fn lists_or_streams(segment: &str) -> bool {
+    segment
         .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    NOISY.iter().any(|n| starts_with_word(&seg, n))
+        .any(|w| LISTING_FLAGS.iter().any(|f| w.starts_with(f)))
+}
+
+/// True when a specific trimming rule claims the command (build, test, install
+/// and log commands; see each rule's `matches_command`) and it carries no
+/// listing/streaming flag. Derived from the rules so the two cannot drift.
+pub fn is_noisy(cmd: &str) -> bool {
+    !lists_or_streams(first_segment(cmd)) && crate::rules::by_command(cmd).is_some()
 }
 
 #[cfg(test)]
@@ -212,5 +210,92 @@ mod tests {
         assert!(!is_noisy("docker ps"));
         assert!(!is_noisy("sed -n 1,5p f"));
         assert!(!is_noisy("dotnetfoo"));
+    }
+
+    const BUILDS: &[&str] = &[
+        "cargo build --release",
+        "cargo check",
+        "cargo clippy --all-targets",
+        "cargo test --lib",
+        "cargo +nightly test",
+        "cargo nextest run",
+        "cargo bench",
+        "cargo doc --no-deps",
+        "cargo install --path .",
+        "dotnet build",
+        "dotnet test --no-build",
+        "dotnet restore",
+        "dotnet publish -c Release",
+        "dotnet pack",
+        "dotnet clean",
+        "npm install",
+        "npm i -D vitest",
+        "npm ci",
+        "npm test",
+        "npm run test:unit",
+        "pnpm install",
+        "pnpm add zod",
+        "pnpm test",
+        "yarn",
+        "yarn add zod",
+        "tsc",
+        "tsc --noEmit",
+        "npx tsc -p .",
+        "vitest run",
+        "npx jest",
+        "docker logs api",
+        "docker compose logs api",
+        "docker-compose logs api",
+        "docker build .",
+        "docker buildx build .",
+        "docker compose build",
+    ];
+
+    const NOT_BUILDS: &[&str] = &[
+        "cargo run",
+        "cargo run --release -- --port 80",
+        "cargo test -- --list",
+        "cargo test -- --nocapture",
+        "cargo metadata --format-version 1",
+        "cargo tree",
+        "cargo --version",
+        "dotnet run",
+        "dotnet test --list-tests",
+        "dotnet ef migrations add Init",
+        "dotnet --info",
+        "tsc --listFiles",
+        "tsc --listFilesOnly",
+        "tsc --showConfig",
+        "tsc --version",
+        "npx tsc --help",
+        "jest --listTests",
+        "npm run build",
+        "npm --version",
+        "npx eslint .",
+    ];
+
+    #[test]
+    fn build_test_and_log_commands_are_noisy() {
+        for cmd in BUILDS {
+            assert!(is_noisy(cmd), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn other_subcommands_and_listing_flags_are_not_noisy() {
+        for cmd in NOT_BUILDS {
+            assert!(!is_noisy(cmd), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn noisy_commands_always_have_a_rule() {
+        for cmd in BUILDS.iter().chain(NOT_BUILDS) {
+            assert_eq!(
+                is_noisy(cmd),
+                crate::rules::by_command(cmd).is_some() && !lists_or_streams(first_segment(cmd)),
+                "{cmd}"
+            );
+        }
     }
 }
