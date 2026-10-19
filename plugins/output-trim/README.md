@@ -16,8 +16,12 @@ Failed Studio.Api.Tests.AuthTests.Login_Expired
 ```
 
 When anything was trimmed, the footer gives the path of the saved full log. Small
-outputs pass through unchanged, with no footer. If saving the log failed, the footer
-says "full log unavailable".
+outputs (under 1,500 characters) are kept whole, with no footer; for a recognised tool
+the verdict line is still added on top. If saving the log failed, the footer says
+"full log unavailable".
+
+A piped command's exit code becomes output-trim's: 1 when it recognises a failure,
+else 0.
 
 A session-start note tells Claude the tool exists. A post hook shrinks large
 successful output from known noisy commands (dotnet, cargo, npm, docker logs and
