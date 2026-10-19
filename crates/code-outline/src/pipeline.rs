@@ -403,6 +403,27 @@ mod tests {
         assert_eq!(none, "No symbol zzzzzzzzzz in a.rs.");
     }
 
+    /// Runs `f` on a thread with the 1 MB stack the Windows exe's main thread has.
+    fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new().stack_size(1 << 20).spawn(f).unwrap().join().unwrap()
+    }
+
+    #[test]
+    fn deeply_nested_functions_do_not_overflow() {
+        let src = format!("{}{}", "function a(){\n".repeat(10_000), "}\n".repeat(10_000));
+        let (dir, ctx) = setup(&[("deep.js", src.as_bytes())]);
+        let (out, rs) = on_small_stack(move || {
+            let out = run_outline(&op("deep.js", 50), &ctx).unwrap();
+            let rs = run_read_symbol(&rsp("deep.js", "a", Some(10_000)), &ctx).unwrap();
+            (out, rs)
+        });
+        drop(dir);
+        assert!(out.lines().count() <= 2001, "{} lines", out.lines().count());
+        assert!(out.ends_with("(outline truncated — narrow with read_symbol)"), "{out}");
+        assert!(out.lines().all(|l| l.len() < 200), "indentation must be capped");
+        assert!(rs.starts_with("deep.js:"), "{}", &rs[..rs.len().min(300)]);
+    }
+
     #[test]
     fn read_symbol_missing_and_unsupported() {
         let (_d, ctx) = setup(&[("x.go", b"package x\n")]);

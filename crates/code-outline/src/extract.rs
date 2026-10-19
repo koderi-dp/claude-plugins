@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::{Node, Parser, QueryCursor, StreamingIterator};
 
@@ -6,6 +6,8 @@ use crate::lang::Lang;
 
 const SIGNATURE_CAP: usize = 160;
 const MAX_ERROR_LINES: usize = 3;
+/// Deepest symbol nesting kept in the tree.
+const MAX_DEPTH: usize = 64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Symbol {
@@ -58,7 +60,8 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
     let query = lang.query();
     let names = query.capture_names();
 
-    let mut flats: Vec<Flat> = Vec::new();
+    // (definition, kind, name node), one per definition node.
+    let mut items: Vec<(Node, &str, Node)> = Vec::new();
     let mut seen: HashSet<(usize, usize)> = HashSet::new();
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(query, root, bytes);
@@ -76,15 +79,17 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
         let (Some((def, kind)), Some(name_node)) = (item, name_node) else {
             continue;
         };
-        let range = (def.start_byte(), def.end_byte());
-        if !seen.insert(range) {
-            continue;
+        if seen.insert((def.start_byte(), def.end_byte())) {
+            items.push((def, kind, name_node));
         }
+    }
 
-        let range_node = match def.parent() {
-            // Docs and decorators precede the wrapper, not the definition.
-            Some(p) if matches!(p.kind(), "decorated_definition" | "export_statement") => p,
-            _ => def,
+    let defs: HashSet<usize> = items.iter().map(|(def, _, _)| def.id()).collect();
+    let placed = placements(root, &defs, lang, bytes);
+    let mut flats: Vec<Flat> = Vec::new();
+    for (def, kind, name_node) in items {
+        let Some(&(range_node, start_row)) = placed.get(&def.id()) else {
+            continue;
         };
         let name_text = text(name_node, bytes);
         let (name, key) = if lang == Lang::Rust && def.kind() == "impl_item" {
@@ -108,7 +113,7 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
                 kind: kind.replace('_', " "),
                 name,
                 key,
-                start_line: range_start_row(range_node, lang, bytes) + 1,
+                start_line: start_row + 1,
                 end_line,
                 signature: signature(def, lang, bytes),
                 children: Vec::new(),
@@ -140,12 +145,61 @@ fn rust_impl_names(def: Node, bytes: &[u8]) -> (String, String) {
     (name, key)
 }
 
+/// For each definition in `defs` (by node id): the node that bounds its range
+/// (the definition, or the decorator/export wrapper that holds it) and the
+/// 0-based row the range starts on. One cursor walk keeps the ancestors and
+/// earlier siblings at hand: `Node::parent` and the sibling lookups re-walk
+/// from the root, which is quadratic in nesting depth.
+fn placements<'t>(
+    root: Node<'t>,
+    defs: &HashSet<usize>,
+    lang: Lang,
+    bytes: &[u8],
+) -> HashMap<usize, (Node<'t>, usize)> {
+    let mut out = HashMap::new();
+    // The path from the root: each ancestor with its named children visited so far.
+    let mut stack: Vec<(Node<'t>, Vec<Node<'t>>)> = Vec::new();
+    let mut cursor = root.walk();
+    loop {
+        let node = cursor.node();
+        if defs.contains(&node.id()) {
+            let n = stack.len();
+            // Docs and decorators precede the wrapper, not the definition.
+            let wrapped = n >= 2
+                && matches!(stack[n - 1].0.kind(), "decorated_definition" | "export_statement");
+            let (range_node, before): (Node, &[Node]) = if wrapped {
+                // The wrapper itself is the last named child seen at its level.
+                let seen = &stack[n - 2].1;
+                (stack[n - 1].0, &seen[..seen.len().saturating_sub(1)])
+            } else {
+                (node, stack.last().map_or(&[][..], |(_, seen)| seen.as_slice()))
+            };
+            out.insert(node.id(), (range_node, range_start_row(range_node, before, lang, bytes)));
+        }
+        if node.is_named() {
+            if let Some((_, seen)) = stack.last_mut() {
+                seen.push(node);
+            }
+        }
+        if cursor.goto_first_child() {
+            stack.push((node, Vec::new()));
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return out;
+            }
+            stack.pop();
+        }
+    }
+}
+
 /// 0-based row where the symbol's range starts, extended over directly
 /// preceding attributes and doc comments (no blank line between).
-fn range_start_row(range_node: Node, lang: Lang, bytes: &[u8]) -> usize {
+/// `before` holds the named siblings preceding `range_node`, in order.
+fn range_start_row(range_node: Node, before: &[Node], lang: Lang, bytes: &[u8]) -> usize {
     let mut start_row = range_node.start_position().row;
-    let mut cur = range_node.prev_named_sibling();
-    while let Some(sib) = cur {
+    for &sib in before.iter().rev() {
         let kind = sib.kind();
         let accepted = lang.attr_kinds().contains(&kind)
             || (lang.comment_kinds().contains(&kind)
@@ -162,7 +216,6 @@ fn range_start_row(range_node: Node, lang: Lang, bytes: &[u8]) -> usize {
             break;
         }
         start_row = sib.start_position().row;
-        cur = sib.prev_named_sibling();
     }
     start_row
 }
@@ -229,6 +282,10 @@ fn body_start(def: Node) -> Option<usize> {
     None
 }
 
+/// Builds the symbol tree from byte ranges, at most `MAX_DEPTH` levels deep:
+/// a symbol nested deeper becomes a sibling of the symbol at `MAX_DEPTH`, so
+/// pathological files cannot make the recursive formatter, resolver or drop
+/// overflow the stack.
 fn nest(mut flats: Vec<Flat>) -> Vec<Symbol> {
     flats.sort_by(|a, b| a.start_byte.cmp(&b.start_byte).then(b.end_byte.cmp(&a.end_byte)));
     // Each stack entry is (end_byte, symbol under construction).
@@ -244,6 +301,9 @@ fn nest(mut flats: Vec<Flat>) -> Vec<Symbol> {
     }
     for f in flats {
         while stack.last().is_some_and(|(end, _)| *end <= f.start_byte) {
+            close(&mut stack, &mut roots);
+        }
+        if stack.len() == MAX_DEPTH {
             close(&mut stack, &mut roots);
         }
         stack.push((f.end_byte, f.symbol));
@@ -512,6 +572,32 @@ fn e( {
         assert!(x.error_lines.len() <= 3);
         assert!(x.error_lines.windows(2).all(|w| w[0] < w[1]));
         assert_eq!(x.error_lines.len(), 3);
+    }
+
+    fn depth(syms: &[Symbol]) -> usize {
+        let mut max = 0;
+        let mut stack: Vec<(&Symbol, usize)> = syms.iter().map(|s| (s, 1)).collect();
+        while let Some((s, d)) = stack.pop() {
+            max = max.max(d);
+            stack.extend(s.children.iter().map(|c| (c, d + 1)));
+        }
+        max
+    }
+
+    #[test]
+    fn nesting_capped_at_max_depth() {
+        let src = format!("{}{}", "function a(){\n".repeat(100), "}\n".repeat(100));
+        let x = extract(&src, Lang::JavaScript);
+        assert_eq!(depth(&x.symbols), MAX_DEPTH);
+        assert_eq!(flatten_names(&x.symbols).len(), 100);
+        // the symbol at MAX_DEPTH and everything deeper are siblings, in order
+        let mut level = &x.symbols;
+        for _ in 1..MAX_DEPTH - 1 {
+            level = &level[0].children;
+        }
+        let deep = &level[0].children;
+        assert_eq!(deep.len(), 100 - (MAX_DEPTH - 1));
+        assert!(deep.windows(2).all(|w| w[0].start_line < w[1].start_line));
     }
 
     #[test]

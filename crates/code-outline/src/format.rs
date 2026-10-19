@@ -12,8 +12,13 @@ pub enum FileOutline {
 
 const MAX_LINES: usize = 2000;
 
+/// Stops once `out` holds more than `MAX_LINES` lines: that is enough for
+/// `outline` to see the file needs truncating.
 fn push_symbols(out: &mut Vec<String>, symbols: &[Symbol], depth: usize, signatures: bool) {
     for s in symbols {
+        if out.len() > MAX_LINES {
+            return;
+        }
         let text = if signatures && s.kind != "impl" && !s.signature.is_empty() {
             s.signature.clone()
         } else {
@@ -252,6 +257,11 @@ mod tests {
         let out = outline(&[many("a.rs", 2500)], 1, false, false);
         assert!(out.ends_with("(outline truncated — narrow with read_symbol)"));
         assert_eq!(out.lines().count(), 2001);
+    }
+
+    #[test]
+    fn render_stops_past_the_line_cap() {
+        assert_eq!(render(&many("a.rs", 50_000), false).len(), MAX_LINES + 1);
     }
 
     #[test]
