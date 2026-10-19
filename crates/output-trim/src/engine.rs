@@ -157,13 +157,17 @@ pub fn apply(lines: &[String], rule: &dyn Rule, log: LogTarget, input_truncated:
     }
 }
 
-/// `n/1000` with one decimal, trailing `.0` removed, plus `k`.
+/// `n/1000` with one decimal, trailing `.0` removed, plus `k`; from one
+/// million (after rounding) `n/1000000` plus `M`.
 pub fn fmt_k(n: usize) -> String {
-    let tenths = (n + 50) / 100;
+    let (tenths, unit) = match (n + 50) / 100 {
+        t if t < 10_000 => (t, 'k'),
+        _ => ((n + 50_000) / 100_000, 'M'),
+    };
     if tenths.is_multiple_of(10) {
-        format!("{}k", tenths / 10)
+        format!("{}{unit}", tenths / 10)
     } else {
-        format!("{}.{}k", tenths / 10, tenths % 10)
+        format!("{}.{}{unit}", tenths / 10, tenths % 10)
     }
 }
 
@@ -225,6 +229,14 @@ mod tests {
         assert_eq!(fmt_k(300), "0.3k");
         assert_eq!(fmt_k(50_000), "50k");
         assert_eq!(fmt_k(48_700), "48.7k");
+        assert_eq!(fmt_k(999_900), "999.9k");
+    }
+
+    #[test]
+    fn fmt_k_millions() {
+        assert_eq!(fmt_k(55_402_297), "55.4M");
+        assert_eq!(fmt_k(1_000_000), "1M");
+        assert_eq!(fmt_k(999_950), "1M");
     }
 
     #[test]
