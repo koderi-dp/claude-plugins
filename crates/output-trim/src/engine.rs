@@ -9,6 +9,8 @@ use std::sync::Mutex;
 
 pub const BODY_CAP: usize = 6_000;
 pub const FILTER_PASSTHROUGH: usize = 1_500;
+/// Longest single line kept whole; longer ones are cut to this and `…`.
+pub const LINE_CAP: usize = 500;
 
 pub enum LogTarget<'a> {
     SaveIn(&'a Path),
@@ -37,28 +39,28 @@ fn trim_safely(rule: &dyn Rule, lines: &[String]) -> Trimmed {
     result.unwrap_or_else(|_| Generic.trim(lines))
 }
 
-/// Whole lines while they fit in `BODY_CAP`; if not even the first fits it is
-/// cut to the budget with `…`. Appends `… +N more lines` for dropped lines.
+/// The line, or its first `LINE_CAP` characters plus `…` when longer.
+fn cut_line(line: &str) -> String {
+    match line.char_indices().nth(LINE_CAP) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line.to_string(),
+    }
+}
+
+/// Whole lines (each cut by `cut_line`) while they fit in `BODY_CAP`.
+/// Appends `… +N more lines` for dropped lines.
 fn cap_body(body: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut used = 0;
     for (i, line) in body.iter().enumerate() {
+        let line = cut_line(line);
         let len = line.chars().count() + 1;
-        if used + len <= BODY_CAP {
-            out.push(line.clone());
-            used += len;
-            continue;
+        if used + len > BODY_CAP {
+            out.push(format!("… +{} more lines", body.len() - i));
+            break;
         }
-        let mut dropped = body.len() - i;
-        if out.is_empty() {
-            let cut: String = line.chars().take(BODY_CAP - 2).collect();
-            out.push(format!("{cut}…"));
-            dropped -= 1;
-        }
-        if dropped > 0 {
-            out.push(format!("… +{dropped} more lines"));
-        }
-        break;
+        out.push(line);
+        used += len;
     }
     out
 }
@@ -312,6 +314,20 @@ mod tests {
         assert!(o.text.contains('…'));
         assert!(o.trimmed);
         assert!(!o.text.contains("more lines"));
+    }
+
+    #[test]
+    fn overlong_second_line_is_cut_and_later_lines_kept() {
+        let d = tempfile::tempdir().unwrap();
+        let mut body = vec!["first".to_string(), "q".repeat(7_000)];
+        body.extend((1..=5).map(|i| format!("failure {i}")));
+        let o = apply(&big(30), &fixed(body), LogTarget::SaveIn(d.path()), false);
+        for i in 1..=5 {
+            assert!(o.text.contains(&format!("failure {i}")), "{}", o.text);
+        }
+        let cut = format!("{}…", "q".repeat(LINE_CAP));
+        assert!(o.text.lines().any(|l| l == cut), "{}", o.text);
+        assert!(!o.text.contains("more lines"), "{}", o.text);
     }
 
     #[test]
