@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use tree_sitter::{Node, Parser, QueryCursor, StreamingIterator};
 
 use crate::lang::Lang;
@@ -57,7 +59,7 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
     let names = query.capture_names();
 
     let mut flats: Vec<Flat> = Vec::new();
-    let mut seen: Vec<(usize, usize)> = Vec::new();
+    let mut seen: HashSet<(usize, usize)> = HashSet::new();
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(query, root, bytes);
     while let Some(m) = matches.next() {
@@ -75,13 +77,13 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
             continue;
         };
         let range = (def.start_byte(), def.end_byte());
-        if seen.contains(&range) {
+        if !seen.insert(range) {
             continue;
         }
-        seen.push(range);
 
         let range_node = match def.parent() {
-            Some(p) if p.kind() == "decorated_definition" => p,
+            // Docs and decorators precede the wrapper, not the definition.
+            Some(p) if matches!(p.kind(), "decorated_definition" | "export_statement") => p,
             _ => def,
         };
         let name_text = text(name_node, bytes);
@@ -137,10 +139,8 @@ fn range_start_row(range_node: Node, lang: Lang, bytes: &[u8]) -> usize {
     while let Some(sib) = cur {
         let kind = sib.kind();
         let accepted = lang.attr_kinds().contains(&kind)
-            || (lang.comment_kinds().contains(&kind) && {
-                let t = sib.utf8_text(bytes).unwrap_or("");
-                lang.doc_prefixes().iter().any(|p| t.starts_with(p))
-            });
+            || (lang.comment_kinds().contains(&kind)
+                && is_doc_comment(lang, sib.utf8_text(bytes).unwrap_or("")));
         // Rust line comments include their trailing newline, so the node ends
         // at column 0 of the next row.
         let end = sib.end_position();
@@ -156,6 +156,15 @@ fn range_start_row(range_node: Node, lang: Lang, bytes: &[u8]) -> usize {
         cur = sib.prev_named_sibling();
     }
     start_row
+}
+
+/// Doc comments start with a language doc prefix, but `////...` and `/***...`
+/// banners and the empty block `/**/` are ordinary comments.
+fn is_doc_comment(lang: Lang, text: &str) -> bool {
+    lang.doc_prefixes().iter().any(|p| text.starts_with(p))
+        && !text.starts_with("////")
+        && !text.starts_with("/***")
+        && text != "/**/"
 }
 
 fn signature(def: Node, lang: Lang, bytes: &[u8]) -> String {
@@ -241,20 +250,33 @@ fn error_lines(root: Node) -> Vec<usize> {
     if root.has_error() {
         collect_errors(root, &mut rows);
     }
-    rows.sort_unstable();
-    rows.dedup();
-    rows.truncate(MAX_ERROR_LINES);
     rows
 }
 
-fn collect_errors(node: Node, rows: &mut Vec<usize>) {
-    if node.is_error() || node.is_missing() {
-        rows.push(node.start_position().row + 1);
-    }
-    if node.has_error() {
-        let mut walk = node.walk();
-        for child in node.children(&mut walk) {
-            collect_errors(child, rows);
+/// Pre-order walk (rows come out ascending) that stops at `MAX_ERROR_LINES`
+/// distinct lines. Iterative so deeply nested files cannot overflow the stack.
+fn collect_errors(root: Node, rows: &mut Vec<usize>) {
+    let mut cursor = root.walk();
+    loop {
+        let node = cursor.node();
+        if node.has_error() {
+            if node.is_error() || node.is_missing() {
+                let row = node.start_position().row + 1;
+                if !rows.contains(&row) {
+                    rows.push(row);
+                    if rows.len() >= MAX_ERROR_LINES {
+                        return;
+                    }
+                }
+            }
+            if cursor.goto_first_child() {
+                continue;
+            }
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return;
+            }
         }
     }
 }
@@ -393,5 +415,78 @@ mod tests {
     fn test_module_nesting() {
         let x = rs("#[cfg(test)]\nmod tests {\n    #[test] fn t() {}\n}\n");
         assert_eq!(tree(&x), "mod tests 1-4\n  fn t 3-3");
+    }
+
+    fn ts(src: &str) -> Extracted {
+        extract(src, Lang::TypeScript)
+    }
+
+    #[test]
+    fn four_slashes_and_empty_block_are_not_docs() {
+        assert_eq!(rs("//// banner
+fn f() {}
+").symbols[0].start_line, 2);
+        assert_eq!(rs("/**/
+fn f() {}
+").symbols[0].start_line, 2);
+        assert_eq!(rs("/***
+ * banner
+ */
+fn f() {}
+").symbols[0].start_line, 4);
+        assert_eq!(rs("/** real */
+fn f() {}
+").symbols[0].start_line, 1);
+        assert_eq!(rs("/// real
+//// banner
+fn f() {}
+").symbols[0].start_line, 3);
+    }
+
+    #[test]
+    fn duplicate_matches_yield_one_symbol() {
+        let x = ts("const a = () => 1, b = () => 2;
+");
+        assert_eq!(tree(&x), "function a 1-1");
+    }
+
+    #[test]
+    fn many_symbols_are_collected() {
+        let src = "fn f() {}
+".repeat(5000);
+        assert_eq!(rs(&src).symbols.len(), 5000);
+    }
+
+    #[test]
+    fn export_wrapper_takes_leading_docs() {
+        let x = ts("/** d */
+export function f() {}
+");
+        assert_eq!(tree(&x), "function f 1-2");
+        let y = ts("/** d */
+function g() {}
+");
+        assert_eq!(tree(&y), "function g 1-2");
+    }
+
+    #[test]
+    fn error_lines_capped_at_three_distinct() {
+        let src = "fn a( {
+fn b( {
+fn c( {
+fn d( {
+fn e( {
+";
+        let x = rs(src);
+        assert!(x.error_lines.len() <= 3);
+        assert!(x.error_lines.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(x.error_lines.len(), 3);
+    }
+
+    #[test]
+    fn deeply_nested_broken_file_does_not_overflow() {
+        let src = format!("fn f() {{ let x = {} ;", "(".repeat(10_000));
+        let x = rs(&src);
+        assert!(!x.error_lines.is_empty() && x.error_lines.len() <= 3);
     }
 }
