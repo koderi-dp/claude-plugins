@@ -1,11 +1,11 @@
    Compiling cr v0.1.0 (C:\src\cr)
 error[E0308]: mismatched types
-  --> src\lib.rs:67:39
-   |
-67 | pub fn broken() -> i32 { let s: i32 = "text"; s }
-   |                                 ---   ^^^^^^ expected `i32`, found `&str`
-   |                                 |
-   |                                 expected due to this
+   --> src\lib.rs:307:39
+    |
+307 | pub fn broken() -> i32 { let s: i32 = "text"; s }
+    |                                 ---   ^^^^^^ expected `i32`, found `&str`
+    |                                 |
+    |                                 expected due to this
 
 warning: unused variable: `unused_value`
  --> src\lib.rs:2:28

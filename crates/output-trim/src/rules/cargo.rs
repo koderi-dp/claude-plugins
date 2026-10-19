@@ -118,10 +118,15 @@ impl Rule for Cargo {
         let (mut failed, mut passed) = (0usize, 0usize);
         let (mut have_result, mut finished, mut failure_seen) = (false, false, false);
         let mut leftover_errors = 0usize;
+        let mut trailing = 0usize;
+        let mut listed: HashSet<String> = HashSet::new();
 
         for raw in lines {
             let line = raw.trim_end();
             let blank = line.trim().is_empty();
+            if blank {
+                trailing = 0;
+            }
 
             match mode {
                 Mode::Section => {
@@ -153,6 +158,7 @@ impl Rule for Cargo {
                         continue;
                     }
                     if line.starts_with(' ') {
+                        listed.insert(line.trim().to_string());
                         acc.body.push(line.to_string());
                         continue;
                     }
@@ -184,11 +190,21 @@ impl Rule for Cargo {
             } else if DIAG_START_RE.is_match(line) {
                 mode = Mode::Diag;
                 acc.block.push(line.to_string());
+            } else if trailing > 0 && !blank && !line.starts_with("note: run with") {
+                // Assertion detail that follows a kept panic/error line.
+                trailing -= 1;
+                acc.body.push(line.to_string());
             } else if GATE_RE.is_match(line) && acc.push_once(line) {
                 leftover_errors += 1;
+                trailing = 4;
             }
         }
         acc.flush_block();
+        // `test x ... FAILED` is redundant once `x` is in the `failures:` list.
+        acc.body.retain(|l| {
+            let name = l.strip_prefix("test ").and_then(|r| r.strip_suffix(" ... FAILED"));
+            !(TEST_FAILED_RE.is_match(l) && name.is_some_and(|n| listed.contains(n)))
+        });
         while acc.body.last().is_some_and(|l| l.is_empty()) {
             acc.body.pop();
         }

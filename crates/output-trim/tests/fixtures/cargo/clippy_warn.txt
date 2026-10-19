@@ -31,4 +31,4 @@ warning: length comparison to zero
   = note: `#[warn(clippy::len_zero)]` on by default
 
 warning: `cr` (lib) generated 3 warnings (run `cargo clippy --fix --lib -p cr -- ` to apply 2 suggestions)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s

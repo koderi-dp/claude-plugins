@@ -183,12 +183,13 @@ mod cargo {
         assert!(text.contains("assertion `left == right` failed"), "{text}");
         assert!(text.contains("left: 2"), "{text}");
         assert!(text.contains("right: 3"), "{text}");
-        assert!(text.contains("test result: FAILED. 30 passed; 1 failed"), "{text}");
+        assert!(text.contains("test result: FAILED. 150 passed; 1 failed"), "{text}");
+        assert!(text.contains("warning: unused variable: `unused_value`"), "{text}");
         assert!(!text.contains("... ok"), "{text}");
         assert!(!text.contains("Compiling"), "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
         assert!(
-            t.verdict.starts_with("[output-trim] cargo test: FAILED — 1 failed, 30 passed"),
+            t.verdict.starts_with("[output-trim] cargo test: FAILED — 1 failed, 150 passed"),
             "{}",
             t.verdict
         );
@@ -198,8 +199,7 @@ mod cargo {
     fn test_fail_is_reduced() {
         let (kept, total) = reduction("test_fail");
         assert!(total >= 1_500, "{total}");
-        // Adapted from 20%: one failure with 30 passes keeps ~26% once verdict and footer are counted.
-        assert!(kept * 10 <= total * 3, "{kept} of {total}");
+        assert!(kept * 5 <= total, "{kept} of {total}");
     }
 
     #[test]
@@ -207,8 +207,9 @@ mod cargo {
         let t = Cargo.trim(&fixture("cargo", "test_pass"));
         assert_eq!(t.outcome, Outcome::Pass);
         assert!(t.body.iter().all(|l| !l.contains("... ok") && !l.contains("Doc-tests")), "{:#?}", t.body);
-        assert!(t.body.iter().any(|l| l.starts_with("test result: ok. 30 passed")), "{:#?}", t.body);
-        assert!(t.verdict.contains("0 failed, 30 passed"), "{}", t.verdict);
+        assert!(t.body.iter().any(|l| l.starts_with("test result: ok. 150 passed")), "{:#?}", t.body);
+        assert!(t.body.iter().any(|l| l.contains("unused variable: `unused_value`")), "{:#?}", t.body);
+        assert!(t.verdict.contains("0 failed, 150 passed"), "{}", t.verdict);
         let (kept, total) = reduction("test_pass");
         assert!(total >= 1_500, "{total}");
         assert!(kept * 5 <= total, "{kept} of {total}");
@@ -219,7 +220,7 @@ mod cargo {
         let t = Cargo.trim(&fixture("cargo", "build_fail"));
         let text = t.body.join("\n");
         assert!(text.contains("error[E0308]: mismatched types"), "{text}");
-        assert!(text.contains("--> src\\lib.rs:67:39"), "{text}");
+        assert!(text.contains("--> src\\lib.rs:307:39"), "{text}");
         assert!(text.contains("expected `i32`, found `&str`"), "{text}");
         assert!(text.contains("expected due to this"), "{text}");
         assert!(text.contains("could not compile"), "{text}");
@@ -259,7 +260,8 @@ mod cargo {
     #[test]
     fn unexpected_panic_line_outside_sections_is_kept() {
         let mut l = fixture("cargo", "test_pass");
-        l.insert(3, "thread 'main' panicked at src/main.rs:1:1: boom".into());
+        let at = l.iter().position(|x| x.trim_start().starts_with("Finished")).unwrap();
+        l.insert(at, "thread 'main' panicked at src/main.rs:1:1: boom".into());
         let t = Cargo.trim(&l);
         assert!(t.body.iter().any(|x| x.contains("panicked")), "{:#?}", t.body);
         assert_eq!(t.outcome, Outcome::Fail);
@@ -317,5 +319,50 @@ mod cargo {
         assert_eq!(rules::by_command("cargo test --lib").map(|r| r.name()), Some("cargo"));
         assert_eq!(rules::by_command("cd x && cargo clippy | tail").map(|r| r.name()), Some("cargo"));
         assert!(rules::by_command("cargox build").is_none());
+    }
+}
+
+mod cargo_followups {
+    use super::*;
+    use output_trim::rules::cargo::Cargo;
+    use output_trim::rules::{Outcome, Rule};
+
+    #[test]
+    fn failed_line_dropped_when_listed() {
+        let t = Cargo.trim(&fixture("cargo", "test_fail"));
+        assert!(t.body.iter().all(|l| !l.ends_with(" ... FAILED")), "{:#?}", t.body);
+        assert!(
+            t.body
+                .iter()
+                .any(|l| l.trim() == "tests::adds_two_positive_numbers_with_a_wrong_expectation"),
+            "{:#?}",
+            t.body
+        );
+    }
+
+    #[test]
+    fn failed_line_kept_when_not_listed() {
+        let t = Cargo.trim(&["test a::b ... FAILED".to_string()]);
+        assert!(t.body.iter().any(|l| l.contains("a::b ... FAILED")));
+    }
+
+    #[test]
+    fn panic_outside_section_keeps_assertion_detail() {
+        let l: Vec<String> = [
+            "thread 'main' panicked at src/main.rs:3:5:",
+            "assertion `left == right` failed",
+            "  left: 2",
+            " right: 3",
+            "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let t = Cargo.trim(&l);
+        let text = t.body.join("\n");
+        assert!(text.contains("assertion `left == right` failed"), "{text}");
+        assert!(text.contains("left: 2") && text.contains("right: 3"), "{text}");
+        assert!(!text.contains("RUST_BACKTRACE"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
     }
 }
