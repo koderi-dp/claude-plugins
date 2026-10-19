@@ -7,5 +7,12 @@ if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCOD
 
 $bin = Join-Path $repo 'plugins\everything-find\bin'
 New-Item -ItemType Directory -Force $bin | Out-Null
-Copy-Item (Join-Path $repo 'target\release\everything-find.exe') $bin -Force
+$exe = Join-Path $bin 'everything-find.exe'
+# Open Claude Code sessions run this exe and lock it; Windows allows renaming a
+# running exe, so move it aside. Stale .old copies go once their sessions end.
+Get-ChildItem $bin -Filter '*.old' | Remove-Item -ErrorAction SilentlyContinue
+if (Test-Path $exe) {
+    Move-Item $exe "$exe.$(Get-Date -Format 'yyyyMMddHHmmss').old"
+}
+Copy-Item (Join-Path $repo 'target\release\everything-find.exe') $bin
 Write-Host "Copied everything-find.exe to $bin"
