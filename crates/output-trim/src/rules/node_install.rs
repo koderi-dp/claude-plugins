@@ -110,7 +110,7 @@ impl Rule for NodeInstall {
                 body.push(line.to_string());
             } else if PEER_RE.is_match(line) || WARN_RE.is_match(line) {
                 body.push(line.to_string());
-            } else if NOISE_RE.is_match(line) {
+            } else if NOISE_RE.is_match(line) && !GATE_RE.is_match(line) {
                 // Progress, funding and audit nags.
             } else if SUMMARY_RE.is_match(line) {
                 if let Some(c) = ADDED_RE.captures(line).or_else(|| PNPM_PACKAGES_RE.captures(line)) {

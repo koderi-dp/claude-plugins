@@ -599,6 +599,24 @@ mod jstest {
     }
 
     #[test]
+    fn mixed_tsc_and_vitest_output_is_claimed_by_jstest() {
+        let l = fixture("jstest", "npm_test_tsc_then_vitest");
+        let rule = rules::by_content(&l);
+        assert_eq!(rule.name(), "jstest");
+        let t = rule.trim(&l);
+        let text = t.body.join("\n");
+        assert!(text.contains("error TS2322"), "{text}");
+        assert!(text.contains("expected 1 to be 2"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+    }
+
+    #[test]
+    fn tsc_only_and_vitest_only_keep_their_rules() {
+        assert_eq!(rules::by_content(&fixture("tsc", "errors_few")).name(), "tsc");
+        assert_eq!(rules::by_content(&fixture("jstest", "vitest_fail")).name(), "jstest");
+    }
+
+    #[test]
     fn real_jest_output_keeps_failures_and_diff() {
         let t = JsTest.trim(&fixture("jstest", "jest_fail"));
         let text = t.body.join("\n");
@@ -775,6 +793,22 @@ mod node_install {
         assert_eq!(t.body.iter().filter(|l| l.as_str() == "npm error 404").count(), 1, "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
         assert_eq!(t.verdict, "[output-trim] install: FAILED");
+    }
+
+    #[test]
+    fn error_lines_mentioning_audit_or_funding_are_kept() {
+        let l = lines(&[
+            "Error: audit request failed",
+            "Error: funding lookup crashed",
+            "run `npm fund` for details",
+            "npm audit fix --force",
+            "added 3 packages in 2s",
+        ]);
+        let t = NodeInstall.trim(&l);
+        assert!(t.body.iter().any(|b| b == "Error: audit request failed"), "{:#?}", t.body);
+        assert!(t.body.iter().any(|b| b == "Error: funding lookup crashed"), "{:#?}", t.body);
+        assert!(t.body.iter().all(|b| !b.contains("npm fund") && !b.contains("audit fix")), "{:#?}", t.body);
+        assert_eq!(t.outcome, Outcome::Fail);
     }
 
     #[test]

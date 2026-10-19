@@ -78,7 +78,8 @@ impl Rule for Tsc {
     }
 
     fn matches_content(&self, lines: &[String]) -> bool {
-        lines.iter().any(|l| CONTENT_RE.is_match(l))
+        // Mixed `tsc && vitest` output belongs to jstest, which keeps tsc errors too.
+        lines.iter().any(|l| CONTENT_RE.is_match(l)) && !super::jstest::has_summary(lines)
     }
 
     fn trim(&self, lines: &[String]) -> Trimmed {

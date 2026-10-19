@@ -43,6 +43,11 @@ static GATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
+/// True when the output contains a vitest/jest run summary.
+pub fn has_summary(lines: &[String]) -> bool {
+    lines.iter().any(|l| CONTENT_RE.is_match(l))
+}
+
 fn is_header(line: &str) -> bool {
     HEADER_RE.is_match(line) || BULLET_RE.is_match(line)
 }
@@ -88,7 +93,7 @@ impl Rule for JsTest {
     }
 
     fn matches_content(&self, lines: &[String]) -> bool {
-        lines.iter().any(|l| CONTENT_RE.is_match(l))
+        has_summary(lines)
     }
 
     fn trim(&self, lines: &[String]) -> Trimmed {
