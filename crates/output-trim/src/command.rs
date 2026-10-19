@@ -99,13 +99,29 @@ fn starts_with_word(s: &str, prefix: &str) -> bool {
         .is_some_and(|r| r.is_empty() || r.starts_with(char::is_whitespace))
 }
 
+/// Whether the segment invokes `output-trim` by path or with an `.exe` suffix,
+/// optionally behind the PowerShell call operator and quotes
+/// (`& "C:\x\output-trim.exe"`, `./output-trim`). `seg` is lowercase.
+fn invokes_output_trim(seg: &str) -> bool {
+    let mut s = seg.trim_start();
+    if let Some(rest) = s.strip_prefix('&') {
+        s = rest.trim_start();
+    }
+    let token = match s.chars().next() {
+        Some(q @ ('"' | '\'')) => s[1..].split(q).next().unwrap_or(""),
+        _ => s.split_whitespace().next().unwrap_or(""),
+    };
+    let name = token.rsplit(['/', '\\']).next().unwrap_or("");
+    name.strip_suffix(".exe").unwrap_or(name) == "output-trim"
+}
+
 /// True when any unquoted `|` feeds a segment that already trims or views output.
 pub fn pipes_into_view(cmd: &str) -> bool {
     let segments = split_segments(cmd);
     segments.windows(2).any(|w| {
         w[0].1 == Some(Sep::Pipe) && {
             let next = w[1].0.trim().to_lowercase();
-            VIEWERS.iter().any(|v| starts_with_word(&next, v))
+            VIEWERS.iter().any(|v| starts_with_word(&next, v)) || invokes_output_trim(&next)
         }
     })
 }
@@ -164,6 +180,22 @@ mod tests {
         assert!(!pipes_into_view("cargo test || tail -1"));
         assert!(!pipes_into_view(r#"echo "a | tail" && x"#));
         assert!(!pipes_into_view("cargo test | tailor"));
+    }
+
+    #[test]
+    fn pipes_into_view_qualified_output_trim() {
+        assert!(pipes_into_view(r"cargo test 2>&1 | output-trim.exe"));
+        assert!(pipes_into_view(r"cargo test | C:\tools\output-trim.exe"));
+        assert!(pipes_into_view(
+            r#"cargo test | "C:/Program Files/x/output-trim.exe""#
+        ));
+        assert!(pipes_into_view("cargo test | ./output-trim"));
+        assert!(pipes_into_view(
+            r#"cargo test | & "C:\x y\output-trim.exe""#
+        ));
+        assert!(pipes_into_view(r"cargo test | & C:\x\OUTPUT-TRIM.EXE -v"));
+        assert!(!pipes_into_view(r"cargo test | C:\x\output-trimmer.exe"));
+        assert!(!pipes_into_view(r"cargo test | C:\x\not-output-trim.exe"));
     }
 
     #[test]
