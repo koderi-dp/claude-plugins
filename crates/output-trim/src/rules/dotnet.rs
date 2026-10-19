@@ -1,6 +1,6 @@
 //! `dotnet build` / `dotnet test`: diagnostics, failed tests and summaries.
 
-use super::{Outcome, Rule, Trimmed, error_lines, verdict};
+use super::{Outcome, Rule, Trimmed, verdict};
 use crate::collapse::dedupe_keep_order;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -24,6 +24,17 @@ static FAILED_TEST_RE: LazyLock<Regex> =
 static COUNT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*(\d+) (Warning|Error)\(s\)\s*$").unwrap());
 static ERROR_WORD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\berror\b").unwrap());
+/// Failure lines without the word `error`; narrow on purpose (verbose builds are noisy).
+static FAILURE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)test run (failed|aborted)|\baborted\b|\bcrashed\b|unhandled exception|failed to restore|^\s*Failed [\w+.`<>]+(\(.*\))?\s*$",
+    )
+    .unwrap()
+});
+
+fn is_gate(line: &str) -> bool {
+    ERROR_WORD_RE.is_match(line) || FAILURE_RE.is_match(line)
+}
 static SIGNATURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*(?:(?:\d+>)?\s*Build (?:succeeded|FAILED)\.|.*\berror (?:CS|NU|MSB)\d+)").unwrap()
 });
@@ -145,7 +156,12 @@ impl Rule for Dotnet {
                         Section::Stack if !NOISE_FRAMES.iter().any(|n| t.starts_with(n)) => {
                             tests.push(line.trim_end().to_string())
                         }
-                        _ => {}
+                        Section::Stack => {}
+                        Section::None | Section::Other => {
+                            if is_gate(line) {
+                                leftovers.push(line.trim_end().to_string());
+                            }
+                        }
                     },
                 }
                 if in_block {
@@ -167,7 +183,7 @@ impl Rule for Dotnet {
                 build_failed = true;
             } else if !trimmed.starts_with("[xUnit.net")
                 && !trimmed.contains("Done Building Project")
-                && ERROR_WORD_RE.is_match(line)
+                && is_gate(line)
             {
                 leftovers.push(line.trim_end().to_string());
             }
@@ -175,7 +191,9 @@ impl Rule for Dotnet {
 
         let diag_errors: usize = errors.iter().map(|(_, v)| v.len()).sum();
         let diag_warnings: usize = warnings.iter().map(|(_, v)| v.len()).sum();
-        let fallback = error_lines(&leftovers, 0);
+        // Already gated by `is_gate`; `error_lines` would re-filter with a wider
+        // word list that lacks `aborted`/`crashed`, so only dedupe here.
+        let fallback = dedupe_keep_order(leftovers);
 
         let mut body: Vec<String> = Vec::new();
         for (_, v) in errors.into_iter().chain(warnings) {
@@ -187,10 +205,11 @@ impl Rule for Dotnet {
         body.extend(elapsed);
         let body = dedupe_keep_order(body);
 
-        let n_errors = err_count.unwrap_or(0).max(diag_errors);
+        let fallback_errors = fallback.iter().filter(|l| ERROR_WORD_RE.is_match(l)).count();
+        let n_errors = err_count.unwrap_or(0).max(diag_errors + fallback_errors);
         let n_warnings = warn_count.unwrap_or(0).max(diag_warnings);
 
-        let outcome = if diag_errors > 0 || build_failed || failed > 0 || failed_summary {
+        let outcome = if diag_errors > 0 || !fallback.is_empty() || build_failed || failed > 0 || failed_summary {
             Outcome::Fail
         } else if build_ok || have_summary {
             Outcome::Pass

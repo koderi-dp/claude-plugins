@@ -74,19 +74,74 @@ mod dotnet {
         let diag = regex::Regex::new(r"\): warning ").unwrap();
         let non_diag = t.body.iter().filter(|l| !diag.is_match(l)).count();
         assert!(non_diag <= 3, "{:#?}", t.body);
+        assert!(t.body.iter().any(|l| l.starts_with("Passed!  - Failed:")), "{:#?}", t.body);
         assert!(t.verdict.contains("0 failed, 3 passed, 0 skipped"), "{}", t.verdict);
     }
 
     #[test]
-    fn build_pass_reduction() {
+    fn build_pass_keeps_warning() {
         let lines = fixture("dotnet", "build_pass");
         let dir = tempfile::tempdir().unwrap();
         let out = engine::apply(&lines, &Dotnet, LogTarget::SaveIn(dir.path()), false);
         assert_eq!(out.outcome, Outcome::Pass);
-        if out.total_chars >= 1_500 {
-            assert!(out.kept_chars * 5 <= out.total_chars, "{} of {}", out.kept_chars, out.total_chars);
-        }
         assert!(out.text.contains("warning CS0168"), "{}", out.text);
+    }
+
+    #[test]
+    fn build_fail_parallel_reduction() {
+        let lines = fixture("dotnet", "build_fail_parallel");
+        let dir = tempfile::tempdir().unwrap();
+        let out = engine::apply(&lines, &Dotnet, LogTarget::SaveIn(dir.path()), false);
+        assert!(out.total_chars >= 1_500);
+        assert!(out.kept_chars * 5 <= out.total_chars, "{} of {}", out.kept_chars, out.total_chars);
+    }
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn error_line_after_failed_block_is_kept() {
+        let mut l = fixture("dotnet", "test_fail");
+        let at = l.iter().position(|x| x.contains("Failed!")).unwrap();
+        // Output section (not message/stack) inside the failed block.
+        l.insert(at, "MSBUILD : error MSB1009: project file does not exist".into());
+        l.insert(at, "  Standard Output Messages:".into());
+        let t = Dotnet.trim(&l);
+        assert!(t.body.iter().any(|x| x.contains("error MSB1009")), "{:#?}", t.body);
+        assert_eq!(t.outcome, Outcome::Fail);
+    }
+
+    #[test]
+    fn host_crash_is_fail_and_kept() {
+        let t = Dotnet.trim(&lines(&[
+            "Test run for C:\\src\\Fx\\Lib.Tests.dll (.NETCoreApp,Version=v10.0)",
+            "The active test run was aborted. Reason: Test host process crashed",
+            "Test Run Aborted.",
+        ]));
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert!(t.body.iter().any(|x| x.contains("crashed")), "{:#?}", t.body);
+        assert!(t.body.iter().any(|x| x.contains("Test Run Aborted")), "{:#?}", t.body);
+    }
+
+    #[test]
+    fn restore_error_is_fail() {
+        let t = Dotnet.trim(&lines(&[
+            "  Determining projects to restore...",
+            r"C:\src\Fx\Lib\Lib.csproj : error NU1101: Unable to find package Nope. No packages exist with this id in source(s): nuget.org",
+            "  Failed to restore C:\\src\\Fx\\Lib\\Lib.csproj (in 1.2 sec).",
+        ]));
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert!(t.body.iter().any(|x| x.contains("error NU1101")), "{:#?}", t.body);
+        assert!(t.body.iter().any(|x| x.contains("Failed to restore")), "{:#?}", t.body);
+        assert!(t.verdict.contains("FAILED"), "{}", t.verdict);
+    }
+
+    #[test]
+    fn bare_failed_test_line_is_kept() {
+        let t = Dotnet.trim(&lines(&["  Failed Lib.Tests.CalcTests.Adds_Positive"]));
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert!(t.body.iter().any(|x| x.contains("Adds_Positive")));
     }
 
     #[test]
