@@ -101,11 +101,10 @@ pub fn run_outline(p: &OutlineParams, ctx: &Context) -> Result<String, String> {
         return Err("limit must be between 1 and 500".into());
     }
     let patterns: Vec<String> = match &p.paths {
-        Paths::One(s) if s.is_empty() => Vec::new(),
         Paths::One(s) => vec![s.clone()],
         Paths::Many(v) => v.clone(),
     };
-    if patterns.is_empty() {
+    if patterns.is_empty() || patterns.iter().any(|s| s.trim().is_empty()) {
         return Err("paths must not be empty".into());
     }
 
@@ -162,12 +161,12 @@ pub fn run_read_symbol(p: &ReadSymbolParams, ctx: &Context) -> Result<String, St
         let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         return Ok(unsupported_message(&ext));
     };
-    let (source, _notes) = match load(&root, &path) {
+    let (source, notes) = match load(&root, &path) {
         Ok(loaded) => loaded,
         Err(message) => return Ok(message),
     };
     let extracted = extract(&source, lang);
-    Ok(match resolve(&extracted.symbols, lang, &p.symbol, p.line.map(|n| n as usize)) {
+    let out = match resolve(&extracted.symbols, lang, &p.symbol, p.line.map(|n| n as usize)) {
         Resolution::Found(hit) => {
             let s = hit.symbol;
             format!(
@@ -196,7 +195,8 @@ pub fn run_read_symbol(p: &ReadSymbolParams, ctx: &Context) -> Result<String, St
             }
             out
         }
-    })
+    };
+    Ok(notes.iter().fold(out, |acc, note| format!("{acc}\n{note}")))
 }
 
 #[cfg(test)]
@@ -244,6 +244,30 @@ mod tests {
             run_read_symbol(&rsp("a.rs", "a", Some(0)), &ctx).unwrap_err(),
             "line must be 1 or greater"
         );
+    }
+
+    #[test]
+    fn blank_entry_in_list_is_rejected() {
+        let (_d, ctx) = setup(&[]);
+        for bad in ["", "  "] {
+            let p = OutlineParams {
+                paths: Paths::Many(vec!["a.rs".into(), bad.into()]),
+                signatures: false,
+                limit: 50,
+            };
+            assert_eq!(run_outline(&p, &ctx).unwrap_err(), "paths must not be empty");
+        }
+        assert_eq!(run_outline(&op("  ", 50), &ctx).unwrap_err(), "paths must not be empty");
+    }
+
+    #[test]
+    fn read_symbol_keeps_utf8_note() {
+        let note = "(file is not valid UTF-8; some characters replaced)";
+        let (_d, ctx) = setup(&[("a.rs", b"fn run() {} // \xff\nfn run2() {}\n")]);
+        let found = run_read_symbol(&rsp("a.rs", "run", None), &ctx).unwrap();
+        assert!(found.ends_with(&format!("\n{note}")), "{found}");
+        let missing = run_read_symbol(&rsp("a.rs", "zzzzzzzzzz", None), &ctx).unwrap();
+        assert_eq!(missing, format!("No symbol zzzzzzzzzz in a.rs.\n{note}"));
     }
 
     #[test]

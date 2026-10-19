@@ -215,6 +215,13 @@ mod tests {
     }
 
     #[test]
+    fn single_hit_with_stale_line_is_found() {
+        let x = extract(SERVER, Lang::Rust);
+        let r = resolve(&x.symbols, Lang::Rust, "find", Some(1));
+        assert!(matches!(r, Found(h) if h.qualified == "FindServer::find"));
+    }
+
+    #[test]
     fn line_with_no_name_match_is_not_found() {
         let x = extract(OVERLOADS, Lang::CSharp);
         assert!(matches!(
