@@ -25,11 +25,12 @@ pub fn strip_root_ci(path: &Path, root: &Path) -> Option<PathBuf> {
 pub struct IgnoreFilter {
     root: PathBuf,
     matchers: HashMap<PathBuf, Option<Gitignore>>,
+    nested_repo: HashMap<PathBuf, bool>,
 }
 
 impl IgnoreFilter {
     pub fn new(root: &Path) -> IgnoreFilter {
-        IgnoreFilter { root: root.to_path_buf(), matchers: HashMap::new() }
+        IgnoreFilter { root: root.to_path_buf(), matchers: HashMap::new(), nested_repo: HashMap::new() }
     }
 
     pub fn is_ignored(&mut self, path: &Path, is_dir: bool) -> bool {
@@ -39,6 +40,9 @@ impl IgnoreFilter {
         // Always match against our own casing of the root, so every matcher's
         // "path is under my root" precondition holds.
         let abs = self.root.join(&rel);
+        if self.inside_nested_repo(&rel, is_dir) {
+            return true;
+        }
         let mut dir = self.root.clone();
         let mut ignored = false;
         let parents: Vec<_> = rel.parent().map(|p| p.components().collect()).unwrap_or_default();
@@ -55,6 +59,23 @@ impl IgnoreFilter {
             }
         }
         ignored
+    }
+
+    /// Like git, treat a folder below the root that has its own `.git` (a
+    /// worktree's `.git` file or a nested repo's `.git` folder) as a separate
+    /// repo: it and everything under it are hidden.
+    fn inside_nested_repo(&mut self, rel: &Path, is_dir: bool) -> bool {
+        let components: Vec<_> = rel.components().collect();
+        let dirs = if is_dir { components.len() } else { components.len().saturating_sub(1) };
+        let mut dir = self.root.clone();
+        for component in &components[..dirs] {
+            dir.push(component);
+            let nested = *self.nested_repo.entry(dir.clone()).or_insert_with(|| dir.join(".git").exists());
+            if nested {
+                return true;
+            }
+        }
+        false
     }
 
     fn matcher(&mut self, dir: &Path) -> Option<&Gitignore> {
@@ -126,6 +147,31 @@ mod tests {
         let (_d, root, mut f) = fixture();
         let upper = PathBuf::from(root.to_string_lossy().to_uppercase());
         assert!(f.is_ignored(&upper.join("A.LOG"), false));
+    }
+
+    #[test]
+    fn nested_worktree_hidden() {
+        let (_d, root, mut f) = fixture();
+        let wt = root.join(r"wt\copy");
+        fs::create_dir_all(wt.join("src")).unwrap();
+        fs::write(wt.join(".git"), "gitdir: elsewhere\n").unwrap();
+        assert!(f.is_ignored(&wt.join(r"src\main.rs"), false));
+        assert!(f.is_ignored(&wt, true));
+        assert!(!f.is_ignored(&root.join(r"wt\other.rs"), false));
+    }
+
+    #[test]
+    fn nested_repo_dir_hidden() {
+        let (_d, root, mut f) = fixture();
+        fs::create_dir_all(root.join(r"vendored\.git")).unwrap();
+        assert!(f.is_ignored(&root.join(r"vendored\lib.rs"), false));
+    }
+
+    #[test]
+    fn root_own_git_not_treated_as_nested() {
+        let (_d, root, mut f) = fixture();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        assert!(!f.is_ignored(&root.join(r"src\a.rs"), false));
     }
 
     #[test]

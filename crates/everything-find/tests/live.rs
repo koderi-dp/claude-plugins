@@ -112,6 +112,23 @@ fn live_git_folder_itself_hidden() {
 
 #[test]
 #[ignore]
+fn live_nested_worktree_hidden() {
+    let d = LiveDir::new("wt");
+    fs::create_dir_all(d.0.join(r"wt\copy")).unwrap();
+    fs::write(d.0.join(r"wt\copy\.git"), "gitdir: elsewhere\n").unwrap();
+    fs::write(d.0.join(r"wt\copy\dup.rs"), "").unwrap();
+    fs::write(d.0.join("dup.rs"), "").unwrap();
+    // Wait until Everything has indexed the worktree copy, then check it is hidden.
+    let p = FindParams { include_ignored: true, ..params("dup.rs") };
+    let all = wait_for(&p, &d.ctx(), "wt/copy/");
+    assert!(all.contains("wt/copy/"), "{all}");
+    let out = run_find(&params("dup.rs"), &d.ctx(), &EverythingSdk).unwrap();
+    assert!(out.starts_with("1 match"), "{out}");
+    assert!(!out.contains("wt/copy/"), "{out}");
+}
+
+#[test]
+#[ignore]
 fn live_user_exclude_glob() {
     let d = LiveDir::new("excl");
     for sub in ["keep", r"worktrees\copy"] {
