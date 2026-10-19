@@ -22,17 +22,20 @@ impl Rule for Generic {
     }
 
     fn trim(&self, lines: &[String]) -> Trimmed {
-        let mut kept: Vec<String> = Vec::new();
-        if lines.len() <= HEAD + TAIL {
-            kept.extend_from_slice(lines);
+        let (body, tail) = if lines.len() <= HEAD + TAIL {
+            (collapse_runs(lines, 3), Vec::new())
         } else {
-            kept.extend_from_slice(&lines[..HEAD]);
+            let mut kept: Vec<String> = lines[..HEAD].to_vec();
             kept.extend(error_lines(&lines[HEAD..lines.len() - TAIL], 2));
-            kept.extend_from_slice(&lines[lines.len() - TAIL..]);
-        }
+            (
+                collapse_runs(&dedupe_keep_order(kept), 3),
+                collapse_runs(&lines[lines.len() - TAIL..], 3),
+            )
+        };
         Trimmed {
             verdict: verdict("output", Outcome::Unknown, ""),
-            body: collapse_runs(&dedupe_keep_order(kept), 3),
+            body,
+            tail,
             outcome: Outcome::Unknown,
         }
     }
@@ -56,7 +59,7 @@ mod tests {
         let mut lines: Vec<String> = (1..=200).map(name).collect();
         lines[99] = "ERROR db down".to_string();
         let t = Generic.trim(&lines);
-        let has = |l: &str| t.body.iter().any(|b| b == l);
+        let has = |l: &str| t.all_lines().iter().any(|b| b == l);
         assert!(has(&name(1)));
         assert!(has(&name(15)));
         assert!(has("ERROR db down"));
@@ -64,10 +67,10 @@ mod tests {
         assert!(has(&name(102)));
         assert!(has(&name(200)));
         assert!(!has(&name(50)));
-        let mut sorted = t.body.clone();
+        let mut sorted = t.all_lines();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(sorted.len(), t.body.len());
+        assert_eq!(sorted.len(), t.all_lines().len());
         assert_eq!(t.verdict, "[output-trim] output: DONE");
         assert_eq!(t.outcome, Outcome::Unknown);
     }
@@ -75,7 +78,7 @@ mod tests {
     #[test]
     fn short_input_kept_whole() {
         let lines: Vec<String> = (1..=10).map(name).collect();
-        assert_eq!(Generic.trim(&lines).body, lines);
+        assert_eq!(Generic.trim(&lines).all_lines(), lines);
     }
 
     #[test]

@@ -99,6 +99,7 @@ impl Rule for JsTest {
 
     fn trim(&self, lines: &[String]) -> Trimmed {
         let mut body: Vec<String> = Vec::new();
+        let mut tail: Vec<String> = Vec::new();
         let mut seen_leftovers: HashSet<String> = HashSet::new();
         let mut in_block = false;
         let mut stack_done = false;
@@ -126,7 +127,7 @@ impl Rule for JsTest {
                         passed = m[1].parse().ok();
                     }
                 }
-                body.push(line.trim().to_string());
+                tail.push(line.trim().to_string());
                 continue;
             }
             if BULLET_RE
@@ -191,6 +192,7 @@ impl Rule for JsTest {
         Trimmed {
             verdict: verdict("tests", outcome, &parts.join(", ")),
             body,
+            tail,
             outcome,
         }
     }

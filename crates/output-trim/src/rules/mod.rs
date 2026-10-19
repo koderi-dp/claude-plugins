@@ -21,10 +21,29 @@ pub enum Outcome {
     Unknown,
 }
 
+/// A rule's result. `body` holds the details in priority order (errors, then
+/// failed tests, then warnings); the engine's cap drops from its end. `tail`
+/// holds summaries (and the last lines of a log) and is always kept.
 pub struct Trimmed {
     pub verdict: String,
     pub body: Vec<String>,
+    pub tail: Vec<String>,
     pub outcome: Outcome,
+}
+
+impl Trimmed {
+    /// `body` followed by `tail`, uncapped.
+    pub fn all_lines(&self) -> Vec<String> {
+        self.body.iter().chain(&self.tail).cloned().collect()
+    }
+}
+
+/// Warnings kept per code (CS8618, `unused_variables`, …) before the rest are counted.
+pub const WARNINGS_PER_CODE: usize = 3;
+
+/// `+K more <code> warnings`.
+pub fn more_warnings(code: &str, k: usize) -> String {
+    format!("+{k} more {code} warnings")
 }
 
 pub trait Rule: Sync {

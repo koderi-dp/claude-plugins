@@ -1,6 +1,6 @@
 //! `dotnet build` / `dotnet test`: diagnostics, failed tests and summaries.
 
-use super::{Outcome, Rule, Trimmed, verdict};
+use super::{Outcome, Rule, Trimmed, WARNINGS_PER_CODE, more_warnings, verdict};
 use crate::collapse::dedupe_keep_order;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -211,15 +211,23 @@ impl Rule for Dotnet {
         // word list that lacks `aborted`/`crashed`, so only dedupe here.
         let fallback = dedupe_keep_order(leftovers);
 
+        // Errors, then failed tests and other failure lines, then warnings
+        // (a few per code); the engine's cap drops from the end of the body.
         let mut body: Vec<String> = Vec::new();
-        for (_, v) in errors.into_iter().chain(warnings) {
+        for (_, v) in errors {
             body.extend(v);
         }
         body.extend(tests);
         body.extend(fallback.iter().cloned());
-        body.extend(summaries);
-        body.extend(elapsed);
+        for (code, v) in warnings {
+            let extra = v.len().saturating_sub(WARNINGS_PER_CODE);
+            body.extend(v.into_iter().take(WARNINGS_PER_CODE));
+            if extra > 0 {
+                body.push(more_warnings(&code, extra));
+            }
+        }
         let body = dedupe_keep_order(body);
+        let tail = dedupe_keep_order(summaries.into_iter().chain(elapsed));
 
         let fallback_errors = fallback
             .iter()
@@ -256,6 +264,7 @@ impl Rule for Dotnet {
         Trimmed {
             verdict: verdict(label, outcome, &detail),
             body,
+            tail,
             outcome,
         }
     }

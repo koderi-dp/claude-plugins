@@ -82,12 +82,12 @@ impl Rule for DockerLogs {
                 body.push(format!("… {dropped} other earlier lines omitted"));
             }
         }
-        body.extend_from_slice(tail);
 
         let detail = format!("{} lines, {flagged} warnings/errors", lines.len());
         Trimmed {
             verdict: verdict("docker logs", Outcome::Unknown, &detail),
             body,
+            tail: tail.to_vec(),
             outcome: Outcome::Unknown,
         }
     }

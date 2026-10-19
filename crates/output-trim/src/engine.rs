@@ -47,21 +47,39 @@ fn cut_line(line: &str) -> String {
     }
 }
 
-/// Whole lines (each cut by `cut_line`) while they fit in `BODY_CAP`.
-/// Appends `… +N more lines` for dropped lines.
-fn cap_body(body: &[String]) -> Vec<String> {
+fn width(line: &str) -> usize {
+    line.chars().count() + 1
+}
+
+/// Fits body and tail (each line cut by `cut_line`) into `BODY_CAP`. The tail
+/// is kept whole and the rest of the budget goes to the start of the body; a
+/// tail over the budget keeps its last lines. `… +N more lines` stands between
+/// the two when anything was dropped.
+fn cap(body: &[String], tail: &[String]) -> Vec<String> {
+    let tail: Vec<String> = tail.iter().map(|l| cut_line(l)).collect();
+    let mut skip_tail = 0;
+    let mut tail_used: usize = tail.iter().map(|l| width(l)).sum();
+    while tail_used > BODY_CAP {
+        tail_used -= width(&tail[skip_tail]);
+        skip_tail += 1;
+    }
+
     let mut out = Vec::new();
-    let mut used = 0;
+    let mut used = tail_used;
+    let mut dropped = skip_tail;
     for (i, line) in body.iter().enumerate() {
         let line = cut_line(line);
-        let len = line.chars().count() + 1;
-        if used + len > BODY_CAP {
-            out.push(format!("… +{} more lines", body.len() - i));
+        if used + width(&line) > BODY_CAP {
+            dropped += body.len() - i;
             break;
         }
+        used += width(&line);
         out.push(line);
-        used += len;
     }
+    if dropped > 0 {
+        out.push(format!("… +{dropped} more lines"));
+    }
+    out.extend(tail.into_iter().skip(skip_tail));
     out
 }
 
@@ -95,9 +113,9 @@ pub fn apply(lines: &[String], rule: &dyn Rule, log: LogTarget, input_truncated:
     }
 
     let t = trim_safely(rule, lines);
-    let mut out = Vec::with_capacity(t.body.len() + 2);
+    let mut out = Vec::with_capacity(t.body.len() + t.tail.len() + 2);
     out.push(t.verdict);
-    out.extend(cap_body(&t.body));
+    out.extend(cap(&t.body, &t.tail));
 
     let location = match log {
         LogTarget::SaveIn(dir) => match store::save(dir, &full) {
@@ -149,6 +167,7 @@ mod tests {
     struct Fixed {
         name: &'static str,
         body: Vec<String>,
+        tail: Vec<String>,
         panics: bool,
     }
 
@@ -169,6 +188,7 @@ mod tests {
             Trimmed {
                 verdict: "[output-trim] fixed: DONE".to_string(),
                 body: self.body.clone(),
+                tail: self.tail.clone(),
                 outcome: Outcome::Fail,
             }
         }
@@ -178,6 +198,7 @@ mod tests {
         Fixed {
             name: "fixed",
             body,
+            tail: vec![],
             panics: false,
         }
     }
@@ -218,6 +239,7 @@ mod tests {
             &Fixed {
                 name: "generic",
                 body: vec![],
+                tail: vec![],
                 panics: true,
             },
             LogTarget::SaveIn(d.path()),
@@ -331,6 +353,41 @@ mod tests {
     }
 
     #[test]
+    fn tail_is_kept_after_a_long_body() {
+        let d = tempfile::tempdir().unwrap();
+        let body: Vec<String> = (0..1000).map(|_| "y".repeat(100)).collect();
+        let rule = Fixed {
+            tail: vec!["test result: FAILED".into()],
+            ..fixed(body)
+        };
+        let o = apply(&big(30), &rule, LogTarget::SaveIn(d.path()), false);
+        let lines: Vec<&str> = o.text.lines().collect();
+        let n = lines.len();
+        assert_eq!(lines[n - 2], "test result: FAILED", "{}", o.text);
+        // 6,000 - 20 for the tail leaves room for 59 body lines of 101.
+        assert_eq!(lines[n - 3], "… +941 more lines");
+        assert_eq!(lines.iter().filter(|l| **l == "y".repeat(100)).count(), 59);
+    }
+
+    #[test]
+    fn oversized_tail_keeps_its_last_lines() {
+        let d = tempfile::tempdir().unwrap();
+        let tail: Vec<String> = (0..100)
+            .map(|i| format!("{i:03}{}", "t".repeat(97)))
+            .collect();
+        let rule = Fixed {
+            tail,
+            ..fixed(vec!["b".repeat(100); 5])
+        };
+        let o = apply(&big(30), &rule, LogTarget::SaveIn(d.path()), false);
+        assert!(o.text.contains("… +46 more lines"), "{}", o.text);
+        assert!(!o.text.contains(&"b".repeat(100)), "{}", o.text);
+        assert!(!o.text.contains("040t"), "{}", o.text);
+        assert!(o.text.contains("041t"), "{}", o.text);
+        assert!(o.text.contains("099t"), "{}", o.text);
+    }
+
+    #[test]
     fn truncated_note() {
         let d = tempfile::tempdir().unwrap();
         let o = apply(
@@ -351,6 +408,7 @@ mod tests {
             &Fixed {
                 name: "bad",
                 body: vec![],
+                tail: vec![],
                 panics: true,
             },
             LogTarget::SaveIn(d.path()),

@@ -1,0 +1,327 @@
+   Compiling calc v0.1.0 (C:\src\calc)
+warning: unused variable: `value_0`
+  --> src\module_0.rs:3:9
+   |
+3  |     let value_0 = compute_something_long_here(0);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_0`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `value_1`
+  --> src\module_1.rs:4:9
+   |
+4  |     let value_1 = compute_something_long_here(1);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_1`
+
+warning: unused variable: `value_2`
+  --> src\module_2.rs:5:9
+   |
+5  |     let value_2 = compute_something_long_here(2);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_2`
+
+warning: unused variable: `value_3`
+  --> src\module_3.rs:6:9
+   |
+6  |     let value_3 = compute_something_long_here(3);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_3`
+
+warning: unused variable: `value_4`
+  --> src\module_4.rs:7:9
+   |
+7  |     let value_4 = compute_something_long_here(4);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_4`
+
+warning: unused variable: `value_5`
+  --> src\module_5.rs:8:9
+   |
+8  |     let value_5 = compute_something_long_here(5);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_5`
+
+warning: unused variable: `value_6`
+  --> src\module_6.rs:9:9
+   |
+9  |     let value_6 = compute_something_long_here(6);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_6`
+
+warning: unused variable: `value_7`
+  --> src\module_7.rs:10:9
+   |
+10 |     let value_7 = compute_something_long_here(7);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_7`
+
+warning: unused variable: `value_8`
+  --> src\module_8.rs:11:9
+   |
+11 |     let value_8 = compute_something_long_here(8);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_8`
+
+warning: unused variable: `value_9`
+  --> src\module_9.rs:12:9
+   |
+12 |     let value_9 = compute_something_long_here(9);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_9`
+
+warning: unused variable: `value_10`
+  --> src\module_10.rs:13:9
+   |
+13 |     let value_10 = compute_something_long_here(10);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_10`
+
+warning: unused variable: `value_11`
+  --> src\module_11.rs:14:9
+   |
+14 |     let value_11 = compute_something_long_here(11);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_11`
+
+warning: unused variable: `value_12`
+  --> src\module_12.rs:15:9
+   |
+15 |     let value_12 = compute_something_long_here(12);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_12`
+
+warning: unused variable: `value_13`
+  --> src\module_13.rs:16:9
+   |
+16 |     let value_13 = compute_something_long_here(13);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_13`
+
+warning: unused variable: `value_14`
+  --> src\module_14.rs:17:9
+   |
+17 |     let value_14 = compute_something_long_here(14);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_14`
+
+warning: unused variable: `value_15`
+  --> src\module_15.rs:18:9
+   |
+18 |     let value_15 = compute_something_long_here(15);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_15`
+
+warning: unused variable: `value_16`
+  --> src\module_16.rs:19:9
+   |
+19 |     let value_16 = compute_something_long_here(16);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_16`
+
+warning: unused variable: `value_17`
+  --> src\module_17.rs:20:9
+   |
+20 |     let value_17 = compute_something_long_here(17);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_17`
+
+warning: unused variable: `value_18`
+  --> src\module_18.rs:21:9
+   |
+21 |     let value_18 = compute_something_long_here(18);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_18`
+
+warning: unused variable: `value_19`
+  --> src\module_19.rs:22:9
+   |
+22 |     let value_19 = compute_something_long_here(19);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_19`
+
+warning: unused variable: `value_20`
+  --> src\module_20.rs:23:9
+   |
+23 |     let value_20 = compute_something_long_here(20);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_20`
+
+warning: unused variable: `value_21`
+  --> src\module_21.rs:24:9
+   |
+24 |     let value_21 = compute_something_long_here(21);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_21`
+
+warning: unused variable: `value_22`
+  --> src\module_22.rs:25:9
+   |
+25 |     let value_22 = compute_something_long_here(22);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_22`
+
+warning: unused variable: `value_23`
+  --> src\module_23.rs:26:9
+   |
+26 |     let value_23 = compute_something_long_here(23);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_23`
+
+warning: unused variable: `value_24`
+  --> src\module_24.rs:27:9
+   |
+27 |     let value_24 = compute_something_long_here(24);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_24`
+
+warning: unused variable: `value_25`
+  --> src\module_25.rs:28:9
+   |
+28 |     let value_25 = compute_something_long_here(25);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_25`
+
+warning: unused variable: `value_26`
+  --> src\module_26.rs:29:9
+   |
+29 |     let value_26 = compute_something_long_here(26);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_26`
+
+warning: unused variable: `value_27`
+  --> src\module_27.rs:30:9
+   |
+30 |     let value_27 = compute_something_long_here(27);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_27`
+
+warning: unused variable: `value_28`
+  --> src\module_28.rs:31:9
+   |
+31 |     let value_28 = compute_something_long_here(28);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_28`
+
+warning: unused variable: `value_29`
+  --> src\module_29.rs:32:9
+   |
+32 |     let value_29 = compute_something_long_here(29);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_29`
+
+warning: unused variable: `value_30`
+  --> src\module_30.rs:33:9
+   |
+33 |     let value_30 = compute_something_long_here(30);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_30`
+
+warning: unused variable: `value_31`
+  --> src\module_31.rs:34:9
+   |
+34 |     let value_31 = compute_something_long_here(31);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_31`
+
+warning: unused variable: `value_32`
+  --> src\module_32.rs:35:9
+   |
+35 |     let value_32 = compute_something_long_here(32);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_32`
+
+warning: unused variable: `value_33`
+  --> src\module_33.rs:36:9
+   |
+36 |     let value_33 = compute_something_long_here(33);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_33`
+
+warning: unused variable: `value_34`
+  --> src\module_34.rs:37:9
+   |
+37 |     let value_34 = compute_something_long_here(34);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_34`
+
+warning: unused variable: `value_35`
+  --> src\module_35.rs:38:9
+   |
+38 |     let value_35 = compute_something_long_here(35);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_35`
+
+warning: unused variable: `value_36`
+  --> src\module_36.rs:39:9
+   |
+39 |     let value_36 = compute_something_long_here(36);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_36`
+
+warning: unused variable: `value_37`
+  --> src\module_37.rs:40:9
+   |
+40 |     let value_37 = compute_something_long_here(37);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_37`
+
+warning: unused variable: `value_38`
+  --> src\module_38.rs:41:9
+   |
+41 |     let value_38 = compute_something_long_here(38);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_38`
+
+warning: unused variable: `value_39`
+  --> src\module_39.rs:42:9
+   |
+42 |     let value_39 = compute_something_long_here(39);
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_value_39`
+
+warning: `calc` (lib test) generated 40 warnings (run `cargo fix --lib -p calc --tests` to apply 40 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.21s
+     Running unittests src\lib.rs (target\debug\deps\calc-0a1b2c3d4e5f6a7b.exe)
+
+running 61 tests
+test tests::case_00 ... ok
+test tests::case_01 ... ok
+test tests::case_02 ... ok
+test tests::case_03 ... ok
+test tests::case_04 ... ok
+test tests::case_05 ... ok
+test tests::case_06 ... ok
+test tests::case_07 ... ok
+test tests::case_08 ... ok
+test tests::case_09 ... ok
+test tests::case_10 ... ok
+test tests::case_11 ... ok
+test tests::case_12 ... ok
+test tests::case_13 ... ok
+test tests::case_14 ... ok
+test tests::case_15 ... ok
+test tests::case_16 ... ok
+test tests::case_17 ... ok
+test tests::case_18 ... ok
+test tests::case_19 ... ok
+test tests::case_20 ... ok
+test tests::case_21 ... ok
+test tests::case_22 ... ok
+test tests::case_23 ... ok
+test tests::case_24 ... ok
+test tests::case_25 ... ok
+test tests::case_26 ... ok
+test tests::case_27 ... ok
+test tests::case_28 ... ok
+test tests::case_29 ... ok
+test tests::divides_by_zero_safely ... FAILED
+test tests::case_30 ... ok
+test tests::case_31 ... ok
+test tests::case_32 ... ok
+test tests::case_33 ... ok
+test tests::case_34 ... ok
+test tests::case_35 ... ok
+test tests::case_36 ... ok
+test tests::case_37 ... ok
+test tests::case_38 ... ok
+test tests::case_39 ... ok
+test tests::case_40 ... ok
+test tests::case_41 ... ok
+test tests::case_42 ... ok
+test tests::case_43 ... ok
+test tests::case_44 ... ok
+test tests::case_45 ... ok
+test tests::case_46 ... ok
+test tests::case_47 ... ok
+test tests::case_48 ... ok
+test tests::case_49 ... ok
+test tests::case_50 ... ok
+test tests::case_51 ... ok
+test tests::case_52 ... ok
+test tests::case_53 ... ok
+test tests::case_54 ... ok
+test tests::case_55 ... ok
+test tests::case_56 ... ok
+test tests::case_57 ... ok
+test tests::case_58 ... ok
+test tests::case_59 ... ok
+
+failures:
+
+---- tests::divides_by_zero_safely stdout ----
+
+thread 'tests::divides_by_zero_safely' panicked at src\lib.rs:88:9:
+assertion `left == right` failed: division by zero must return None
+  left: Some(0)
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::divides_by_zero_safely
+
+test result: FAILED. 60 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--lib`

@@ -88,7 +88,10 @@ impl Rule for NodeInstall {
     }
 
     fn trim(&self, lines: &[String]) -> Trimmed {
-        let mut body: Vec<String> = Vec::new();
+        // Errors first, then warnings; the summary goes to the tail.
+        let mut errors: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+        let mut tail: Vec<String> = Vec::new();
         let mut deprecated: Vec<String> = Vec::new();
         let mut deprecated_count = 0usize;
         let mut slot: Option<usize> = None;
@@ -106,14 +109,14 @@ impl Rule for NodeInstall {
                 deprecated_count += 1;
                 deprecated.push(package_name(spec).to_string());
                 if slot.is_none() {
-                    slot = Some(body.len());
-                    body.push(String::new());
+                    slot = Some(warnings.len());
+                    warnings.push(String::new());
                 }
             } else if ERROR_BLOCK_RE.is_match(line) {
                 hard_errors += 1;
-                body.push(line.to_string());
+                errors.push(line.to_string());
             } else if PEER_RE.is_match(line) || WARN_RE.is_match(line) {
-                body.push(line.to_string());
+                warnings.push(line.to_string());
             } else if NOISE_RE.is_match(line) && !GATE_RE.is_match(line) {
                 // Progress, funding and audit nags.
             } else if SUMMARY_RE.is_match(line) {
@@ -126,10 +129,10 @@ impl Rule for NodeInstall {
                 if OK_SUMMARY_RE.is_match(line) {
                     ok_summary = true;
                 }
-                body.push(line.to_string());
+                tail.push(line.to_string());
             } else if GATE_RE.is_match(line) {
                 hard_errors += 1;
-                body.push(line.to_string());
+                errors.push(line.to_string());
             }
         }
 
@@ -137,12 +140,13 @@ impl Rule for NodeInstall {
             let names = dedupe_keep_order(deprecated);
             let shown: Vec<&str> = names.iter().take(MAX_NAMES).map(String::as_str).collect();
             let more = if names.len() > MAX_NAMES { ", …" } else { "" };
-            body[i] = format!(
+            warnings[i] = format!(
                 "{deprecated_count} deprecation warnings ({}{more})",
                 shown.join(", ")
             );
         }
-        let body = dedupe_keep_order(body);
+        let body = dedupe_keep_order(errors.into_iter().chain(warnings));
+        let tail = dedupe_keep_order(tail);
 
         let outcome = if hard_errors > 0 {
             Outcome::Fail
@@ -159,6 +163,7 @@ impl Rule for NodeInstall {
         Trimmed {
             verdict: verdict("install", outcome, &detail),
             body,
+            tail,
             outcome,
         }
     }

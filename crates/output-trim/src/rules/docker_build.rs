@@ -95,6 +95,7 @@ impl Rule for DockerBuild {
         }
 
         let mut image = false;
+        let mut tail: Vec<String> = Vec::new();
         for (i, line) in lines.iter().enumerate() {
             if consumed[i] {
                 continue;
@@ -102,8 +103,9 @@ impl Rule for DockerBuild {
             if GATE_RE.is_match(line) {
                 keep.push((i, strip_step_prefix(line).to_string()));
             } else if IMAGE_RE.is_match(line) {
+                // The image summary is kept even when the body is capped.
                 image = true;
-                keep.push((i, strip_step_prefix(line).to_string()));
+                tail.push(strip_step_prefix(line).to_string());
             }
         }
 
@@ -130,6 +132,7 @@ impl Rule for DockerBuild {
         Trimmed {
             verdict: verdict("docker build", outcome, &detail),
             body,
+            tail: dedupe_keep_order(tail),
             outcome,
         }
     }

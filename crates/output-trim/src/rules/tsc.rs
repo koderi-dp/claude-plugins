@@ -157,10 +157,14 @@ impl Rule for Tsc {
             body.extend(d.chain.iter().map(|c| format!("    {c}")));
         }
 
+        body.extend(leftovers.iter().cloned());
+
+        // Counts of the errors not shown; kept even when the body is capped.
+        let mut tail: Vec<String> = Vec::new();
         if grouped.len() > MAX_ERRORS {
             let hidden = &grouped[MAX_ERRORS..];
             let hidden_files: BTreeSet<&str> = hidden.iter().map(|d| d.file.as_str()).collect();
-            body.push(format!(
+            tail.push(format!(
                 "+{} more in {} files",
                 hidden.len(),
                 hidden_files.len()
@@ -182,10 +186,8 @@ impl Rule for Tsc {
             if codes.len() > MAX_CODES {
                 parts.push(format!("+{} more codes", codes.len() - MAX_CODES));
             }
-            body.push(format!("by code: {}", parts.join(", ")));
+            tail.push(format!("by code: {}", parts.join(", ")));
         }
-
-        body.extend(leftovers.iter().cloned());
 
         let total = diags.len() + leftovers.len();
         let outcome = if total > 0 {
@@ -201,6 +203,7 @@ impl Rule for Tsc {
         Trimmed {
             verdict: verdict("tsc", outcome, &detail),
             body,
+            tail,
             outcome,
         }
     }
