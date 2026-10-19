@@ -1,0 +1,11 @@
+{
+  "name": "code101-plugins",
+  "owner": { "name": "Danijel Peric" },
+  "plugins": [
+    {
+      "name": "everything-find",
+      "source": "./plugins/everything-find",
+      "description": "Instant file/folder lookup via voidtools Everything (Windows)."
+    }
+  ]
+}

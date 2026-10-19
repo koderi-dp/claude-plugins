@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "everything-find": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/everything-find.exe"
+    }
+  }
+}

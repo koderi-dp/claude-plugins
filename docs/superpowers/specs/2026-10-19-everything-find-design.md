@@ -151,6 +151,12 @@ doesn't hold, fall back to the `CLAUDE_PROJECT_DIR` environment variable if
 present, then to walking up from the cwd to the nearest `.git`. `path` always
 overrides the root.
 
+**Verified (2026-10-19, Claude Code 2.1.301):** as implemented, the root is
+`CLAUDE_PROJECT_DIR` when set, else the process cwd. A headless session started
+in `C:\Source\projects\claude\plugins\crates` with `--plugin-dir` reported
+`repo C:\Source\projects\claude\plugins\crates`, so the server's root is the
+session's project folder. The `.git` walk-up was not needed.
+
 ## Error handling
 
 Every failure becomes a normal tool result (text) that tells Claude what to do
