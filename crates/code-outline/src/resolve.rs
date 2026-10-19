@@ -109,6 +109,7 @@ pub fn resolve<'a>(
         })
         .collect();
 
+    let name_hits: Vec<&Entry> = hits.clone();
     if let Some(n) = line {
         hits.retain(|e| e.symbol.start_line <= n && n <= e.symbol.end_line);
         if hits.len() > 1 {
@@ -117,6 +118,10 @@ pub fn resolve<'a>(
                 .copied()
                 .min_by_key(|e| e.symbol.end_line - e.symbol.start_line);
             hits = innermost.into_iter().collect();
+        }
+        // The line missed every candidate: show them all rather than "not found".
+        if hits.is_empty() {
+            hits = name_hits;
         }
     }
 
@@ -201,10 +206,19 @@ mod tests {
     }
 
     #[test]
-    fn line_outside_every_hit_is_not_found() {
+    fn line_outside_every_hit_is_ambiguous() {
         let x = extract(OVERLOADS, Lang::CSharp);
         assert!(matches!(
             resolve(&x.symbols, Lang::CSharp, "Add", Some(1)),
+            Ambiguous(v) if v.len() == 2
+        ));
+    }
+
+    #[test]
+    fn line_with_no_name_match_is_not_found() {
+        let x = extract(OVERLOADS, Lang::CSharp);
+        assert!(matches!(
+            resolve(&x.symbols, Lang::CSharp, "Nope", Some(5)),
             NotFound(_)
         ));
     }
