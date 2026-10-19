@@ -1,0 +1,184 @@
+   Compiling cr v0.1.0 (C:\src\cr)
+warning: unused variable: `unused_value`
+ --> src\lib.rs:2:28
+  |
+2 | pub fn unused_demo() { let unused_value = 5; }
+  |                            ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused_value`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `cr` (lib) generated 1 warning (run `cargo fix --lib -p cr` to apply 1 suggestion)
+warning: `cr` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
+     Running unittests src\lib.rs (target\debug\deps\cr-b629a1605727d3e5.exe)
+
+running 151 tests
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_002 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_001 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_003 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_008 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_009 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_011 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_013 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_014 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_015 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_010 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_016 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_005 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_004 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_019 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_012 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_017 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_018 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_006 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_020 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_007 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_022 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_021 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_023 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_024 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_025 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_026 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_027 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_028 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_029 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_030 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_031 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_032 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_033 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_034 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_035 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_036 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_037 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_038 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_039 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_040 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_041 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_042 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_043 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_044 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_045 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_046 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_047 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_048 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_049 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_050 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_051 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_052 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_053 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_054 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_055 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_056 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_057 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_058 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_059 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_060 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_061 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_062 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_063 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_064 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_065 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_066 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_067 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_068 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_069 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_070 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_071 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_072 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_073 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_074 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_075 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_076 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_077 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_078 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_079 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_080 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_081 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_082 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_083 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_084 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_085 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_086 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_087 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_088 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_089 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_090 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_091 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_092 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_093 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_094 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_095 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_096 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_097 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_098 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_099 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_100 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_101 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_102 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_103 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_104 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_105 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_106 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_107 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_108 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_109 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_110 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_111 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_112 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_113 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_114 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_115 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_117 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_116 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_118 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_119 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_121 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_120 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_122 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_123 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_125 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_124 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_126 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_127 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_128 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_129 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_130 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_131 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_132 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_133 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_134 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_135 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_136 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_137 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_138 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_139 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_140 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_141 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_142 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_143 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_144 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_145 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_146 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_147 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_148 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_149 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_150 ... ok
+test tests::adds_two_positive_numbers_with_a_wrong_expectation ... FAILED
+
+failures:
+
+---- tests::adds_two_positive_numbers_with_a_wrong_expectation stdout ----
+
+thread 'tests::adds_two_positive_numbers_with_a_wrong_expectation' (64080) panicked at src\lib.rs:307:63:
+assertion `left == right` failed
+  left: 2
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::adds_two_positive_numbers_with_a_wrong_expectation
+
+test result: FAILED. 150 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`

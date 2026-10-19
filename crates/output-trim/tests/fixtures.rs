@@ -1512,3 +1512,38 @@ mod docker {
         assert!(!DockerLogs.matches_content(&fixture("docker", "logs_exception")));
     }
 }
+
+mod line_endings {
+    use super::*;
+    use output_trim::rules::Rule;
+    use output_trim::rules::cargo::Cargo;
+
+    #[test]
+    fn crlf_fixture_trims_like_lf() {
+        let path: PathBuf = [
+            env!("CARGO_MANIFEST_DIR"),
+            "tests",
+            "fixtures",
+            "cargo",
+            "test_fail_crlf.txt",
+        ]
+        .iter()
+        .collect();
+        let raw = std::fs::read(path).unwrap();
+        assert!(raw.windows(2).any(|w| w == b"\r\n"), "fixture must be CRLF");
+        let lf = fixture("cargo", "test_fail");
+        let crlf = fixture("cargo", "test_fail_crlf");
+        assert_eq!(crlf, lf);
+        let (a, b) = (Cargo.trim(&lf), Cargo.trim(&crlf));
+        assert_eq!(a.verdict, b.verdict);
+        assert_eq!(a.body, b.body);
+    }
+
+    #[test]
+    fn cr_cr_lf_lines_are_kept() {
+        let bytes = b"Program.cs(1,1): error CS1002: ; expected\r\r\n".repeat(5);
+        let lines = normalize(&bytes);
+        assert_eq!(lines.len(), 5, "{lines:#?}");
+        assert!(lines.iter().all(|l| l.contains("error CS1002")));
+    }
+}

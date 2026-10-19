@@ -9,7 +9,8 @@ pub fn normalize(bytes: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(bytes);
     let mut out: Vec<String> = Vec::new();
     for raw in text.split('\n') {
-        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        // `\r\r\n` (and longer runs) end a line too; only an inner `\r` is a redraw.
+        let line = raw.trim_end_matches('\r');
         let line = line.rsplit('\r').next().unwrap_or(line);
         let line = ANSI.replace_all(line, "");
         let line = line.trim_end();
@@ -49,6 +50,14 @@ mod tests {
     #[test]
     fn crlf_is_newline() {
         assert_eq!(normalize(b"a\r\nb\r\n"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn cr_cr_lf_keeps_line() {
+        assert_eq!(
+            normalize(b"Program.cs(3,1): error CS1002: ; expected\r\r\nnext\r\r\n"),
+            vec!["Program.cs(3,1): error CS1002: ; expected", "next"]
+        );
     }
 
     #[test]
