@@ -40,6 +40,7 @@ pub enum SortParam {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct FindParams {
     /// Everything search syntax, e.g. `*.tsx`, `config ext:json`, `dm:today`.
+    #[serde(alias = "pattern")]
     pub query: String,
     /// `repo` (default) searches the current repo; `all` searches every drive.
     #[serde(default)]
@@ -583,6 +584,14 @@ mod tests {
         let fake = FakeSearcher::new(vec![]);
         run_find(&FindParams { sort: SortParam::Modified, ..params("x") }, &ctx, &fake).unwrap();
         assert_eq!(fake.last_opts().sort, SortKey::Modified);
+    }
+
+    #[test]
+    fn pattern_is_accepted_as_query_alias() {
+        // Claude often guesses Glob's parameter name before loading find's schema.
+        let p: FindParams = serde_json::from_str(r#"{"pattern":"*.rs"}"#).unwrap();
+        assert_eq!(p.query, "*.rs");
+        assert_eq!(p.limit, 50);
     }
 
     #[test]

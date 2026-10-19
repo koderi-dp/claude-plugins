@@ -112,6 +112,19 @@ fn live_git_folder_itself_hidden() {
 
 #[test]
 #[ignore]
+fn live_session_start_mode_prints_hook_json() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_everything-find"))
+        .arg("session-start")
+        .output()
+        .expect("run exe");
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("hook JSON on stdout");
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
+    assert_eq!(v["hookSpecificOutput"]["additionalContext"], everything_find::hook::SESSION_HINT);
+}
+
+#[test]
+#[ignore]
 fn live_nested_worktree_hidden() {
     let d = LiveDir::new("wt");
     fs::create_dir_all(d.0.join(r"wt\copy")).unwrap();
