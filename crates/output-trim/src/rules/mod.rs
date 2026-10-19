@@ -1,6 +1,5 @@
 //! Rule types, registry and shared helpers.
 
-use crate::collapse::dedupe_keep_order;
 use crate::command::first_segment;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -115,19 +114,9 @@ static ERROR_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b(error|warn(ing)?|fail(ed|ure)?|panic(ked)?|exception)\b").unwrap()
 });
 
-/// Lines that look like errors or warnings, each followed by `context` more
-/// lines, in original order without duplicates.
-pub fn error_lines(lines: &[String], context: usize) -> Vec<String> {
-    let mut keep = Vec::new();
-    let mut next = 0; // first index not yet emitted
-    for (i, line) in lines.iter().enumerate() {
-        if ERROR_RE.is_match(line) {
-            let end = (i + context + 1).min(lines.len());
-            keep.extend(lines[next.max(i)..end].iter().cloned());
-            next = next.max(end);
-        }
-    }
-    dedupe_keep_order(keep)
+/// Whether the line looks like an error or warning.
+pub fn is_error_line(line: &str) -> bool {
+    ERROR_RE.is_match(line)
 }
 
 #[cfg(test)]
@@ -166,19 +155,10 @@ mod tests {
     }
 
     #[test]
-    fn error_lines_keeps_context_after() {
-        let lines = s(&["a", "error: boom", "c1", "c2", "c3", "d"]);
-        assert_eq!(error_lines(&lines, 2), s(&["error: boom", "c1", "c2"]));
-    }
-
-    #[test]
-    fn error_lines_dedupes_and_handles_overlap() {
-        let lines = s(&["error: x", "warning: y", "z", "error: x"]);
-        assert_eq!(error_lines(&lines, 1), s(&["error: x", "warning: y", "z"]));
-    }
-
-    #[test]
-    fn error_lines_word_boundary() {
-        assert!(error_lines(&s(&["terrorist", "errors"]), 0).is_empty());
+    fn error_line_word_boundary() {
+        assert!(is_error_line("ERROR db down"));
+        assert!(is_error_line("thread main panicked"));
+        assert!(!is_error_line("terrorist"));
+        assert!(!is_error_line("errors"));
     }
 }

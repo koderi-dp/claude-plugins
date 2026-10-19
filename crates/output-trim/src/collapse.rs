@@ -29,6 +29,14 @@ pub fn template_key(line: &str) -> String {
 /// Replace each run of at least `min_run` consecutive template-equal lines
 /// with `(×N similar) <first line>`.
 pub fn collapse_runs(lines: &[String], min_run: usize) -> Vec<String> {
+    collapse_runs_counted(lines, min_run)
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect()
+}
+
+/// Like `collapse_runs`, with the number of input lines each entry stands for.
+pub fn collapse_runs_counted(lines: &[String], min_run: usize) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < lines.len() {
@@ -41,9 +49,9 @@ pub fn collapse_runs(lines: &[String], min_run: usize) -> Vec<String> {
         }
         let n = j - i;
         if n >= min_run.max(2) {
-            out.push(format!("(×{n} similar) {}", lines[i]));
+            out.push((format!("(×{n} similar) {}", lines[i]), n));
         } else {
-            out.extend_from_slice(&lines[i..j]);
+            out.extend(lines[i..j].iter().map(|l| (l.clone(), 1)));
         }
         i = j;
     }
