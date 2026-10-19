@@ -366,3 +366,149 @@ mod cargo_followups {
         assert_eq!(t.outcome, Outcome::Fail);
     }
 }
+
+mod tsc {
+    use super::*;
+    use output_trim::engine::{self, LogTarget};
+    use output_trim::rules::tsc::Tsc;
+    use output_trim::rules::{self, Outcome, Rule};
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn count(body: &[String], needle: &str) -> usize {
+        body.iter().filter(|l| l.contains(needle)).count()
+    }
+
+    fn reduction(case: &str) -> (usize, usize) {
+        let l = fixture("tsc", case);
+        let dir = tempfile::tempdir().unwrap();
+        let out = engine::apply(&l, &Tsc, LogTarget::SaveIn(dir.path()), false);
+        (out.kept_chars, out.total_chars)
+    }
+
+    #[test]
+    fn few_keeps_codes_and_locations_without_frames() {
+        let t = Tsc.trim(&fixture("tsc", "errors_few"));
+        let text = t.body.join("
+");
+        for needle in [
+            "src/app.ts:3 TS2322",
+            "src/math.ts:5 TS2345",
+            "src/math.ts:19 TS2551",
+            "src/util.ts:3 TS2322",
+        ] {
+            assert!(text.contains(needle), "{needle}
+{text}");
+        }
+        assert!(t.body.iter().all(|l| !l.contains("~~~")), "{text}");
+        assert!(text.contains("missing the following properties from type 'User'"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert_eq!(t.verdict, "[output-trim] tsc: FAILED — 4 errors in 3 files");
+    }
+
+    #[test]
+    fn few_is_reduced() {
+        let (kept, total) = reduction("errors_few");
+        assert!(total >= 1500, "{total}");
+        assert!(kept * 100 <= total * 70, "kept {kept} of {total}");
+    }
+
+    #[test]
+    fn many_caps_at_30_and_summarises_rest() {
+        let t = Tsc.trim(&fixture("tsc", "errors_many"));
+        assert_eq!(count(&t.body, "TS2322 Type"), 30, "{:#?}", t.body);
+        assert_eq!(count(&t.body, "+50 more in 4 files"), 1, "{:#?}", t.body);
+        assert_eq!(count(&t.body, "by code: TS2322×80"), 1, "{:#?}", t.body);
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert_eq!(t.verdict, "[output-trim] tsc: FAILED — 80 errors in 5 files");
+    }
+
+    #[test]
+    fn many_is_reduced() {
+        let (kept, total) = reduction("errors_many");
+        assert!(total >= 1500, "{total}");
+        assert!(kept * 100 <= total * 60, "kept {kept} of {total}");
+    }
+
+    #[test]
+    fn colon_format_is_parsed_and_grouped_in_first_seen_order() {
+        let l = lines(&[
+            "b.ts:2:5 - error TS2322: bad b",
+            "",
+            "2 let x: number = 's';",
+            "      ~",
+            "a.ts(7,1): error TS1005: ';' expected.",
+            "b.ts:9:1 - error TS2304: Cannot find name 'q'.",
+        ]);
+        let t = Tsc.trim(&l);
+        assert_eq!(
+            t.body,
+            lines(&[
+                "b.ts",
+                "  b.ts:2 TS2322 bad b",
+                "  b.ts:9 TS2304 Cannot find name 'q'.",
+                "a.ts",
+                "  a.ts:7 TS1005 ';' expected.",
+            ])
+        );
+        assert_eq!(t.verdict, "[output-trim] tsc: FAILED — 3 errors in 2 files");
+    }
+
+    #[test]
+    fn no_errors_passes() {
+        let t = Tsc.trim(&lines(&["npm notice run fx@1.0.0 npx"]));
+        assert_eq!(t.outcome, Outcome::Pass);
+        assert_eq!(t.verdict, "[output-trim] tsc: PASSED");
+        assert!(t.body.is_empty());
+    }
+
+    #[test]
+    fn unparsed_error_line_in_odd_position_is_kept() {
+        let l = lines(&[
+            "a.ts(1,1): error TS2322: bad",
+            "",
+            "1 const a: number = 's';",
+            "  ~",
+            "",
+            "pkg-x: error TS2307: Cannot find module 'zzz'.",
+            "tsc exited with fatal error while writing output",
+        ]);
+        let t = Tsc.trim(&l);
+        let text = t.body.join("
+");
+        assert!(text.contains("pkg-x: error TS2307: Cannot find module 'zzz'."), "{text}");
+        assert!(text.contains("fatal error while writing output"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert!(t.verdict.contains("3 errors in 1 files"), "{}", t.verdict);
+    }
+
+    #[test]
+    fn error_text_inside_code_frame_is_not_a_leftover() {
+        let l = lines(&[
+            "a.ts:1:1 - error TS2322: bad",
+            "",
+            "1 throw new Error('error happened');",
+            "  ~~~~",
+        ]);
+        let t = Tsc.trim(&l);
+        assert_eq!(t.body, lines(&["a.ts", "  a.ts:1 TS2322 bad"]));
+    }
+
+    #[test]
+    fn detects_by_content() {
+        for case in ["errors_few", "errors_many"] {
+            assert_eq!(rules::by_content(&fixture("tsc", case)).name(), "tsc", "{case}");
+        }
+    }
+
+    #[test]
+    fn detects_by_command() {
+        for cmd in ["tsc --noEmit", "npx tsc -p .", "pnpm tsc", "pnpm exec tsc", "cd x && npx tsc | tail"] {
+            assert_eq!(rules::by_command(cmd).map(|r| r.name()), Some("tsc"), "{cmd}");
+        }
+        assert!(rules::by_command("tscx").is_none());
+        assert!(rules::by_command("npx vitest").is_none());
+    }
+}

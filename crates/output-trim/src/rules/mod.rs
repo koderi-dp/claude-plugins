@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 pub mod cargo;
 pub mod dotnet;
 pub mod generic;
+pub mod tsc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -31,13 +32,15 @@ pub trait Rule: Sync {
 
 static DOTNET: dotnet::Dotnet = dotnet::Dotnet;
 static CARGO: cargo::Cargo = cargo::Cargo;
+static TSC: tsc::Tsc = tsc::Tsc;
 static GENERIC: generic::Generic = generic::Generic;
 
 /// Rules in detection order; generic is always last. Later rules are inserted
 /// on their own line before `&GENERIC` (and the array length bumped).
-static REGISTRY: [&dyn Rule; 3] = [
+static REGISTRY: [&dyn Rule; 4] = [
     &DOTNET,
     &CARGO,
+    &TSC,
     &GENERIC,
 ];
 
