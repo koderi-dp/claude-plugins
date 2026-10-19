@@ -58,6 +58,14 @@ Established by headless probes with throwaway hooks plus the official docs:
    so `cmd 2>&1 | output-trim` needs the user's rule for `cmd` plus one rule for
    `output-trim`.
 
+**Verified (2026-10-20, Claude Code 2.1.301):** PATH for the PowerShell tool also
+includes the plugin `bin/`: `Get-Content big.txt | output-trim` ran via the
+PowerShell tool and produced trimmed output, so the absolute-path fallback was not
+needed. Without `Bash(output-trim *)` in the allow rules and with
+`--permission-mode default`, `cargo test 2>&1 | output-trim` was refused with
+"The following part requires approval: output-trim". (A user whose default mode is
+`auto` was not prompted; the rule matters in default/prompting modes.)
+
 ## Goal
 
 Replace Claude's blind `| tail` with a smart filter that keeps every error, failed
@@ -291,6 +299,17 @@ are deleted (best effort, errors ignored).
   that the session-start note is present, Claude pipes into `output-trim`, the
   unpiped `docker logs` is trimmed, and `output-trim` resolves from the PowerShell
   tool (or the absolute-path fallback works).
+
+**Verified (2026-10-20, Claude Code 2.1.301):** headless `claude -p --plugin-dir ...
+--model haiku` runs against a scratch cargo project (50 passing tests, 1 failing)
+and a throwaway alpine container: the session-start note took effect (Claude ran
+`cargo test 2>&1 | output-trim`; result began `[output-trim] cargo test: FAILED - 1
+failed, 50 passed`); an unpiped `docker logs --tail 1000 <name>` result began
+`[output-trim] docker logs: DONE - 1000 lines, 0 warnings/errors` (post hook
+fired); bare `output-trim` resolved in the PowerShell tool; omitting the allow rule
+prompts in default permission mode. Observations: the `(xN similar)` count for
+numbered lines looks low in filter mode (1500 lines gave `x45 similar`), and a
+piped failing `cargo test` reports exit code 1 rather than cargo's 101.
 
 ## Distribution
 
