@@ -51,7 +51,7 @@
 
 ```
 .claude-plugin/marketplace.json                 + output-trim entry
-scripts/release.ps1                             builds and copies both crates
+justfile                                        (existing) `just release output-trim` builds + copies the exe
 plugins/output-trim/
   .claude-plugin/plugin.json
   hooks/hooks.json
@@ -383,7 +383,7 @@ Registry order final: dotnet, cargo, tsc, jstest, node_install, docker_build, do
 
 **Files:**
 - Create: `plugins/output-trim/.claude-plugin/plugin.json` (`name` `output-trim`, `version` `0.1.0`, `description` = the marketplace description), `plugins/output-trim/hooks/hooks.json` (exactly as in the spec's Entry points section), `plugins/output-trim/README.md`
-- Modify: `.claude-plugin/marketplace.json` (add the entry from the spec's Distribution section), `scripts/release.ps1`
+- Modify: `.claude-plugin/marketplace.json` (add the entry from the spec's Distribution section)
 - Create (built): `plugins/output-trim/bin/output-trim.exe`
 
 README contents: what it does (the before/after example from the spec), the one-time allow rule `Bash(output-trim *)` with how to add it (`/permissions` or `permissions.allow` in `~/.claude/settings.json`), why it is safe (reads stdin only, never executes anything), that the full log path is in the footer, and the limitation that unpiped failing commands are not trimmed.
@@ -391,10 +391,10 @@ README contents: what it does (the before/after example from the spec), the one-
 `release.ps1`: loop over `everything-find`, `output-trim`. Build each with `cargo build --release -p <name>`, throw on a non-zero exit code, and copy `target\release\<name>.exe` into `plugins\<name>\bin\`.
 
 - [ ] **Step 1: Write the files** above.
-- [ ] **Step 2: Run** `pwsh -File scripts/release.ps1`. Expected: both exes copied; `plugins/output-trim/bin/output-trim.exe` exists.
+- [ ] **Step 2: Run** `just test`, then `just release output-trim`. Expected: tests pass; `Released output-trim.exe` printed; `plugins/output-trim/bin/output-trim.exe` exists.
 - [ ] **Step 3: Smoke-test the shipped exe:** `Get-Content crates/output-trim/tests/fixtures/cargo/test_fail.txt | plugins/output-trim/bin/output-trim.exe; $LASTEXITCODE`. Expected: a trimmed cargo verdict, then `1`.
 - [ ] **Step 4: Validate JSON:** `Get-Content plugins/output-trim/hooks/hooks.json | ConvertFrom-Json` and the same for `.claude-plugin/marketplace.json`. Expected: no error.
-- [ ] **Step 5: Commit** `feat(output-trim): plugin packaging, hooks and release script` (only these files and the exe)
+- [ ] **Step 5: Commit** `feat(output-trim): plugin packaging and hooks` (only these files and the exe)
 
 ### Task 13: End-to-end verification (manual)
 

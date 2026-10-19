@@ -126,7 +126,7 @@ plugins/output-trim/
   README.md                    what it does + the one allow rule to add
 ```
 
-`scripts/release.ps1` is extended to build and copy both crates' exes.
+The root `justfile` builds and copies it: `just release output-trim`.
 `.claude-plugin/marketplace.json` gains an `output-trim` entry.
 
 Dependencies stay minimal for fast start-up: `serde`, `serde_json`, `regex`.
@@ -294,8 +294,8 @@ are deleted (best effort, errors ignored).
 
 ## Distribution
 
-- `scripts/release.ps1` builds `-p everything-find -p output-trim` in release mode
-  and copies both exes into their plugin `bin/` folders.
+- `just release output-trim` (root `justfile`) builds in release mode and copies
+  the exe into `plugins/output-trim/bin/`.
 - `output-trim.exe` is committed under `plugins/output-trim/bin/`.
 - `.claude-plugin/marketplace.json` adds:
   `{ "name": "output-trim", "source": "./plugins/output-trim", "description": "Trims noisy build/test/log output to errors, failures and summaries." }`
