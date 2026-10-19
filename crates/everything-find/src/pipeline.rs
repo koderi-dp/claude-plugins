@@ -533,7 +533,7 @@ mod tests {
         let fake = FakeSearcher::new(vec![]);
         run_find(&FindParams { kind: KindParam::File, ..params("*.rs") }, &ctx, &fake).unwrap();
         let q = fake.last_query();
-        assert!(q.starts_with(&format!("\"{}\\\" file: ", root.display())), "{q}");
+        assert!(q.starts_with(&format!("<*.rs> file: \"{}\\\"", root.display())), "{q}");
         assert!(q.contains(r"!\node_modules\"));
     }
 
