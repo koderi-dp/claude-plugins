@@ -74,10 +74,7 @@ pub fn post(input: &str, store_dir: &Path) -> Option<String> {
         None => LogTarget::SaveIn(store_dir),
     };
     let out = engine::apply(&lines, rule, target, false);
-    if !out.trimmed
-        || out.text.contains("full log unavailable")
-        || out.kept_chars * 10 > out.total_chars * 7
-    {
+    if !out.trimmed || out.log_path.is_none() || out.kept_chars * 10 > out.total_chars * 7 {
         return None;
     }
     Some(

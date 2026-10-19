@@ -4,7 +4,7 @@ use crate::rules::generic::Generic;
 use crate::rules::{Outcome, Rule, Trimmed};
 use crate::store;
 use std::panic::{self, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub const BODY_CAP: usize = 6_000;
@@ -23,6 +23,9 @@ pub struct Output {
     pub kept_chars: usize,
     pub total_chars: usize,
     pub trimmed: bool,
+    /// The full log the footer points to; `None` when nothing was trimmed or
+    /// saving it failed.
+    pub log_path: Option<PathBuf>,
 }
 
 /// Serialises swapping of the process-wide panic hook.
@@ -91,6 +94,7 @@ pub fn apply(lines: &[String], rule: &dyn Rule, log: LogTarget, input_truncated:
             kept_chars: 0,
             total_chars: 0,
             trimmed: false,
+            log_path: None,
         };
     }
     let full = lines.join("\n");
@@ -109,6 +113,7 @@ pub fn apply(lines: &[String], rule: &dyn Rule, log: LogTarget, input_truncated:
             outcome,
             total_chars,
             trimmed: false,
+            log_path: None,
         };
     }
 
@@ -117,12 +122,13 @@ pub fn apply(lines: &[String], rule: &dyn Rule, log: LogTarget, input_truncated:
     out.push(t.verdict);
     out.extend(cap(&t.body, &t.tail));
 
-    let location = match log {
-        LogTarget::SaveIn(dir) => match store::save(dir, &full) {
-            Ok(p) => format!("full: {}", p.display()),
-            Err(_) => "full log unavailable".to_string(),
-        },
-        LogTarget::Existing(p) => format!("full: {}", p.display()),
+    let log_path = match log {
+        LogTarget::SaveIn(dir) => store::save(dir, &full).ok(),
+        LogTarget::Existing(p) => Some(p.to_path_buf()),
+    };
+    let location = match &log_path {
+        Some(p) => format!("full: {}", p.display()),
+        None => "full log unavailable".to_string(),
     };
     let note = if input_truncated {
         " · input truncated at 64 MB"
@@ -147,6 +153,7 @@ pub fn apply(lines: &[String], rule: &dyn Rule, log: LogTarget, input_truncated:
         outcome: t.outcome,
         total_chars,
         trimmed: true,
+        log_path,
     }
 }
 
@@ -275,6 +282,7 @@ mod tests {
         let path = last.split("· full: ").nth(1).expect("footer path");
         assert!(last.starts_with("[output-trim] kept "));
         assert!(Path::new(path).exists());
+        assert_eq!(o.log_path.as_deref(), Some(Path::new(path)));
         assert_eq!(std::fs::read_to_string(path).unwrap(), lines.join("\n"));
         assert_eq!(o.total_chars, lines.join("\n").chars().count());
         assert_eq!(o.kept_chars, o.text.chars().count());
@@ -292,6 +300,7 @@ mod tests {
             false,
         );
         assert!(o.text.ends_with(&format!("· full: {}", p.display())));
+        assert_eq!(o.log_path.as_deref(), Some(p.as_path()));
         assert_eq!(files(d.path()), 1);
     }
 
@@ -307,6 +316,8 @@ mod tests {
             false,
         );
         assert!(o.text.ends_with("· full log unavailable"));
+        assert!(o.trimmed);
+        assert!(o.log_path.is_none());
     }
 
     #[test]
