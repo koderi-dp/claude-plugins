@@ -159,7 +159,7 @@ crates/code-outline/
     fixtures/sample.{rs,ts,tsx,js,py,cs}
     languages.rs   one exact-outline test per fixture
     protocol.rs    spawns the exe, MCP handshake, calls both tools
-scripts/release.ps1               extended to build and copy code-outline too
+justfile                          `just release code-outline` (generic per plugin, no change)
 .claude-plugin/marketplace.json   gains a code-outline entry
 ```
 
@@ -279,8 +279,8 @@ line in that file's place; the rest of the output is unaffected.
 
 ## Distribution
 
-`scripts/release.ps1` builds and copies both `everything-find.exe` and
-`code-outline.exe` into their plugin `bin/` folders. Binary committed, as with
+`just release code-outline` (root `justfile`, generic per plugin) builds and
+copies `code-outline.exe` into `plugins/code-outline/bin/`. Binary committed, as with
 everything-find.
 
 ## Dependencies

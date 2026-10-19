@@ -58,7 +58,7 @@
 ```
 Cargo.toml                                    workspace (unchanged: members = ["crates/*"])
 .claude-plugin/marketplace.json               + code-outline entry
-scripts/release.ps1                           builds/copies both plugins
+justfile                                      (unchanged: `just release code-outline` works once crate name == plugin folder)
 plugins/code-outline/.claude-plugin/plugin.json
 plugins/code-outline/.mcp.json
 plugins/code-outline/bin/code-outline.exe     (built, committed)
@@ -398,7 +398,7 @@ crates/code-outline/
 
 **Files:**
 - Create: `crates/code-outline/src/server.rs`, `crates/code-outline/tests/protocol.rs`, `plugins/code-outline/.claude-plugin/plugin.json`, `plugins/code-outline/.mcp.json`, `plugins/code-outline/bin/code-outline.exe` (built)
-- Modify: `crates/code-outline/src/main.rs`, `.claude-plugin/marketplace.json`, `scripts/release.ps1`, spec (record results)
+- Modify: `crates/code-outline/src/main.rs`, `.claude-plugin/marketplace.json`, spec (record results)
 
 **Interfaces:**
 - Consumes: `OutlineParams`, `ReadSymbolParams`, `run_outline`, `run_read_symbol` (Task 8); `Context::from_env` (Task 6)
@@ -411,14 +411,14 @@ crates/code-outline/
   - `tools/call outline {"paths": "x", "limit": 0}` → a JSON-RPC error mentioning `limit`.
 - [ ] **Step 2: Run** `cargo test -p code-outline --test protocol`. Expected: FAIL.
 - [ ] **Step 3: Implement `server.rs`** with the same shape as `crates/everything-find/src/server.rs`: struct `OutlineServer`, two `#[tool]` methods named `outline` and `read_symbol` with the verbatim descriptions, each running the pipeline in `spawn_blocking` with `Context::from_env()`; `Err(msg)` → `ErrorData::invalid_params(msg, None)`; server info `code-outline` / `CARGO_PKG_VERSION`. `main.rs` calls `code_outline::server::run()`.
-- [ ] **Step 4: Run** `cargo test -p code-outline`. Expected: all PASS.
+- [ ] **Step 4: Run** `just test` (workspace). Expected: all PASS.
 - [ ] **Step 5: Packaging.**
   - `plugins/code-outline/.claude-plugin/plugin.json`: `{ "name": "code-outline", "version": "0.1.0", "description": "Symbol outlines and single-symbol reads via tree-sitter (Rust, TS/JS, Python, C#)." }`
   - `plugins/code-outline/.mcp.json`: `{ "mcpServers": { "code-outline": { "command": "${CLAUDE_PLUGIN_ROOT}/bin/code-outline.exe" } } }`
   - Append to `.claude-plugin/marketplace.json` `plugins`: `{ "name": "code-outline", "source": "./plugins/code-outline", "description": "Symbol outlines and single-symbol reads via tree-sitter (Rust, TS/JS, Python, C#)." }`
-  - `scripts/release.ps1`: loop over `everything-find`, `code-outline` doing the existing build + copy for each.
-- [ ] **Step 6: Release build.** Run `pwsh scripts/release.ps1`. Expected: both exes copied. Record `code-outline.exe` size.
+  - No release-script change: the root `justfile` recipes are generic (crate name must equal the plugin folder name, `code-outline`).
+- [ ] **Step 6: Release build.** Run `just release code-outline`. Expected: `plugins/code-outline/bin/code-outline.exe` written. Do **not** run `just publish` (it commits, tags and pushes; that is the user's call). Record `code-outline.exe` size.
 - [ ] **Step 7: Timing.** From the repo root, time an `outline {"paths": "crates/**/*.rs"}` call through the exe (reuse the protocol-test request sequence from a scratch script). Expected: < 100 ms for the call. Record the number.
 - [ ] **Step 8: Live check in Claude Code.** Reinstall from the local marketplace, then ask: "show me FindServer::find in crates/everything-find". Expected: Claude calls `outline` and/or `read_symbol`, not Read, and can Edit using the returned line numbers. Compare the `outline` output size of `crates/everything-find/src/pipeline.rs` with the file's size (success criterion: ≥5× smaller).
 - [ ] **Step 9: Record** exe size, timing and the token ratio in the spec under a new "Verified" note in Success criteria.
-- [ ] **Step 10: Commit** `git add crates/code-outline plugins/code-outline .claude-plugin/marketplace.json scripts/release.ps1 docs/superpowers/specs/2026-10-20-code-outline-design.md Cargo.lock && git commit -m "feat(code-outline): MCP server and plugin packaging"`
+- [ ] **Step 10: Commit** `git add crates/code-outline plugins/code-outline .claude-plugin/marketplace.json docs/superpowers/specs/2026-10-20-code-outline-design.md Cargo.lock && git commit -m "feat(code-outline): MCP server and plugin packaging"`
