@@ -1,0 +1,20 @@
+   Compiling cr v0.1.0 (C:\src\cr)
+error[E0308]: mismatched types
+  --> src\lib.rs:67:39
+   |
+67 | pub fn broken() -> i32 { let s: i32 = "text"; s }
+   |                                 ---   ^^^^^^ expected `i32`, found `&str`
+   |                                 |
+   |                                 expected due to this
+
+warning: unused variable: `unused_value`
+ --> src\lib.rs:2:28
+  |
+2 | pub fn unused_demo() { let unused_value = 5; }
+  |                            ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused_value`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+For more information about this error, try `rustc --explain E0308`.
+warning: `cr` (lib) generated 1 warning
+error: could not compile `cr` (lib) due to 1 previous error; 1 warning emitted

@@ -157,3 +157,165 @@ mod dotnet {
         assert!(rules::by_command("dotnetx foo").is_none());
     }
 }
+
+mod cargo {
+    use super::*;
+    use output_trim::engine::{self, LogTarget};
+    use output_trim::rules::cargo::Cargo;
+    use output_trim::rules::{self, Outcome, Rule};
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn reduction(case: &str) -> (usize, usize) {
+        let l = fixture("cargo", case);
+        let dir = tempfile::tempdir().unwrap();
+        let out = engine::apply(&l, &Cargo, LogTarget::SaveIn(dir.path()), false);
+        (out.kept_chars, out.total_chars)
+    }
+
+    #[test]
+    fn test_fail_keeps_failure_and_summary() {
+        let t = Cargo.trim(&fixture("cargo", "test_fail"));
+        let text = t.body.join("\n");
+        assert!(text.contains("adds_two_positive_numbers_with_a_wrong_expectation"), "{text}");
+        assert!(text.contains("assertion `left == right` failed"), "{text}");
+        assert!(text.contains("left: 2"), "{text}");
+        assert!(text.contains("right: 3"), "{text}");
+        assert!(text.contains("test result: FAILED. 30 passed; 1 failed"), "{text}");
+        assert!(!text.contains("... ok"), "{text}");
+        assert!(!text.contains("Compiling"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert!(
+            t.verdict.starts_with("[output-trim] cargo test: FAILED — 1 failed, 30 passed"),
+            "{}",
+            t.verdict
+        );
+    }
+
+    #[test]
+    fn test_fail_is_reduced() {
+        let (kept, total) = reduction("test_fail");
+        assert!(total >= 1_500, "{total}");
+        // Adapted from 20%: one failure with 30 passes keeps ~26% once verdict and footer are counted.
+        assert!(kept * 10 <= total * 3, "{kept} of {total}");
+    }
+
+    #[test]
+    fn test_pass_is_reduced_and_passes() {
+        let t = Cargo.trim(&fixture("cargo", "test_pass"));
+        assert_eq!(t.outcome, Outcome::Pass);
+        assert!(t.body.iter().all(|l| !l.contains("... ok") && !l.contains("Doc-tests")), "{:#?}", t.body);
+        assert!(t.body.iter().any(|l| l.starts_with("test result: ok. 30 passed")), "{:#?}", t.body);
+        assert!(t.verdict.contains("0 failed, 30 passed"), "{}", t.verdict);
+        let (kept, total) = reduction("test_pass");
+        assert!(total >= 1_500, "{total}");
+        assert!(kept * 5 <= total, "{kept} of {total}");
+    }
+
+    #[test]
+    fn build_fail_keeps_error_block() {
+        let t = Cargo.trim(&fixture("cargo", "build_fail"));
+        let text = t.body.join("\n");
+        assert!(text.contains("error[E0308]: mismatched types"), "{text}");
+        assert!(text.contains("--> src\\lib.rs:67:39"), "{text}");
+        assert!(text.contains("expected `i32`, found `&str`"), "{text}");
+        assert!(text.contains("expected due to this"), "{text}");
+        assert!(text.contains("could not compile"), "{text}");
+        assert!(!text.contains("Compiling"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert!(
+            t.verdict.starts_with("[output-trim] cargo build: FAILED — 1 errors, 1 warnings"),
+            "{}",
+            t.verdict
+        );
+    }
+
+    #[test]
+    fn build_warn_passes_and_keeps_warning() {
+        let t = Cargo.trim(&fixture("cargo", "build_warn"));
+        let text = t.body.join("\n");
+        assert_eq!(t.outcome, Outcome::Pass);
+        assert!(text.contains("warning: unused variable: `unused_value`"), "{text}");
+        assert!(text.contains("--> src\\lib.rs:2:28"), "{text}");
+        assert!(text.contains("generated 1 warning"), "{text}");
+        assert!(!text.contains("Compiling") && !text.contains("Finished"), "{text}");
+        assert!(t.verdict.contains("0 errors, 1 warnings"), "{}", t.verdict);
+    }
+
+    #[test]
+    fn clippy_keeps_lint_names() {
+        let t = Cargo.trim(&fixture("cargo", "clippy_warn"));
+        let text = t.body.join("\n");
+        assert!(text.contains("clippy::ptr_arg"), "{text}");
+        assert!(text.contains("clippy::len_zero"), "{text}");
+        assert!(text.contains("v.is_empty()"), "{text}");
+        assert!(!text.contains("Checking"), "{text}");
+        assert_eq!(t.outcome, Outcome::Pass);
+        assert!(t.verdict.contains("0 errors, 3 warnings"), "{}", t.verdict);
+    }
+
+    #[test]
+    fn unexpected_panic_line_outside_sections_is_kept() {
+        let mut l = fixture("cargo", "test_pass");
+        l.insert(3, "thread 'main' panicked at src/main.rs:1:1: boom".into());
+        let t = Cargo.trim(&l);
+        assert!(t.body.iter().any(|x| x.contains("panicked")), "{:#?}", t.body);
+        assert_eq!(t.outcome, Outcome::Fail);
+    }
+
+    #[test]
+    fn error_line_after_failures_list_is_kept() {
+        let mut l = fixture("cargo", "test_fail");
+        let at = l.iter().position(|x| x.starts_with("test result:")).unwrap();
+        l.insert(at, "something went wrong: error while loading shared libraries".into());
+        let t = Cargo.trim(&l);
+        assert!(t.body.iter().any(|x| x.contains("shared libraries")), "{:#?}", t.body);
+        assert_eq!(t.outcome, Outcome::Fail);
+    }
+
+    #[test]
+    fn crate_names_with_error_do_not_fail() {
+        let t = Cargo.trim(&lines(&[
+            "   Compiling error-chain v0.12.4",
+            "test errors::handles_error_case ... ok",
+            "test errors::slow_error_case ... ignored",
+            "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        ]));
+        assert_eq!(t.outcome, Outcome::Pass);
+        assert_eq!(t.body.len(), 1, "{:#?}", t.body);
+    }
+
+    #[test]
+    fn failed_test_without_section_is_fail() {
+        let t = Cargo.trim(&lines(&["test a::b ... FAILED"]));
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert!(t.body.iter().any(|x| x.contains("a::b")));
+    }
+
+    #[test]
+    fn sums_results_across_binaries() {
+        let t = Cargo.trim(&lines(&[
+            "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        ]));
+        assert!(t.verdict.contains("1 failed, 5 passed"), "{}", t.verdict);
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert_eq!(t.body.len(), 2);
+    }
+
+    #[test]
+    fn detects_by_content() {
+        for case in ["test_fail", "test_pass", "build_fail", "build_warn", "clippy_warn"] {
+            assert_eq!(rules::by_content(&fixture("cargo", case)).name(), "cargo", "{case}");
+        }
+    }
+
+    #[test]
+    fn detects_by_command() {
+        assert_eq!(rules::by_command("cargo test --lib").map(|r| r.name()), Some("cargo"));
+        assert_eq!(rules::by_command("cd x && cargo clippy | tail").map(|r| r.name()), Some("cargo"));
+        assert!(rules::by_command("cargox build").is_none());
+    }
+}

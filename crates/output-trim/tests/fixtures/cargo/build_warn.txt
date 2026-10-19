@@ -1,0 +1,11 @@
+   Compiling cr v0.1.0 (C:\src\cr)
+warning: unused variable: `unused_value`
+ --> src\lib.rs:2:28
+  |
+2 | pub fn unused_demo() { let unused_value = 5; }
+  |                            ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused_value`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `cr` (lib) generated 1 warning (run `cargo fix --lib -p cr` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s

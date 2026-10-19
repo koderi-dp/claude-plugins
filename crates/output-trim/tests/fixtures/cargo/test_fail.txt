@@ -1,0 +1,54 @@
+   Compiling cr v0.1.0 (C:\src\cr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running unittests src\lib.rs (target\debug\deps\cr-b629a1605727d3e5.exe)
+
+running 31 tests
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_01 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_02 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_03 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_05 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_09 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_06 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_12 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_08 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_13 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_15 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_07 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_04 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_14 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_10 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_17 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_18 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_19 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_21 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_20 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_16 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_11 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_22 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_23 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_24 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_25 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_26 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_28 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_29 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_27 ... ok
+test tests::adds_two_positive_numbers_and_checks_the_sum_case_30 ... ok
+test tests::adds_two_positive_numbers_with_a_wrong_expectation ... FAILED
+
+failures:
+
+---- tests::adds_two_positive_numbers_with_a_wrong_expectation stdout ----
+
+thread 'tests::adds_two_positive_numbers_with_a_wrong_expectation' (55112) panicked at src\lib.rs:67:63:
+assertion `left == right` failed
+  left: 2
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::adds_two_positive_numbers_with_a_wrong_expectation
+
+test result: FAILED. 30 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

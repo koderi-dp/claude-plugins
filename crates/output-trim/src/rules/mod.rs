@@ -5,6 +5,7 @@ use crate::command::first_segment;
 use regex::Regex;
 use std::sync::LazyLock;
 
+pub mod cargo;
 pub mod dotnet;
 pub mod generic;
 
@@ -29,12 +30,14 @@ pub trait Rule: Sync {
 }
 
 static DOTNET: dotnet::Dotnet = dotnet::Dotnet;
+static CARGO: cargo::Cargo = cargo::Cargo;
 static GENERIC: generic::Generic = generic::Generic;
 
 /// Rules in detection order; generic is always last. Later rules are inserted
 /// on their own line before `&GENERIC` (and the array length bumped).
-static REGISTRY: [&dyn Rule; 2] = [
+static REGISTRY: [&dyn Rule; 3] = [
     &DOTNET,
+    &CARGO,
     &GENERIC,
 ];
 
