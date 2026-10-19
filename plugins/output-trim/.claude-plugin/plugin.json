@@ -1,0 +1,5 @@
+{
+  "name": "output-trim",
+  "version": "0.1.0",
+  "description": "Trims noisy build/test/log output to errors, failures and summaries."
+}

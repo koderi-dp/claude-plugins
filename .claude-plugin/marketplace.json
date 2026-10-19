@@ -6,6 +6,11 @@
       "name": "everything-find",
       "source": "./plugins/everything-find",
       "description": "Instant file/folder lookup via voidtools Everything (Windows)."
+    },
+    {
+      "name": "output-trim",
+      "source": "./plugins/output-trim",
+      "description": "Trims noisy build/test/log output to errors, failures and summaries."
     }
   ]
 }
