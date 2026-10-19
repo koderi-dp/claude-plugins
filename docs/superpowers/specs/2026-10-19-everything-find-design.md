@@ -112,7 +112,7 @@ plugins/                                  (git repo, marketplace root)
       filter.rs   .gitignore filtering
       format.rs   compact grouped output
       main.rs     rmcp stdio server, `find` tool definition, wiring
-  scripts/release.ps1                     cargo build --release + copy exe into plugin bin/
+  justfile                                build, test, release, bump, publish recipes
   Cargo.toml                              workspace
 ```
 
@@ -200,10 +200,12 @@ clear message is cheaper than a hidden slow path.
 
 ## Distribution
 
-`scripts/release.ps1` runs `cargo build --release -p everything-find` and copies
-`target/release/everything-find.exe` into `plugins/everything-find/bin/`. The
-binary is committed. Moving to GitHub Releases is deferred until the plugins
-are shared beyond the author.
+`just release everything-find` runs `cargo build --release -p everything-find`
+and copies `target/release/everything-find.exe` into `plugins/everything-find/bin/`.
+The binary is committed. The marketplace is the GitHub repo
+`koderi-dp/claude-plugins`; `just publish everything-find <version>` bumps,
+tests, releases, commits, tags and pushes, then updates the local install.
+Moving binaries to GitHub Releases is deferred.
 
 ## Dependencies
 
