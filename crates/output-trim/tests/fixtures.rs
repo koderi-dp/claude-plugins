@@ -873,6 +873,217 @@ mod node_install {
     #[test]
     fn registry_order() {
         let names: Vec<_> = rules::registry().iter().map(|r| r.name()).collect();
-        assert_eq!(names, ["dotnet", "cargo", "tsc", "jstest", "node_install", "generic"]);
+        assert_eq!(names, ["dotnet", "cargo", "tsc", "jstest", "node_install", "docker_build", "docker_logs", "generic"]);
+    }
+}
+
+mod docker {
+    use super::*;
+    use output_trim::engine::{self, LogTarget};
+    use output_trim::rules::docker_build::DockerBuild;
+    use output_trim::rules::docker_logs::DockerLogs;
+    use output_trim::rules::{self, Outcome, Rule};
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn reduction(rule: &dyn Rule, case: &str) -> (usize, usize) {
+        let l = fixture("docker", case);
+        let dir = tempfile::tempdir().unwrap();
+        let out = engine::apply(&l, rule, LogTarget::SaveIn(dir.path()), false);
+        (out.kept_chars, out.total_chars)
+    }
+
+    #[test]
+    fn logs_repetitive_is_reduced_to_a_tenth() {
+        let (kept, total) = reduction(&DockerLogs, "logs_repetitive");
+        assert!(total >= 1500, "{total}");
+        assert!(kept * 100 <= total * 10, "kept {kept} of {total}");
+    }
+
+    #[test]
+    fn logs_repetitive_keeps_collapse_tail_and_error_with_frames() {
+        let l = fixture("docker", "logs_repetitive");
+        let t = DockerLogs.trim(&l);
+        let text = t.body.join("\n");
+        assert!(t.body.iter().any(|b| b.starts_with("(×")), "{text}");
+        assert_eq!(t.body.last(), l.last(), "{text}");
+        let i = t
+            .body
+            .iter()
+            .position(|b| b.contains("ERROR request failed: connection reset by peer"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert_eq!(t.body[i + 1], "  at Server.handle (server.js:88:15)", "{text}");
+        assert_eq!(t.body[i + 2], "  at Socket.onData (net.js:412:9)", "{text}");
+        assert_eq!(t.body.iter().filter(|b| b.contains("WARN  slow request")).count(), 3, "{text}");
+        assert_eq!(t.outcome, Outcome::Unknown);
+        assert_eq!(t.verdict, "[output-trim] docker logs: DONE — 2007 lines, 4 warnings/errors");
+    }
+
+    #[test]
+    fn logs_exception_keeps_message_and_stack() {
+        let t = DockerLogs.trim(&fixture("docker", "logs_exception"));
+        let text = t.body.join("\n");
+        for needle in [
+            "Unhandled exception. System.InvalidOperationException: Sequence contains no matching element",
+            "at System.Linq.ThrowHelper.ThrowNoMatchException()",
+            "OrderProcessor.cs:line 57",
+            "OrderProcessor.cs:line 31",
+            "---> System.TimeoutException: The operation has timed out.",
+            "Repo.cs:line 112",
+            "--- End of inner exception stack trace ---",
+            "Program.cs:line 14",
+            "warn  Retry 1/3 for payment gateway",
+        ] {
+            assert!(text.contains(needle), "{needle}: {text}");
+        }
+        assert_eq!(t.outcome, Outcome::Unknown);
+    }
+
+    #[test]
+    fn logs_exception_is_reduced() {
+        let (kept, total) = reduction(&DockerLogs, "logs_exception");
+        assert!(total >= 1500, "{total}");
+        assert!(kept * 100 <= total * 30,"kept {kept} of {total}");
+    }
+
+    #[test]
+    fn short_logs_are_kept_verbatim() {
+        let l = lines(&["a", "b", "ERROR boom", "  at X.y()"]);
+        let t = DockerLogs.trim(&l);
+        assert_eq!(t.body, l);
+    }
+
+    #[test]
+    fn unusual_error_words_above_tail_are_kept() {
+        let mut l: Vec<String> = (0..100).map(|i| format!("tick {i} ok-{}", "x".repeat(i % 7))).collect();
+        l[10] = "Traceback (most recent call last):".into();
+        l.insert(11, "  File \"app.py\", line 3, in <module>".into());
+        l.insert(12, "    return 1 / 0".into());
+        l.insert(13, "ZeroDivisionError: division by zero".into());
+        l.insert(14, "Caused by: disk full".into());
+        l[40] = "panic: runtime error: index out of range".into();
+        l[41] = "FAILED to start worker".into();
+        let t = DockerLogs.trim(&l);
+        for needle in [
+            "Traceback (most recent call last):",
+            "  File \"app.py\", line 3, in <module>",
+            "    return 1 / 0",
+            "ZeroDivisionError: division by zero",
+            "Caused by: disk full",
+            "panic: runtime error: index out of range",
+            "FAILED to start worker",
+        ] {
+            assert!(t.body.iter().any(|b| b == needle), "{needle}: {:#?}", t.body);
+        }
+        assert!(t.body.len() < l.len());
+    }
+
+    #[test]
+    fn build_fail_keeps_failing_step_and_error() {
+        let t = DockerBuild.trim(&fixture("docker", "build_fail"));
+        let text = t.body.join("\n");
+        assert!(text.contains("[5/5] RUN apk add --no-cache does-not-exist-ot"), "{text}");
+        assert!(text.contains("ERROR: unable to select packages:"), "{text}");
+        assert!(text.contains("does-not-exist-ot (no such package):"), "{text}");
+        assert!(text.contains("failed to solve"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert!(t.verdict.starts_with("[output-trim] docker build: FAILED"), "{}", t.verdict);
+        // Successful steps and their output are dropped.
+        assert!(!text.contains("Installing brotli-libs"), "{text}");
+        assert!(!text.contains("building app"), "{text}");
+        // The duplicated `------` error block does not repeat the error line.
+        assert_eq!(text.matches("ERROR: unable to select packages:").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn build_fail_is_reduced() {
+        let (kept, total) = reduction(&DockerBuild, "build_fail");
+        assert!(total >= 1500, "{total}");
+        assert!(kept * 100 <= total * 70, "kept {kept} of {total}");
+    }
+
+    #[test]
+    fn build_success_keeps_image_line() {
+        let l = lines(&[
+            "#1 [internal] load build definition from Dockerfile",
+            "#1 DONE 0.1s",
+            "#5 [2/2] RUN echo hi",
+            "#5 0.2 hi",
+            "#5 DONE 0.3s",
+            "#6 exporting to image",
+            "#6 writing image sha256:abc123 done",
+            "#6 naming to docker.io/library/app:latest done",
+            "#6 DONE 0.1s",
+        ]);
+        let t = DockerBuild.trim(&l);
+        assert!(t.body.iter().any(|b| b.contains("naming to docker.io/library/app:latest")), "{:#?}", t.body);
+        assert!(t.body.iter().all(|b| !b.ends_with(" hi")), "{:#?}", t.body);
+        assert_eq!(t.outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn failing_step_output_is_limited_to_last_20_lines() {
+        let mut l = lines(&["#7 [3/3] RUN make"]);
+        for i in 0..30 {
+            l.push(format!("#7 1.{i:03} compiling unit {i}"));
+        }
+        l.push("#7 ERROR: process \"/bin/sh -c make\" did not complete successfully: exit code: 2".into());
+        let t = DockerBuild.trim(&l);
+        assert!(t.body.iter().any(|b| b.contains("[3/3] RUN make")));
+        assert!(t.body.iter().all(|b| !b.contains("compiling unit 9")), "{:#?}", t.body);
+        assert!(t.body.iter().any(|b| b.contains("compiling unit 29")));
+        assert_eq!(t.body.iter().filter(|b| b.contains("compiling unit")).count(), 20, "{:#?}", t.body);
+    }
+
+    #[test]
+    fn unexpected_error_line_in_odd_position_is_kept() {
+        let l = lines(&[
+            "#1 [internal] load build definition from Dockerfile",
+            "#1 DONE 0.1s",
+            "#2 [1/2] RUN echo ok",
+            "#2 0.2 ok",
+            "#2 0.3 fatal error: cannot open file (build continues)",
+            "#2 DONE 0.4s",
+            "#3 [2/2] COPY . .",
+            "#3 DONE 0.1s",
+            "failed to read dockerignore: boom",
+        ]);
+        let t = DockerBuild.trim(&l);
+        let text = t.body.join("\n");
+        assert!(text.contains("fatal error: cannot open file"), "{text}");
+        assert!(text.contains("failed to read dockerignore: boom"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+    }
+
+    #[test]
+    fn detects_by_content() {
+        assert_eq!(rules::by_content(&fixture("docker", "build_fail")).name(), "docker_build");
+        assert_ne!(rules::by_content(&fixture("docker", "logs_repetitive")).name(), "docker_build");
+    }
+
+    #[test]
+    fn detects_by_command() {
+        for cmd in ["docker logs api", "docker logs -f --tail 100 api", "docker compose logs api", "docker-compose logs api"] {
+            assert_eq!(rules::by_command(cmd).unwrap().name(), "docker_logs", "{cmd}");
+        }
+        for cmd in [
+            "docker build .",
+            "docker build --progress=plain -t x .",
+            "docker compose build",
+            "docker buildx build .",
+            "cd svc && docker build .",
+        ] {
+            assert_eq!(rules::by_command(cmd).unwrap().name(), "docker_build", "{cmd}");
+        }
+        for cmd in ["docker ps", "docker run alpine", "docker compose up"] {
+            assert!(rules::by_command(cmd).is_none(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn logs_do_not_match_content() {
+        assert!(!DockerLogs.matches_content(&fixture("docker", "logs_exception")));
     }
 }

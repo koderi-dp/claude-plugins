@@ -1,0 +1,280 @@
+2026-10-20T10:00:01.120Z info  Processed order 4101 in 11ms
+2026-10-20T10:00:02.120Z info  Processed order 4102 in 12ms
+2026-10-20T10:00:03.120Z info  Processed order 4103 in 13ms
+2026-10-20T10:00:04.120Z info  Processed order 4104 in 14ms
+2026-10-20T10:00:05.120Z info  Processed order 4105 in 15ms
+2026-10-20T10:00:06.120Z info  Processed order 4106 in 16ms
+2026-10-20T10:00:07.120Z info  Processed order 4107 in 17ms
+2026-10-20T10:00:08.120Z info  Processed order 4108 in 18ms
+2026-10-20T10:00:09.120Z info  Processed order 4109 in 19ms
+2026-10-20T10:00:10.120Z info  Processed order 4110 in 20ms
+2026-10-20T10:00:11.120Z info  Processed order 4111 in 21ms
+2026-10-20T10:00:12.120Z info  Processed order 4112 in 22ms
+2026-10-20T10:00:13.120Z info  Processed order 4113 in 23ms
+2026-10-20T10:00:14.120Z info  Processed order 4114 in 24ms
+2026-10-20T10:00:15.120Z info  Processed order 4115 in 25ms
+2026-10-20T10:00:16.120Z info  Processed order 4116 in 26ms
+2026-10-20T10:00:17.120Z info  Processed order 4117 in 27ms
+2026-10-20T10:00:18.120Z info  Processed order 4118 in 28ms
+2026-10-20T10:00:19.120Z info  Processed order 4119 in 29ms
+2026-10-20T10:00:20.120Z info  Processed order 4120 in 30ms
+2026-10-20T10:00:21.120Z info  Processed order 4121 in 31ms
+2026-10-20T10:00:22.120Z info  Processed order 4122 in 32ms
+2026-10-20T10:00:23.120Z info  Processed order 4123 in 10ms
+2026-10-20T10:00:24.120Z info  Processed order 4124 in 11ms
+2026-10-20T10:00:25.120Z info  Processed order 4125 in 12ms
+2026-10-20T10:00:26.120Z info  Processed order 4126 in 13ms
+2026-10-20T10:00:27.120Z info  Processed order 4127 in 14ms
+2026-10-20T10:00:28.120Z info  Processed order 4128 in 15ms
+2026-10-20T10:00:29.120Z info  Processed order 4129 in 16ms
+2026-10-20T10:00:30.120Z info  Processed order 4130 in 17ms
+2026-10-20T10:00:31.120Z info  Processed order 4131 in 18ms
+2026-10-20T10:00:32.120Z info  Processed order 4132 in 19ms
+2026-10-20T10:00:33.120Z info  Processed order 4133 in 20ms
+2026-10-20T10:00:34.120Z info  Processed order 4134 in 21ms
+2026-10-20T10:00:35.120Z info  Processed order 4135 in 22ms
+2026-10-20T10:00:36.120Z info  Processed order 4136 in 23ms
+2026-10-20T10:00:37.120Z info  Processed order 4137 in 24ms
+2026-10-20T10:00:38.120Z info  Processed order 4138 in 25ms
+2026-10-20T10:00:39.120Z info  Processed order 4139 in 26ms
+2026-10-20T10:00:40.120Z info  Processed order 4140 in 27ms
+2026-10-20T10:00:41.120Z info  Processed order 4141 in 28ms
+2026-10-20T10:00:42.120Z info  Processed order 4142 in 29ms
+2026-10-20T10:00:43.120Z info  Processed order 4143 in 30ms
+2026-10-20T10:00:44.120Z info  Processed order 4144 in 31ms
+2026-10-20T10:00:45.120Z info  Processed order 4145 in 32ms
+2026-10-20T10:00:46.120Z info  Processed order 4146 in 10ms
+2026-10-20T10:00:47.120Z info  Processed order 4147 in 11ms
+2026-10-20T10:00:48.120Z info  Processed order 4148 in 12ms
+2026-10-20T10:00:49.120Z info  Processed order 4149 in 13ms
+2026-10-20T10:00:50.120Z info  Processed order 4150 in 14ms
+2026-10-20T10:00:51.120Z info  Processed order 4151 in 15ms
+2026-10-20T10:00:52.120Z info  Processed order 4152 in 16ms
+2026-10-20T10:00:53.120Z info  Processed order 4153 in 17ms
+2026-10-20T10:00:54.120Z info  Processed order 4154 in 18ms
+2026-10-20T10:00:55.120Z info  Processed order 4155 in 19ms
+2026-10-20T10:00:56.120Z info  Processed order 4156 in 20ms
+2026-10-20T10:00:57.120Z info  Processed order 4157 in 21ms
+2026-10-20T10:00:58.120Z info  Processed order 4158 in 22ms
+2026-10-20T10:00:59.120Z info  Processed order 4159 in 23ms
+2026-10-20T10:01:00.120Z info  Processed order 4160 in 24ms
+2026-10-20T10:01:01.120Z info  Processed order 4161 in 25ms
+2026-10-20T10:01:02.120Z info  Processed order 4162 in 26ms
+2026-10-20T10:01:03.120Z info  Processed order 4163 in 27ms
+2026-10-20T10:01:04.120Z info  Processed order 4164 in 28ms
+2026-10-20T10:01:05.120Z info  Processed order 4165 in 29ms
+2026-10-20T10:01:06.120Z info  Processed order 4166 in 30ms
+2026-10-20T10:01:07.120Z info  Processed order 4167 in 31ms
+2026-10-20T10:01:08.120Z info  Processed order 4168 in 32ms
+2026-10-20T10:01:09.120Z info  Processed order 4169 in 10ms
+2026-10-20T10:01:10.120Z info  Processed order 4170 in 11ms
+2026-10-20T10:01:11.120Z info  Processed order 4171 in 12ms
+2026-10-20T10:01:12.120Z info  Processed order 4172 in 13ms
+2026-10-20T10:01:13.120Z info  Processed order 4173 in 14ms
+2026-10-20T10:01:14.120Z info  Processed order 4174 in 15ms
+2026-10-20T10:01:15.120Z info  Processed order 4175 in 16ms
+2026-10-20T10:01:16.120Z info  Processed order 4176 in 17ms
+2026-10-20T10:01:17.120Z info  Processed order 4177 in 18ms
+2026-10-20T10:01:18.120Z info  Processed order 4178 in 19ms
+2026-10-20T10:01:19.120Z info  Processed order 4179 in 20ms
+2026-10-20T10:01:20.120Z info  Processed order 4180 in 21ms
+2026-10-20T10:01:21.120Z info  Processed order 4181 in 22ms
+2026-10-20T10:01:22.120Z info  Processed order 4182 in 23ms
+2026-10-20T10:01:23.120Z info  Processed order 4183 in 24ms
+2026-10-20T10:01:24.120Z info  Processed order 4184 in 25ms
+2026-10-20T10:01:25.120Z info  Processed order 4185 in 26ms
+2026-10-20T10:01:26.120Z info  Processed order 4186 in 27ms
+2026-10-20T10:01:27.120Z info  Processed order 4187 in 28ms
+2026-10-20T10:01:28.120Z info  Processed order 4188 in 29ms
+2026-10-20T10:01:29.120Z info  Processed order 4189 in 30ms
+2026-10-20T10:01:30.120Z info  Processed order 4190 in 31ms
+2026-10-20T10:01:31.120Z info  Processed order 4191 in 32ms
+2026-10-20T10:01:32.120Z info  Processed order 4192 in 10ms
+2026-10-20T10:01:33.120Z info  Processed order 4193 in 11ms
+2026-10-20T10:01:34.120Z info  Processed order 4194 in 12ms
+2026-10-20T10:01:35.120Z info  Processed order 4195 in 13ms
+2026-10-20T10:01:36.120Z info  Processed order 4196 in 14ms
+2026-10-20T10:01:37.120Z info  Processed order 4197 in 15ms
+2026-10-20T10:01:38.120Z info  Processed order 4198 in 16ms
+2026-10-20T10:01:39.120Z info  Processed order 4199 in 17ms
+2026-10-20T10:01:40.120Z info  Processed order 4200 in 18ms
+2026-10-20T10:01:41.120Z info  Processed order 4201 in 19ms
+2026-10-20T10:01:42.120Z info  Processed order 4202 in 20ms
+2026-10-20T10:01:43.120Z info  Processed order 4203 in 21ms
+2026-10-20T10:01:44.120Z info  Processed order 4204 in 22ms
+2026-10-20T10:01:45.120Z info  Processed order 4205 in 23ms
+2026-10-20T10:01:46.120Z info  Processed order 4206 in 24ms
+2026-10-20T10:01:47.120Z info  Processed order 4207 in 25ms
+2026-10-20T10:01:48.120Z info  Processed order 4208 in 26ms
+2026-10-20T10:01:49.120Z info  Processed order 4209 in 27ms
+2026-10-20T10:01:50.120Z info  Processed order 4210 in 28ms
+2026-10-20T10:01:51.120Z info  Processed order 4211 in 29ms
+2026-10-20T10:01:52.120Z info  Processed order 4212 in 30ms
+2026-10-20T10:01:53.120Z info  Processed order 4213 in 31ms
+2026-10-20T10:01:54.120Z info  Processed order 4214 in 32ms
+2026-10-20T10:01:55.120Z info  Processed order 4215 in 10ms
+2026-10-20T10:01:56.120Z info  Processed order 4216 in 11ms
+2026-10-20T10:01:57.120Z info  Processed order 4217 in 12ms
+2026-10-20T10:01:58.120Z info  Processed order 4218 in 13ms
+2026-10-20T10:01:59.120Z info  Processed order 4219 in 14ms
+2026-10-20T10:02:00.120Z info  Processed order 4220 in 15ms
+2026-10-20T10:02:01.001Z warn  Retry 1/3 for payment gateway
+2026-10-20T10:02:02.317Z fail: Orders.Worker[0] Unhandled exception. System.InvalidOperationException: Sequence contains no matching element
+   at System.Linq.ThrowHelper.ThrowNoMatchException()
+   at Orders.Worker.OrderProcessor.Resolve(Int32 id) in /src/Orders.Worker/OrderProcessor.cs:line 57
+   at Orders.Worker.OrderProcessor.HandleAsync(Order order) in /src/Orders.Worker/OrderProcessor.cs:line 31
+ ---> System.TimeoutException: The operation has timed out.
+   at Orders.Data.Repo.QueryAsync(String sql) in /src/Orders.Data/Repo.cs:line 112
+--- End of inner exception stack trace ---
+   at Orders.Worker.Program.Main(String[] args) in /src/Orders.Worker/Program.cs:line 14
+2026-10-20T10:03:01.000Z info  Worker heartbeat 1 ok, queue depth 7
+2026-10-20T10:03:02.000Z info  Worker heartbeat 2 ok, queue depth 14
+2026-10-20T10:03:03.000Z info  Worker heartbeat 3 ok, queue depth 21
+2026-10-20T10:03:04.000Z info  Worker heartbeat 4 ok, queue depth 28
+2026-10-20T10:03:05.000Z info  Worker heartbeat 5 ok, queue depth 4
+2026-10-20T10:03:06.000Z info  Worker heartbeat 6 ok, queue depth 11
+2026-10-20T10:03:07.000Z info  Worker heartbeat 7 ok, queue depth 18
+2026-10-20T10:03:08.000Z info  Worker heartbeat 8 ok, queue depth 25
+2026-10-20T10:03:09.000Z info  Worker heartbeat 9 ok, queue depth 1
+2026-10-20T10:03:10.000Z info  Worker heartbeat 10 ok, queue depth 8
+2026-10-20T10:03:11.000Z info  Worker heartbeat 11 ok, queue depth 15
+2026-10-20T10:03:12.000Z info  Worker heartbeat 12 ok, queue depth 22
+2026-10-20T10:03:13.000Z info  Worker heartbeat 13 ok, queue depth 29
+2026-10-20T10:03:14.000Z info  Worker heartbeat 14 ok, queue depth 5
+2026-10-20T10:03:15.000Z info  Worker heartbeat 15 ok, queue depth 12
+2026-10-20T10:03:16.000Z info  Worker heartbeat 16 ok, queue depth 19
+2026-10-20T10:03:17.000Z info  Worker heartbeat 17 ok, queue depth 26
+2026-10-20T10:03:18.000Z info  Worker heartbeat 18 ok, queue depth 2
+2026-10-20T10:03:19.000Z info  Worker heartbeat 19 ok, queue depth 9
+2026-10-20T10:03:20.000Z info  Worker heartbeat 20 ok, queue depth 16
+2026-10-20T10:03:21.000Z info  Worker heartbeat 21 ok, queue depth 23
+2026-10-20T10:03:22.000Z info  Worker heartbeat 22 ok, queue depth 30
+2026-10-20T10:03:23.000Z info  Worker heartbeat 23 ok, queue depth 6
+2026-10-20T10:03:24.000Z info  Worker heartbeat 24 ok, queue depth 13
+2026-10-20T10:03:25.000Z info  Worker heartbeat 25 ok, queue depth 20
+2026-10-20T10:03:26.000Z info  Worker heartbeat 26 ok, queue depth 27
+2026-10-20T10:03:27.000Z info  Worker heartbeat 27 ok, queue depth 3
+2026-10-20T10:03:28.000Z info  Worker heartbeat 28 ok, queue depth 10
+2026-10-20T10:03:29.000Z info  Worker heartbeat 29 ok, queue depth 17
+2026-10-20T10:03:30.000Z info  Worker heartbeat 30 ok, queue depth 24
+2026-10-20T10:03:31.000Z info  Worker heartbeat 31 ok, queue depth 0
+2026-10-20T10:03:32.000Z info  Worker heartbeat 32 ok, queue depth 7
+2026-10-20T10:03:33.000Z info  Worker heartbeat 33 ok, queue depth 14
+2026-10-20T10:03:34.000Z info  Worker heartbeat 34 ok, queue depth 21
+2026-10-20T10:03:35.000Z info  Worker heartbeat 35 ok, queue depth 28
+2026-10-20T10:03:36.000Z info  Worker heartbeat 36 ok, queue depth 4
+2026-10-20T10:03:37.000Z info  Worker heartbeat 37 ok, queue depth 11
+2026-10-20T10:03:38.000Z info  Worker heartbeat 38 ok, queue depth 18
+2026-10-20T10:03:39.000Z info  Worker heartbeat 39 ok, queue depth 25
+2026-10-20T10:03:40.000Z info  Worker heartbeat 40 ok, queue depth 1
+2026-10-20T10:03:41.000Z info  Worker heartbeat 41 ok, queue depth 8
+2026-10-20T10:03:42.000Z info  Worker heartbeat 42 ok, queue depth 15
+2026-10-20T10:03:43.000Z info  Worker heartbeat 43 ok, queue depth 22
+2026-10-20T10:03:44.000Z info  Worker heartbeat 44 ok, queue depth 29
+2026-10-20T10:03:45.000Z info  Worker heartbeat 45 ok, queue depth 5
+2026-10-20T10:03:46.000Z info  Worker heartbeat 46 ok, queue depth 12
+2026-10-20T10:03:47.000Z info  Worker heartbeat 47 ok, queue depth 19
+2026-10-20T10:03:48.000Z info  Worker heartbeat 48 ok, queue depth 26
+2026-10-20T10:03:49.000Z info  Worker heartbeat 49 ok, queue depth 2
+2026-10-20T10:03:50.000Z info  Worker heartbeat 50 ok, queue depth 9
+2026-10-20T10:03:51.000Z info  Worker heartbeat 51 ok, queue depth 16
+2026-10-20T10:03:52.000Z info  Worker heartbeat 52 ok, queue depth 23
+2026-10-20T10:03:53.000Z info  Worker heartbeat 53 ok, queue depth 30
+2026-10-20T10:03:54.000Z info  Worker heartbeat 54 ok, queue depth 6
+2026-10-20T10:03:55.000Z info  Worker heartbeat 55 ok, queue depth 13
+2026-10-20T10:03:56.000Z info  Worker heartbeat 56 ok, queue depth 20
+2026-10-20T10:03:57.000Z info  Worker heartbeat 57 ok, queue depth 27
+2026-10-20T10:03:58.000Z info  Worker heartbeat 58 ok, queue depth 3
+2026-10-20T10:03:59.000Z info  Worker heartbeat 59 ok, queue depth 10
+2026-10-20T10:04:00.000Z info  Worker heartbeat 60 ok, queue depth 17
+2026-10-20T10:04:01.000Z info  Worker heartbeat 61 ok, queue depth 24
+2026-10-20T10:04:02.000Z info  Worker heartbeat 62 ok, queue depth 0
+2026-10-20T10:04:03.000Z info  Worker heartbeat 63 ok, queue depth 7
+2026-10-20T10:04:04.000Z info  Worker heartbeat 64 ok, queue depth 14
+2026-10-20T10:04:05.000Z info  Worker heartbeat 65 ok, queue depth 21
+2026-10-20T10:04:06.000Z info  Worker heartbeat 66 ok, queue depth 28
+2026-10-20T10:04:07.000Z info  Worker heartbeat 67 ok, queue depth 4
+2026-10-20T10:04:08.000Z info  Worker heartbeat 68 ok, queue depth 11
+2026-10-20T10:04:09.000Z info  Worker heartbeat 69 ok, queue depth 18
+2026-10-20T10:04:10.000Z info  Worker heartbeat 70 ok, queue depth 25
+2026-10-20T10:04:11.000Z info  Worker heartbeat 71 ok, queue depth 1
+2026-10-20T10:04:12.000Z info  Worker heartbeat 72 ok, queue depth 8
+2026-10-20T10:04:13.000Z info  Worker heartbeat 73 ok, queue depth 15
+2026-10-20T10:04:14.000Z info  Worker heartbeat 74 ok, queue depth 22
+2026-10-20T10:04:15.000Z info  Worker heartbeat 75 ok, queue depth 29
+2026-10-20T10:04:16.000Z info  Worker heartbeat 76 ok, queue depth 5
+2026-10-20T10:04:17.000Z info  Worker heartbeat 77 ok, queue depth 12
+2026-10-20T10:04:18.000Z info  Worker heartbeat 78 ok, queue depth 19
+2026-10-20T10:04:19.000Z info  Worker heartbeat 79 ok, queue depth 26
+2026-10-20T10:04:20.000Z info  Worker heartbeat 80 ok, queue depth 2
+2026-10-20T10:04:21.000Z info  Worker heartbeat 81 ok, queue depth 9
+2026-10-20T10:04:22.000Z info  Worker heartbeat 82 ok, queue depth 16
+2026-10-20T10:04:23.000Z info  Worker heartbeat 83 ok, queue depth 23
+2026-10-20T10:04:24.000Z info  Worker heartbeat 84 ok, queue depth 30
+2026-10-20T10:04:25.000Z info  Worker heartbeat 85 ok, queue depth 6
+2026-10-20T10:04:26.000Z info  Worker heartbeat 86 ok, queue depth 13
+2026-10-20T10:04:27.000Z info  Worker heartbeat 87 ok, queue depth 20
+2026-10-20T10:04:28.000Z info  Worker heartbeat 88 ok, queue depth 27
+2026-10-20T10:04:29.000Z info  Worker heartbeat 89 ok, queue depth 3
+2026-10-20T10:04:30.000Z info  Worker heartbeat 90 ok, queue depth 10
+2026-10-20T10:04:31.000Z info  Worker heartbeat 91 ok, queue depth 17
+2026-10-20T10:04:32.000Z info  Worker heartbeat 92 ok, queue depth 24
+2026-10-20T10:04:33.000Z info  Worker heartbeat 93 ok, queue depth 0
+2026-10-20T10:04:34.000Z info  Worker heartbeat 94 ok, queue depth 7
+2026-10-20T10:04:35.000Z info  Worker heartbeat 95 ok, queue depth 14
+2026-10-20T10:04:36.000Z info  Worker heartbeat 96 ok, queue depth 21
+2026-10-20T10:04:37.000Z info  Worker heartbeat 97 ok, queue depth 28
+2026-10-20T10:04:38.000Z info  Worker heartbeat 98 ok, queue depth 4
+2026-10-20T10:04:39.000Z info  Worker heartbeat 99 ok, queue depth 11
+2026-10-20T10:04:40.000Z info  Worker heartbeat 100 ok, queue depth 18
+2026-10-20T10:04:41.000Z info  Worker heartbeat 101 ok, queue depth 25
+2026-10-20T10:04:42.000Z info  Worker heartbeat 102 ok, queue depth 1
+2026-10-20T10:04:43.000Z info  Worker heartbeat 103 ok, queue depth 8
+2026-10-20T10:04:44.000Z info  Worker heartbeat 104 ok, queue depth 15
+2026-10-20T10:04:45.000Z info  Worker heartbeat 105 ok, queue depth 22
+2026-10-20T10:04:46.000Z info  Worker heartbeat 106 ok, queue depth 29
+2026-10-20T10:04:47.000Z info  Worker heartbeat 107 ok, queue depth 5
+2026-10-20T10:04:48.000Z info  Worker heartbeat 108 ok, queue depth 12
+2026-10-20T10:04:49.000Z info  Worker heartbeat 109 ok, queue depth 19
+2026-10-20T10:04:50.000Z info  Worker heartbeat 110 ok, queue depth 26
+2026-10-20T10:04:51.000Z info  Worker heartbeat 111 ok, queue depth 2
+2026-10-20T10:04:52.000Z info  Worker heartbeat 112 ok, queue depth 9
+2026-10-20T10:04:53.000Z info  Worker heartbeat 113 ok, queue depth 16
+2026-10-20T10:04:54.000Z info  Worker heartbeat 114 ok, queue depth 23
+2026-10-20T10:04:55.000Z info  Worker heartbeat 115 ok, queue depth 30
+2026-10-20T10:04:56.000Z info  Worker heartbeat 116 ok, queue depth 6
+2026-10-20T10:04:57.000Z info  Worker heartbeat 117 ok, queue depth 13
+2026-10-20T10:04:58.000Z info  Worker heartbeat 118 ok, queue depth 20
+2026-10-20T10:04:59.000Z info  Worker heartbeat 119 ok, queue depth 27
+2026-10-20T10:05:00.000Z info  Worker heartbeat 120 ok, queue depth 3
+2026-10-20T10:05:01.000Z info  Worker heartbeat 121 ok, queue depth 10
+2026-10-20T10:05:02.000Z info  Worker heartbeat 122 ok, queue depth 17
+2026-10-20T10:05:03.000Z info  Worker heartbeat 123 ok, queue depth 24
+2026-10-20T10:05:04.000Z info  Worker heartbeat 124 ok, queue depth 0
+2026-10-20T10:05:05.000Z info  Worker heartbeat 125 ok, queue depth 7
+2026-10-20T10:05:06.000Z info  Worker heartbeat 126 ok, queue depth 14
+2026-10-20T10:05:07.000Z info  Worker heartbeat 127 ok, queue depth 21
+2026-10-20T10:05:08.000Z info  Worker heartbeat 128 ok, queue depth 28
+2026-10-20T10:05:09.000Z info  Worker heartbeat 129 ok, queue depth 4
+2026-10-20T10:05:10.000Z info  Worker heartbeat 130 ok, queue depth 11
+2026-10-20T10:05:11.000Z info  Worker heartbeat 131 ok, queue depth 18
+2026-10-20T10:05:12.000Z info  Worker heartbeat 132 ok, queue depth 25
+2026-10-20T10:05:13.000Z info  Worker heartbeat 133 ok, queue depth 1
+2026-10-20T10:05:14.000Z info  Worker heartbeat 134 ok, queue depth 8
+2026-10-20T10:05:15.000Z info  Worker heartbeat 135 ok, queue depth 15
+2026-10-20T10:05:16.000Z info  Worker heartbeat 136 ok, queue depth 22
+2026-10-20T10:05:17.000Z info  Worker heartbeat 137 ok, queue depth 29
+2026-10-20T10:05:18.000Z info  Worker heartbeat 138 ok, queue depth 5
+2026-10-20T10:05:19.000Z info  Worker heartbeat 139 ok, queue depth 12
+2026-10-20T10:05:20.000Z info  Worker heartbeat 140 ok, queue depth 19
+2026-10-20T10:05:21.000Z info  Worker heartbeat 141 ok, queue depth 26
+2026-10-20T10:05:22.000Z info  Worker heartbeat 142 ok, queue depth 2
+2026-10-20T10:05:23.000Z info  Worker heartbeat 143 ok, queue depth 9
+2026-10-20T10:05:24.000Z info  Worker heartbeat 144 ok, queue depth 16
+2026-10-20T10:05:25.000Z info  Worker heartbeat 145 ok, queue depth 23
+2026-10-20T10:05:26.000Z info  Worker heartbeat 146 ok, queue depth 30
+2026-10-20T10:05:27.000Z info  Worker heartbeat 147 ok, queue depth 6
+2026-10-20T10:05:28.000Z info  Worker heartbeat 148 ok, queue depth 13
+2026-10-20T10:05:29.000Z info  Worker heartbeat 149 ok, queue depth 20
+2026-10-20T10:05:30.000Z info  Worker heartbeat 150 ok, queue depth 27
+2026-10-20T10:06:00.000Z info  Restarting worker

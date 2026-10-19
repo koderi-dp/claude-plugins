@@ -6,6 +6,8 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 pub mod cargo;
+pub mod docker_build;
+pub mod docker_logs;
 pub mod dotnet;
 pub mod generic;
 pub mod jstest;
@@ -37,16 +39,20 @@ static CARGO: cargo::Cargo = cargo::Cargo;
 static TSC: tsc::Tsc = tsc::Tsc;
 static JSTEST: jstest::JsTest = jstest::JsTest;
 static NODE_INSTALL: node_install::NodeInstall = node_install::NodeInstall;
+static DOCKER_BUILD: docker_build::DockerBuild = docker_build::DockerBuild;
+static DOCKER_LOGS: docker_logs::DockerLogs = docker_logs::DockerLogs;
 static GENERIC: generic::Generic = generic::Generic;
 
 /// Rules in detection order; generic is always last. Later rules are inserted
 /// on their own line before `&GENERIC` (and the array length bumped).
-static REGISTRY: [&dyn Rule; 6] = [
+static REGISTRY: [&dyn Rule; 8] = [
     &DOTNET,
     &CARGO,
     &TSC,
     &JSTEST,
     &NODE_INSTALL,
+    &DOCKER_BUILD,
+    &DOCKER_LOGS,
     &GENERIC,
 ];
 
