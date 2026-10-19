@@ -77,7 +77,9 @@ fn split_segments(cmd: &str) -> Vec<(&str, Option<Sep>)> {
 
 fn is_cd(segment: &str) -> bool {
     let s = segment.trim();
-    s == "cd" || s.strip_prefix("cd").is_some_and(|r| r.starts_with(char::is_whitespace))
+    s == "cd"
+        || s.strip_prefix("cd")
+            .is_some_and(|r| r.starts_with(char::is_whitespace))
 }
 
 /// The first command of the pipeline, skipping leading `cd <dir> &&` / `cd <dir>;`.

@@ -63,7 +63,9 @@ impl Rule for JsTest {
 
     fn matches_command(&self, first_segment: &str) -> bool {
         let strip = |w: &str| {
-            w.trim_end_matches(".cmd").trim_end_matches(".exe").to_string()
+            w.trim_end_matches(".cmd")
+                .trim_end_matches(".exe")
+                .to_string()
         };
         let words: Vec<String> = first_segment.split_whitespace().map(strip).collect();
         let w: Vec<&str> = words.iter().map(String::as_str).collect();
@@ -85,8 +87,7 @@ impl Rule for JsTest {
                     || (w.get(1) == Some(&"run") && is_test_script(w.get(2)))
             }
             Some(&"yarn") => {
-                is_test_script(w.get(1))
-                    || (w.get(1) == Some(&"run") && is_test_script(w.get(2)))
+                is_test_script(w.get(1)) || (w.get(1) == Some(&"run") && is_test_script(w.get(2)))
             }
             _ => false,
         }
@@ -128,7 +129,10 @@ impl Rule for JsTest {
                 body.push(line.trim().to_string());
                 continue;
             }
-            if BULLET_RE.captures(line).is_some_and(|c| c[1].starts_with("Console")) {
+            if BULLET_RE
+                .captures(line)
+                .is_some_and(|c| c[1].starts_with("Console"))
+            {
                 in_block = false;
                 continue;
             }

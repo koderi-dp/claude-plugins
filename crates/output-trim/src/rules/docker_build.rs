@@ -28,7 +28,9 @@ static IMAGE_RE: LazyLock<Regex> =
 
 /// `#8 1.103 text` -> `1.103 text`.
 fn strip_step_prefix(line: &str) -> &str {
-    STEP_RE.captures(line).map_or(line, |c| c.get(2).unwrap().as_str())
+    STEP_RE
+        .captures(line)
+        .map_or(line, |c| c.get(2).unwrap().as_str())
 }
 
 impl Rule for DockerBuild {
@@ -40,7 +42,9 @@ impl Rule for DockerBuild {
         let words: Vec<&str> = first_segment.split_whitespace().collect();
         matches!(
             words.as_slice(),
-            ["docker", "build", ..] | ["docker", "buildx", "build", ..] | ["docker", "compose", "build", ..]
+            ["docker", "build", ..]
+                | ["docker", "buildx", "build", ..]
+                | ["docker", "compose", "build", ..]
         )
     }
 
@@ -51,7 +55,11 @@ impl Rule for DockerBuild {
     fn trim(&self, lines: &[String]) -> Trimmed {
         let failing: BTreeSet<&str> = lines
             .iter()
-            .filter_map(|l| STEP_ERROR_RE.captures(l).map(|c| c.get(1).unwrap().as_str()))
+            .filter_map(|l| {
+                STEP_ERROR_RE
+                    .captures(l)
+                    .map(|c| c.get(1).unwrap().as_str())
+            })
             .collect();
 
         // (line index, text) of everything kept, merged back in original order.

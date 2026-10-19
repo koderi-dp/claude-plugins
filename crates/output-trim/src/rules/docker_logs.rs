@@ -36,7 +36,9 @@ impl Rule for DockerLogs {
         let words: Vec<&str> = first_segment.split_whitespace().collect();
         matches!(
             words.as_slice(),
-            ["docker", "logs", ..] | ["docker", "compose", "logs", ..] | ["docker-compose", "logs", ..]
+            ["docker", "logs", ..]
+                | ["docker", "compose", "logs", ..]
+                | ["docker-compose", "logs", ..]
         )
     }
 

@@ -32,10 +32,16 @@ mod dotnet {
     #[test]
     fn build_fail_keeps_error_once() {
         let t = Dotnet.trim(&fixture("dotnet", "build_fail"));
-        assert_eq!(t.body.iter().filter(|l| l.as_str() == CS0029).count(), 1, "{:#?}", t.body);
+        assert_eq!(
+            t.body.iter().filter(|l| l.as_str() == CS0029).count(),
+            1,
+            "{:#?}",
+            t.body
+        );
         assert_eq!(t.outcome, Outcome::Fail);
         assert!(
-            t.verdict.starts_with("[output-trim] dotnet build: FAILED — 1 errors"),
+            t.verdict
+                .starts_with("[output-trim] dotnet build: FAILED — 1 errors"),
             "{}",
             t.verdict
         );
@@ -63,8 +69,16 @@ mod dotnet {
         assert!(!text.contains("at System."), "{text}");
         assert!(!text.contains("Determining projects"), "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
-        assert!(t.verdict.contains("1 failed, 2 passed, 0 skipped"), "{}", t.verdict);
-        assert!(t.verdict.starts_with("[output-trim] dotnet test: FAILED"), "{}", t.verdict);
+        assert!(
+            t.verdict.contains("1 failed, 2 passed, 0 skipped"),
+            "{}",
+            t.verdict
+        );
+        assert!(
+            t.verdict.starts_with("[output-trim] dotnet test: FAILED"),
+            "{}",
+            t.verdict
+        );
     }
 
     #[test]
@@ -74,8 +88,16 @@ mod dotnet {
         let diag = regex::Regex::new(r"\): warning ").unwrap();
         let non_diag = t.body.iter().filter(|l| !diag.is_match(l)).count();
         assert!(non_diag <= 3, "{:#?}", t.body);
-        assert!(t.body.iter().any(|l| l.starts_with("Passed!  - Failed:")), "{:#?}", t.body);
-        assert!(t.verdict.contains("0 failed, 3 passed, 0 skipped"), "{}", t.verdict);
+        assert!(
+            t.body.iter().any(|l| l.starts_with("Passed!  - Failed:")),
+            "{:#?}",
+            t.body
+        );
+        assert!(
+            t.verdict.contains("0 failed, 3 passed, 0 skipped"),
+            "{}",
+            t.verdict
+        );
     }
 
     #[test]
@@ -93,7 +115,12 @@ mod dotnet {
         let dir = tempfile::tempdir().unwrap();
         let out = engine::apply(&lines, &Dotnet, LogTarget::SaveIn(dir.path()), false);
         assert!(out.total_chars >= 1_500);
-        assert!(out.kept_chars * 5 <= out.total_chars, "{} of {}", out.kept_chars, out.total_chars);
+        assert!(
+            out.kept_chars * 5 <= out.total_chars,
+            "{} of {}",
+            out.kept_chars,
+            out.total_chars
+        );
     }
 
     fn lines(v: &[&str]) -> Vec<String> {
@@ -105,10 +132,17 @@ mod dotnet {
         let mut l = fixture("dotnet", "test_fail");
         let at = l.iter().position(|x| x.contains("Failed!")).unwrap();
         // Output section (not message/stack) inside the failed block.
-        l.insert(at, "MSBUILD : error MSB1009: project file does not exist".into());
+        l.insert(
+            at,
+            "MSBUILD : error MSB1009: project file does not exist".into(),
+        );
         l.insert(at, "  Standard Output Messages:".into());
         let t = Dotnet.trim(&l);
-        assert!(t.body.iter().any(|x| x.contains("error MSB1009")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().any(|x| x.contains("error MSB1009")),
+            "{:#?}",
+            t.body
+        );
         assert_eq!(t.outcome, Outcome::Fail);
     }
 
@@ -120,8 +154,16 @@ mod dotnet {
             "Test Run Aborted.",
         ]));
         assert_eq!(t.outcome, Outcome::Fail);
-        assert!(t.body.iter().any(|x| x.contains("crashed")), "{:#?}", t.body);
-        assert!(t.body.iter().any(|x| x.contains("Test Run Aborted")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().any(|x| x.contains("crashed")),
+            "{:#?}",
+            t.body
+        );
+        assert!(
+            t.body.iter().any(|x| x.contains("Test Run Aborted")),
+            "{:#?}",
+            t.body
+        );
     }
 
     #[test]
@@ -132,8 +174,16 @@ mod dotnet {
             "  Failed to restore C:\\src\\Fx\\Lib\\Lib.csproj (in 1.2 sec).",
         ]));
         assert_eq!(t.outcome, Outcome::Fail);
-        assert!(t.body.iter().any(|x| x.contains("error NU1101")), "{:#?}", t.body);
-        assert!(t.body.iter().any(|x| x.contains("Failed to restore")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().any(|x| x.contains("error NU1101")),
+            "{:#?}",
+            t.body
+        );
+        assert!(
+            t.body.iter().any(|x| x.contains("Failed to restore")),
+            "{:#?}",
+            t.body
+        );
         assert!(t.verdict.contains("FAILED"), "{}", t.verdict);
     }
 
@@ -147,13 +197,20 @@ mod dotnet {
     #[test]
     fn detects_by_content() {
         for case in ["test_fail", "build_fail", "build_pass", "test_pass"] {
-            assert_eq!(rules::by_content(&fixture("dotnet", case)).name(), "dotnet", "{case}");
+            assert_eq!(
+                rules::by_content(&fixture("dotnet", case)).name(),
+                "dotnet",
+                "{case}"
+            );
         }
     }
 
     #[test]
     fn detects_by_command() {
-        assert_eq!(rules::by_command("dotnet test --no-build").map(|r| r.name()), Some("dotnet"));
+        assert_eq!(
+            rules::by_command("dotnet test --no-build").map(|r| r.name()),
+            Some("dotnet")
+        );
         assert!(rules::by_command("dotnetx foo").is_none());
     }
 }
@@ -179,17 +236,27 @@ mod cargo {
     fn test_fail_keeps_failure_and_summary() {
         let t = Cargo.trim(&fixture("cargo", "test_fail"));
         let text = t.body.join("\n");
-        assert!(text.contains("adds_two_positive_numbers_with_a_wrong_expectation"), "{text}");
+        assert!(
+            text.contains("adds_two_positive_numbers_with_a_wrong_expectation"),
+            "{text}"
+        );
         assert!(text.contains("assertion `left == right` failed"), "{text}");
         assert!(text.contains("left: 2"), "{text}");
         assert!(text.contains("right: 3"), "{text}");
-        assert!(text.contains("test result: FAILED. 150 passed; 1 failed"), "{text}");
-        assert!(text.contains("warning: unused variable: `unused_value`"), "{text}");
+        assert!(
+            text.contains("test result: FAILED. 150 passed; 1 failed"),
+            "{text}"
+        );
+        assert!(
+            text.contains("warning: unused variable: `unused_value`"),
+            "{text}"
+        );
         assert!(!text.contains("... ok"), "{text}");
         assert!(!text.contains("Compiling"), "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
         assert!(
-            t.verdict.starts_with("[output-trim] cargo test: FAILED — 1 failed, 150 passed"),
+            t.verdict
+                .starts_with("[output-trim] cargo test: FAILED — 1 failed, 150 passed"),
             "{}",
             t.verdict
         );
@@ -206,9 +273,27 @@ mod cargo {
     fn test_pass_is_reduced_and_passes() {
         let t = Cargo.trim(&fixture("cargo", "test_pass"));
         assert_eq!(t.outcome, Outcome::Pass);
-        assert!(t.body.iter().all(|l| !l.contains("... ok") && !l.contains("Doc-tests")), "{:#?}", t.body);
-        assert!(t.body.iter().any(|l| l.starts_with("test result: ok. 150 passed")), "{:#?}", t.body);
-        assert!(t.body.iter().any(|l| l.contains("unused variable: `unused_value`")), "{:#?}", t.body);
+        assert!(
+            t.body
+                .iter()
+                .all(|l| !l.contains("... ok") && !l.contains("Doc-tests")),
+            "{:#?}",
+            t.body
+        );
+        assert!(
+            t.body
+                .iter()
+                .any(|l| l.starts_with("test result: ok. 150 passed")),
+            "{:#?}",
+            t.body
+        );
+        assert!(
+            t.body
+                .iter()
+                .any(|l| l.contains("unused variable: `unused_value`")),
+            "{:#?}",
+            t.body
+        );
         assert!(t.verdict.contains("0 failed, 150 passed"), "{}", t.verdict);
         let (kept, total) = reduction("test_pass");
         assert!(total >= 1_500, "{total}");
@@ -227,7 +312,8 @@ mod cargo {
         assert!(!text.contains("Compiling"), "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
         assert!(
-            t.verdict.starts_with("[output-trim] cargo build: FAILED — 1 errors, 1 warnings"),
+            t.verdict
+                .starts_with("[output-trim] cargo build: FAILED — 1 errors, 1 warnings"),
             "{}",
             t.verdict
         );
@@ -238,10 +324,16 @@ mod cargo {
         let t = Cargo.trim(&fixture("cargo", "build_warn"));
         let text = t.body.join("\n");
         assert_eq!(t.outcome, Outcome::Pass);
-        assert!(text.contains("warning: unused variable: `unused_value`"), "{text}");
+        assert!(
+            text.contains("warning: unused variable: `unused_value`"),
+            "{text}"
+        );
         assert!(text.contains("--> src\\lib.rs:2:28"), "{text}");
         assert!(text.contains("generated 1 warning"), "{text}");
-        assert!(!text.contains("Compiling") && !text.contains("Finished"), "{text}");
+        assert!(
+            !text.contains("Compiling") && !text.contains("Finished"),
+            "{text}"
+        );
         assert!(t.verdict.contains("0 errors, 1 warnings"), "{}", t.verdict);
     }
 
@@ -260,20 +352,37 @@ mod cargo {
     #[test]
     fn unexpected_panic_line_outside_sections_is_kept() {
         let mut l = fixture("cargo", "test_pass");
-        let at = l.iter().position(|x| x.trim_start().starts_with("Finished")).unwrap();
+        let at = l
+            .iter()
+            .position(|x| x.trim_start().starts_with("Finished"))
+            .unwrap();
         l.insert(at, "thread 'main' panicked at src/main.rs:1:1: boom".into());
         let t = Cargo.trim(&l);
-        assert!(t.body.iter().any(|x| x.contains("panicked")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().any(|x| x.contains("panicked")),
+            "{:#?}",
+            t.body
+        );
         assert_eq!(t.outcome, Outcome::Fail);
     }
 
     #[test]
     fn error_line_after_failures_list_is_kept() {
         let mut l = fixture("cargo", "test_fail");
-        let at = l.iter().position(|x| x.starts_with("test result:")).unwrap();
-        l.insert(at, "something went wrong: error while loading shared libraries".into());
+        let at = l
+            .iter()
+            .position(|x| x.starts_with("test result:"))
+            .unwrap();
+        l.insert(
+            at,
+            "something went wrong: error while loading shared libraries".into(),
+        );
         let t = Cargo.trim(&l);
-        assert!(t.body.iter().any(|x| x.contains("shared libraries")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().any(|x| x.contains("shared libraries")),
+            "{:#?}",
+            t.body
+        );
         assert_eq!(t.outcome, Outcome::Fail);
     }
 
@@ -309,15 +418,31 @@ mod cargo {
 
     #[test]
     fn detects_by_content() {
-        for case in ["test_fail", "test_pass", "build_fail", "build_warn", "clippy_warn"] {
-            assert_eq!(rules::by_content(&fixture("cargo", case)).name(), "cargo", "{case}");
+        for case in [
+            "test_fail",
+            "test_pass",
+            "build_fail",
+            "build_warn",
+            "clippy_warn",
+        ] {
+            assert_eq!(
+                rules::by_content(&fixture("cargo", case)).name(),
+                "cargo",
+                "{case}"
+            );
         }
     }
 
     #[test]
     fn detects_by_command() {
-        assert_eq!(rules::by_command("cargo test --lib").map(|r| r.name()), Some("cargo"));
-        assert_eq!(rules::by_command("cd x && cargo clippy | tail").map(|r| r.name()), Some("cargo"));
+        assert_eq!(
+            rules::by_command("cargo test --lib").map(|r| r.name()),
+            Some("cargo")
+        );
+        assert_eq!(
+            rules::by_command("cd x && cargo clippy | tail").map(|r| r.name()),
+            Some("cargo")
+        );
         assert!(rules::by_command("cargox build").is_none());
     }
 }
@@ -330,7 +455,11 @@ mod cargo_followups {
     #[test]
     fn failed_line_dropped_when_listed() {
         let t = Cargo.trim(&fixture("cargo", "test_fail"));
-        assert!(t.body.iter().all(|l| !l.ends_with(" ... FAILED")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().all(|l| !l.ends_with(" ... FAILED")),
+            "{:#?}",
+            t.body
+        );
         assert!(
             t.body
                 .iter()
@@ -361,7 +490,10 @@ mod cargo_followups {
         let t = Cargo.trim(&l);
         let text = t.body.join("\n");
         assert!(text.contains("assertion `left == right` failed"), "{text}");
-        assert!(text.contains("left: 2") && text.contains("right: 3"), "{text}");
+        assert!(
+            text.contains("left: 2") && text.contains("right: 3"),
+            "{text}"
+        );
         assert!(!text.contains("RUST_BACKTRACE"), "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
     }
@@ -391,19 +523,27 @@ mod tsc {
     #[test]
     fn few_keeps_codes_and_locations_without_frames() {
         let t = Tsc.trim(&fixture("tsc", "errors_few"));
-        let text = t.body.join("
-");
+        let text = t.body.join(
+            "
+",
+        );
         for needle in [
             "src/app.ts:3 TS2322",
             "src/math.ts:5 TS2345",
             "src/math.ts:19 TS2551",
             "src/util.ts:3 TS2322",
         ] {
-            assert!(text.contains(needle), "{needle}
-{text}");
+            assert!(
+                text.contains(needle),
+                "{needle}
+{text}"
+            );
         }
         assert!(t.body.iter().all(|l| !l.contains("~~~")), "{text}");
-        assert!(text.contains("missing the following properties from type 'User'"), "{text}");
+        assert!(
+            text.contains("missing the following properties from type 'User'"),
+            "{text}"
+        );
         assert_eq!(t.outcome, Outcome::Fail);
         assert_eq!(t.verdict, "[output-trim] tsc: FAILED — 4 errors in 3 files");
     }
@@ -422,7 +562,10 @@ mod tsc {
         assert_eq!(count(&t.body, "+50 more in 4 files"), 1, "{:#?}", t.body);
         assert_eq!(count(&t.body, "by code: TS2322×80"), 1, "{:#?}", t.body);
         assert_eq!(t.outcome, Outcome::Fail);
-        assert_eq!(t.verdict, "[output-trim] tsc: FAILED — 80 errors in 5 files");
+        assert_eq!(
+            t.verdict,
+            "[output-trim] tsc: FAILED — 80 errors in 5 files"
+        );
     }
 
     #[test]
@@ -476,9 +619,14 @@ mod tsc {
             "tsc exited with fatal error while writing output",
         ]);
         let t = Tsc.trim(&l);
-        let text = t.body.join("
-");
-        assert!(text.contains("pkg-x: error TS2307: Cannot find module 'zzz'."), "{text}");
+        let text = t.body.join(
+            "
+",
+        );
+        assert!(
+            text.contains("pkg-x: error TS2307: Cannot find module 'zzz'."),
+            "{text}"
+        );
         assert!(text.contains("fatal error while writing output"), "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
         assert!(t.verdict.contains("3 errors in 1 files"), "{}", t.verdict);
@@ -499,14 +647,28 @@ mod tsc {
     #[test]
     fn detects_by_content() {
         for case in ["errors_few", "errors_many"] {
-            assert_eq!(rules::by_content(&fixture("tsc", case)).name(), "tsc", "{case}");
+            assert_eq!(
+                rules::by_content(&fixture("tsc", case)).name(),
+                "tsc",
+                "{case}"
+            );
         }
     }
 
     #[test]
     fn detects_by_command() {
-        for cmd in ["tsc --noEmit", "npx tsc -p .", "pnpm tsc", "pnpm exec tsc", "cd x && npx tsc | tail"] {
-            assert_eq!(rules::by_command(cmd).map(|r| r.name()), Some("tsc"), "{cmd}");
+        for cmd in [
+            "tsc --noEmit",
+            "npx tsc -p .",
+            "pnpm tsc",
+            "pnpm exec tsc",
+            "cd x && npx tsc | tail",
+        ] {
+            assert_eq!(
+                rules::by_command(cmd).map(|r| r.name()),
+                Some("tsc"),
+                "{cmd}"
+            );
         }
         assert!(rules::by_command("tscx").is_none());
         assert!(rules::by_command("npx eslint .").is_none());
@@ -539,11 +701,20 @@ mod jstest {
         assert_eq!(text.matches("expected 1 to be 2").count(), 2, "{text}");
         assert!(text.contains("src/broken.test.ts:3:48"), "{text}");
         assert!(t.body.iter().all(|l| !l.contains('✓')), "{text}");
-        assert!(t.body.iter().all(|l| !l.contains("expect(1).toBe(2)")), "code frames dropped: {text}");
-        assert!(text.contains("Test Files  1 failed | 4 passed (5)"), "{text}");
+        assert!(
+            t.body.iter().all(|l| !l.contains("expect(1).toBe(2)")),
+            "code frames dropped: {text}"
+        );
+        assert!(
+            text.contains("Test Files  1 failed | 4 passed (5)"),
+            "{text}"
+        );
         assert!(text.contains("Duration"), "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
-        assert_eq!(t.verdict, "[output-trim] tests: FAILED — 2 failed, 12 passed");
+        assert_eq!(
+            t.verdict,
+            "[output-trim] tests: FAILED — 2 failed, 12 passed"
+        );
     }
 
     #[test]
@@ -558,7 +729,11 @@ mod jstest {
         let t = JsTest.trim(&fixture("jstest", "vitest_pass"));
         assert_eq!(t.outcome, Outcome::Pass);
         assert!(t.body.len() <= 3, "{:#?}", t.body);
-        assert!(t.body.iter().any(|l| l == "Tests  12 passed (12)"), "{:#?}", t.body);
+        assert!(
+            t.body.iter().any(|l| l == "Tests  12 passed (12)"),
+            "{:#?}",
+            t.body
+        );
         assert_eq!(t.verdict, "[output-trim] tests: PASSED — 12 passed");
     }
 
@@ -567,12 +742,17 @@ mod jstest {
         let t = JsTest.trim(&fixture("jstest", "npm_test_tsc_then_vitest"));
         let text = t.body.join("\n");
         assert!(
-            text.contains("src/typed.ts(2,9): error TS2322: Type 'string' is not assignable to type 'number'."),
+            text.contains(
+                "src/typed.ts(2,9): error TS2322: Type 'string' is not assignable to type 'number'."
+            ),
             "{text}"
         );
         assert!(text.contains("adds numbers wrongly"), "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
-        assert_eq!(t.verdict, "[output-trim] tests: FAILED — 2 failed, 12 passed");
+        assert_eq!(
+            t.verdict,
+            "[output-trim] tests: FAILED — 2 failed, 12 passed"
+        );
     }
 
     #[test]
@@ -593,7 +773,11 @@ mod jstest {
             "Unhandled Rejection: socket crashed",
             "Error: worker exited after the summary",
         ] {
-            assert!(t.body.iter().any(|b| b == needle), "{needle}: {:#?}", t.body);
+            assert!(
+                t.body.iter().any(|b| b == needle),
+                "{needle}: {:#?}",
+                t.body
+            );
         }
         assert_eq!(t.outcome, Outcome::Fail);
     }
@@ -612,8 +796,14 @@ mod jstest {
 
     #[test]
     fn tsc_only_and_vitest_only_keep_their_rules() {
-        assert_eq!(rules::by_content(&fixture("tsc", "errors_few")).name(), "tsc");
-        assert_eq!(rules::by_content(&fixture("jstest", "vitest_fail")).name(), "jstest");
+        assert_eq!(
+            rules::by_content(&fixture("tsc", "errors_few")).name(),
+            "tsc"
+        );
+        assert_eq!(
+            rules::by_content(&fixture("jstest", "vitest_fail")).name(),
+            "jstest"
+        );
     }
 
     #[test]
@@ -633,10 +823,22 @@ mod jstest {
         ] {
             assert!(text.contains(needle), "{needle}\n{text}");
         }
-        assert!(!text.contains("hello from test") && !text.contains("PASS"), "{text}");
-        assert!(!text.contains("expect(3 - 1)"), "code frame dropped: {text}");
-        assert_eq!(t.verdict, "[output-trim] tests: FAILED — 2 failed, 3 passed");
-        assert_eq!(rules::by_content(&fixture("jstest", "jest_fail")).name(), "jstest");
+        assert!(
+            !text.contains("hello from test") && !text.contains("PASS"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("expect(3 - 1)"),
+            "code frame dropped: {text}"
+        );
+        assert_eq!(
+            t.verdict,
+            "[output-trim] tests: FAILED — 2 failed, 3 passed"
+        );
+        assert_eq!(
+            rules::by_content(&fixture("jstest", "jest_fail")).name(),
+            "jstest"
+        );
         let l = fixture("jstest", "jest_fail");
         let dir = tempfile::tempdir().unwrap();
         let out = engine::apply(&l, &JsTest, LogTarget::SaveIn(dir.path()), false);
@@ -681,18 +883,34 @@ mod jstest {
         let t = JsTest.trim(&l);
         let text = t.body.join("\n");
         assert!(text.contains("● sum › subtracts"), "{text}");
-        assert!(text.contains("Expected: 2") && text.contains("Received: 1"), "{text}");
+        assert!(
+            text.contains("Expected: 2") && text.contains("Received: 1"),
+            "{text}"
+        );
         assert!(text.contains("src/sum.test.js:4:15"), "{text}");
-        assert!(!text.contains("jest-circus") && !text.contains("other.js"), "{text}");
-        assert!(!text.contains("adds") && !text.contains("noise") && !text.contains("Console"), "{text}");
+        assert!(
+            !text.contains("jest-circus") && !text.contains("other.js"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("adds") && !text.contains("noise") && !text.contains("Console"),
+            "{text}"
+        );
         assert!(text.contains("Test Suites: 1 failed, 1 total"), "{text}");
-        assert_eq!(t.verdict, "[output-trim] tests: FAILED — 1 failed, 1 passed");
+        assert_eq!(
+            t.verdict,
+            "[output-trim] tests: FAILED — 1 failed, 1 passed"
+        );
     }
 
     #[test]
     fn detects_by_content() {
         for case in ["vitest_fail", "vitest_pass"] {
-            assert_eq!(rules::by_content(&fixture("jstest", case)).name(), "jstest", "{case}");
+            assert_eq!(
+                rules::by_content(&fixture("jstest", case)).name(),
+                "jstest",
+                "{case}"
+            );
         }
         assert!(JsTest.matches_content(&lines(&["Tests:       1 failed, 2 total"])));
     }
@@ -712,10 +930,24 @@ mod jstest {
             "yarn test",
             "cd x && npm test | tail",
         ] {
-            assert_eq!(rules::by_command(cmd).map(|r| r.name()), Some("jstest"), "{cmd}");
+            assert_eq!(
+                rules::by_command(cmd).map(|r| r.name()),
+                Some("jstest"),
+                "{cmd}"
+            );
         }
-        for cmd in ["npm run build", "npm install", "yarn", "pnpm install", "npx eslint ."] {
-            assert_ne!(rules::by_command(cmd).map(|r| r.name()), Some("jstest"), "{cmd}");
+        for cmd in [
+            "npm run build",
+            "npm install",
+            "yarn",
+            "pnpm install",
+            "npx eslint .",
+        ] {
+            assert_ne!(
+                rules::by_command(cmd).map(|r| r.name()),
+                Some("jstest"),
+                "{cmd}"
+            );
         }
     }
 }
@@ -741,16 +973,29 @@ mod node_install {
     fn npm_install_keeps_summary_and_collapses_deprecations() {
         let t = NodeInstall.trim(&fixture("node_install", "npm_install"));
         let text = t.body.join("\n");
-        assert!(text.contains("added 414 packages, and audited 415 packages in 48s"), "{text}");
-        assert!(text.contains("38 vulnerabilities (8 moderate, 28 high, 2 critical)"), "{text}");
+        assert!(
+            text.contains("added 414 packages, and audited 415 packages in 48s"),
+            "{text}"
+        );
+        assert!(
+            text.contains("38 vulnerabilities (8 moderate, 28 high, 2 critical)"),
+            "{text}"
+        );
         for noise in ["Progress:", "fund", "audit fix", "npm audit"] {
             assert!(!text.contains(noise), "{noise}: {text}");
         }
         assert!(!text.contains("npm warn deprecated"), "{text}");
         let collapsed = "9 deprecation warnings (inflight, @humanwhocodes/config-array, rimraf, glob, har-validator, @humanwhocodes/object-schema, uuid, request, …)";
-        assert_eq!(t.body.iter().filter(|l| l.as_str() == collapsed).count(), 1, "{text}");
+        assert_eq!(
+            t.body.iter().filter(|l| l.as_str() == collapsed).count(),
+            1,
+            "{text}"
+        );
         assert_eq!(t.outcome, Outcome::Pass);
-        assert_eq!(t.verdict, "[output-trim] install: PASSED — added 414 packages");
+        assert_eq!(
+            t.verdict,
+            "[output-trim] install: PASSED — added 414 packages"
+        );
     }
 
     #[test]
@@ -767,11 +1012,25 @@ mod node_install {
         assert!(text.contains("Packages: +405"), "{text}");
         assert!(text.contains("Done in 23.3s using pnpm v10.15.0"), "{text}");
         assert!(text.contains("+ vitest 5.0.5"), "{text}");
-        assert!(text.contains("5 deprecated subdependencies found"), "{text}");
-        assert!(t.body.iter().all(|l| !l.contains("Progress:") && !l.starts_with("++++")), "{text}");
-        assert!(text.contains("4 deprecation warnings (request, rimraf, glob, eslint)"), "{text}");
+        assert!(
+            text.contains("5 deprecated subdependencies found"),
+            "{text}"
+        );
+        assert!(
+            t.body
+                .iter()
+                .all(|l| !l.contains("Progress:") && !l.starts_with("++++")),
+            "{text}"
+        );
+        assert!(
+            text.contains("4 deprecation warnings (request, rimraf, glob, eslint)"),
+            "{text}"
+        );
         assert_eq!(t.outcome, Outcome::Pass);
-        assert_eq!(t.verdict, "[output-trim] install: PASSED — added 405 packages");
+        assert_eq!(
+            t.verdict,
+            "[output-trim] install: PASSED — added 405 packages"
+        );
     }
 
     #[test]
@@ -790,7 +1049,14 @@ mod node_install {
             text.contains("npm error 404 Not Found - GET https://registry.npmjs.org/this-package-does-not-exist-ot"),
             "{text}"
         );
-        assert_eq!(t.body.iter().filter(|l| l.as_str() == "npm error 404").count(), 1, "{text}");
+        assert_eq!(
+            t.body
+                .iter()
+                .filter(|l| l.as_str() == "npm error 404")
+                .count(),
+            1,
+            "{text}"
+        );
         assert_eq!(t.outcome, Outcome::Fail);
         assert_eq!(t.verdict, "[output-trim] install: FAILED");
     }
@@ -805,9 +1071,23 @@ mod node_install {
             "added 3 packages in 2s",
         ]);
         let t = NodeInstall.trim(&l);
-        assert!(t.body.iter().any(|b| b == "Error: audit request failed"), "{:#?}", t.body);
-        assert!(t.body.iter().any(|b| b == "Error: funding lookup crashed"), "{:#?}", t.body);
-        assert!(t.body.iter().all(|b| !b.contains("npm fund") && !b.contains("audit fix")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().any(|b| b == "Error: audit request failed"),
+            "{:#?}",
+            t.body
+        );
+        assert!(
+            t.body.iter().any(|b| b == "Error: funding lookup crashed"),
+            "{:#?}",
+            t.body
+        );
+        assert!(
+            t.body
+                .iter()
+                .all(|b| !b.contains("npm fund") && !b.contains("audit fix")),
+            "{:#?}",
+            t.body
+        );
         assert_eq!(t.outcome, Outcome::Fail);
     }
 
@@ -836,15 +1116,27 @@ mod node_install {
             "Done in 2s",
         ]);
         let t = NodeInstall.trim(&l);
-        assert!(t.body.iter().any(|b| b == "gyp ERR! build error"), "{:#?}", t.body);
-        assert!(t.body.iter().any(|b| b.starts_with("Error: EACCES")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().any(|b| b == "gyp ERR! build error"),
+            "{:#?}",
+            t.body
+        );
+        assert!(
+            t.body.iter().any(|b| b.starts_with("Error: EACCES")),
+            "{:#?}",
+            t.body
+        );
         assert_eq!(t.outcome, Outcome::Fail);
     }
 
     #[test]
     fn detects_by_content() {
         for case in ["npm_install", "pnpm_install", "npm_err"] {
-            assert_eq!(rules::by_content(&fixture("node_install", case)).name(), "node_install", "{case}");
+            assert_eq!(
+                rules::by_content(&fixture("node_install", case)).name(),
+                "node_install",
+                "{case}"
+            );
         }
     }
 
@@ -863,17 +1155,37 @@ mod node_install {
             "yarn add react",
             "cd x && npm ci | tail",
         ] {
-            assert_eq!(rules::by_command(cmd).map(|r| r.name()), Some("node_install"), "{cmd}");
+            assert_eq!(
+                rules::by_command(cmd).map(|r| r.name()),
+                Some("node_install"),
+                "{cmd}"
+            );
         }
         for cmd in ["yarn test", "npm run build", "npm test", "pnpm run dev"] {
-            assert_ne!(rules::by_command(cmd).map(|r| r.name()), Some("node_install"), "{cmd}");
+            assert_ne!(
+                rules::by_command(cmd).map(|r| r.name()),
+                Some("node_install"),
+                "{cmd}"
+            );
         }
     }
 
     #[test]
     fn registry_order() {
         let names: Vec<_> = rules::registry().iter().map(|r| r.name()).collect();
-        assert_eq!(names, ["dotnet", "cargo", "tsc", "jstest", "node_install", "docker_build", "docker_logs", "generic"]);
+        assert_eq!(
+            names,
+            [
+                "dotnet",
+                "cargo",
+                "tsc",
+                "jstest",
+                "node_install",
+                "docker_build",
+                "docker_logs",
+                "generic"
+            ]
+        );
     }
 }
 
@@ -914,11 +1226,25 @@ mod docker {
             .iter()
             .position(|b| b.contains("ERROR request failed: connection reset by peer"))
             .unwrap_or_else(|| panic!("{text}"));
-        assert_eq!(t.body[i + 1], "  at Server.handle (server.js:88:15)", "{text}");
+        assert_eq!(
+            t.body[i + 1],
+            "  at Server.handle (server.js:88:15)",
+            "{text}"
+        );
         assert_eq!(t.body[i + 2], "  at Socket.onData (net.js:412:9)", "{text}");
-        assert_eq!(t.body.iter().filter(|b| b.contains("WARN  slow request")).count(), 3, "{text}");
+        assert_eq!(
+            t.body
+                .iter()
+                .filter(|b| b.contains("WARN  slow request"))
+                .count(),
+            3,
+            "{text}"
+        );
         assert_eq!(t.outcome, Outcome::Unknown);
-        assert_eq!(t.verdict, "[output-trim] docker logs: DONE — 2007 lines, 4 warnings/errors");
+        assert_eq!(
+            t.verdict,
+            "[output-trim] docker logs: DONE — 2007 lines, 4 warnings/errors"
+        );
     }
 
     #[test]
@@ -945,7 +1271,7 @@ mod docker {
     fn logs_exception_is_reduced() {
         let (kept, total) = reduction(&DockerLogs, "logs_exception");
         assert!(total >= 1500, "{total}");
-        assert!(kept * 100 <= total * 30,"kept {kept} of {total}");
+        assert!(kept * 100 <= total * 30, "kept {kept} of {total}");
     }
 
     #[test]
@@ -957,7 +1283,9 @@ mod docker {
 
     #[test]
     fn unusual_error_words_above_tail_are_kept() {
-        let mut l: Vec<String> = (0..100).map(|i| format!("tick {i} ok-{}", "x".repeat(i % 7))).collect();
+        let mut l: Vec<String> = (0..100)
+            .map(|i| format!("tick {i} ok-{}", "x".repeat(i % 7)))
+            .collect();
         l[10] = "Traceback (most recent call last):".into();
         l.insert(11, "  File \"app.py\", line 3, in <module>".into());
         l.insert(12, "    return 1 / 0".into());
@@ -975,7 +1303,11 @@ mod docker {
             "panic: runtime error: index out of range",
             "FAILED to start worker",
         ] {
-            assert!(t.body.iter().any(|b| b == needle), "{needle}: {:#?}", t.body);
+            assert!(
+                t.body.iter().any(|b| b == needle),
+                "{needle}: {:#?}",
+                t.body
+            );
         }
         assert!(t.body.len() < l.len());
     }
@@ -984,17 +1316,31 @@ mod docker {
     fn build_fail_keeps_failing_step_and_error() {
         let t = DockerBuild.trim(&fixture("docker", "build_fail"));
         let text = t.body.join("\n");
-        assert!(text.contains("[5/5] RUN apk add --no-cache does-not-exist-ot"), "{text}");
+        assert!(
+            text.contains("[5/5] RUN apk add --no-cache does-not-exist-ot"),
+            "{text}"
+        );
         assert!(text.contains("ERROR: unable to select packages:"), "{text}");
-        assert!(text.contains("does-not-exist-ot (no such package):"), "{text}");
+        assert!(
+            text.contains("does-not-exist-ot (no such package):"),
+            "{text}"
+        );
         assert!(text.contains("failed to solve"), "{text}");
         assert_eq!(t.outcome, Outcome::Fail);
-        assert!(t.verdict.starts_with("[output-trim] docker build: FAILED"), "{}", t.verdict);
+        assert!(
+            t.verdict.starts_with("[output-trim] docker build: FAILED"),
+            "{}",
+            t.verdict
+        );
         // Successful steps and their output are dropped.
         assert!(!text.contains("Installing brotli-libs"), "{text}");
         assert!(!text.contains("building app"), "{text}");
         // The duplicated `------` error block does not repeat the error line.
-        assert_eq!(text.matches("ERROR: unable to select packages:").count(), 1, "{text}");
+        assert_eq!(
+            text.matches("ERROR: unable to select packages:").count(),
+            1,
+            "{text}"
+        );
     }
 
     #[test]
@@ -1018,7 +1364,13 @@ mod docker {
             "#6 DONE 0.1s",
         ]);
         let t = DockerBuild.trim(&l);
-        assert!(t.body.iter().any(|b| b.contains("naming to docker.io/library/app:latest")), "{:#?}", t.body);
+        assert!(
+            t.body
+                .iter()
+                .any(|b| b.contains("naming to docker.io/library/app:latest")),
+            "{:#?}",
+            t.body
+        );
         assert!(t.body.iter().all(|b| !b.ends_with(" hi")), "{:#?}", t.body);
         assert_eq!(t.outcome, Outcome::Pass);
     }
@@ -1029,12 +1381,27 @@ mod docker {
         for i in 0..30 {
             l.push(format!("#7 1.{i:03} compiling unit {i}"));
         }
-        l.push("#7 ERROR: process \"/bin/sh -c make\" did not complete successfully: exit code: 2".into());
+        l.push(
+            "#7 ERROR: process \"/bin/sh -c make\" did not complete successfully: exit code: 2"
+                .into(),
+        );
         let t = DockerBuild.trim(&l);
         assert!(t.body.iter().any(|b| b.contains("[3/3] RUN make")));
-        assert!(t.body.iter().all(|b| !b.contains("compiling unit 9")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().all(|b| !b.contains("compiling unit 9")),
+            "{:#?}",
+            t.body
+        );
         assert!(t.body.iter().any(|b| b.contains("compiling unit 29")));
-        assert_eq!(t.body.iter().filter(|b| b.contains("compiling unit")).count(), 20, "{:#?}", t.body);
+        assert_eq!(
+            t.body
+                .iter()
+                .filter(|b| b.contains("compiling unit"))
+                .count(),
+            20,
+            "{:#?}",
+            t.body
+        );
     }
 
     #[test]
@@ -1065,7 +1432,12 @@ mod docker {
             "System.TimeoutException: timed out",
             "ZeroDivisionError: division by zero",
         ] {
-            let mut l = lines(&[first, "    at a (x.js:1:1)", "    at b (x.js:2:2)", "    at c (x.js:3:3)"]);
+            let mut l = lines(&[
+                first,
+                "    at a (x.js:1:1)",
+                "    at b (x.js:2:2)",
+                "    at c (x.js:3:3)",
+            ]);
             l.extend((0..60).map(|i| format!("normal line {i}")));
             let t = DockerLogs.trim(&l);
             for kept in &l[..4] {
@@ -1083,20 +1455,39 @@ mod docker {
             "#3 naming to docker.io/library/app:latest done",
         ]);
         let t = DockerBuild.trim(&l);
-        assert!(t.body.iter().any(|b| b.contains("0 failed")), "{:#?}", t.body);
+        assert!(
+            t.body.iter().any(|b| b.contains("0 failed")),
+            "{:#?}",
+            t.body
+        );
         assert_eq!(t.outcome, Outcome::Pass);
     }
 
     #[test]
     fn detects_by_content() {
-        assert_eq!(rules::by_content(&fixture("docker", "build_fail")).name(), "docker_build");
-        assert_ne!(rules::by_content(&fixture("docker", "logs_repetitive")).name(), "docker_build");
+        assert_eq!(
+            rules::by_content(&fixture("docker", "build_fail")).name(),
+            "docker_build"
+        );
+        assert_ne!(
+            rules::by_content(&fixture("docker", "logs_repetitive")).name(),
+            "docker_build"
+        );
     }
 
     #[test]
     fn detects_by_command() {
-        for cmd in ["docker logs api", "docker logs -f --tail 100 api", "docker compose logs api", "docker-compose logs api"] {
-            assert_eq!(rules::by_command(cmd).unwrap().name(), "docker_logs", "{cmd}");
+        for cmd in [
+            "docker logs api",
+            "docker logs -f --tail 100 api",
+            "docker compose logs api",
+            "docker-compose logs api",
+        ] {
+            assert_eq!(
+                rules::by_command(cmd).unwrap().name(),
+                "docker_logs",
+                "{cmd}"
+            );
         }
         for cmd in [
             "docker build .",
@@ -1105,7 +1496,11 @@ mod docker {
             "docker buildx build .",
             "cd svc && docker build .",
         ] {
-            assert_eq!(rules::by_command(cmd).unwrap().name(), "docker_build", "{cmd}");
+            assert_eq!(
+                rules::by_command(cmd).unwrap().name(),
+                "docker_build",
+                "{cmd}"
+            );
         }
         for cmd in ["docker ps", "docker run alpine", "docker compose up"] {
             assert!(rules::by_command(cmd).is_none(), "{cmd}");

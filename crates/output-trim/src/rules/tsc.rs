@@ -21,8 +21,7 @@ static PAREN_RE: LazyLock<Regex> =
 static COLON_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(.+?):(\d+):\d+ - error (TS\d+): (.*)$").unwrap());
 /// Errors that belong to no file, e.g. `error TS5023: Unknown compiler option`.
-static GLOBAL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^error (TS\d+): (.*)$").unwrap());
+static GLOBAL_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^error (TS\d+): (.*)$").unwrap());
 /// Pretty-mode code frame: `12   return x;`, squiggles, or an indented frame line.
 static FRAME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*(?:\d+(?:\s|$)|[~^]+\s*$)").unwrap());
@@ -52,12 +51,28 @@ struct Diag {
 fn parse_error(line: &str) -> Option<Diag> {
     let (file, line_no, code, msg) =
         if let Some(c) = PAREN_RE.captures(line).or_else(|| COLON_RE.captures(line)) {
-            (c[1].to_string(), c[2].to_string(), c[3].to_string(), c[4].to_string())
+            (
+                c[1].to_string(),
+                c[2].to_string(),
+                c[3].to_string(),
+                c[4].to_string(),
+            )
         } else {
             let c = GLOBAL_RE.captures(line)?;
-            ("(global)".to_string(), String::new(), c[1].to_string(), c[2].to_string())
+            (
+                "(global)".to_string(),
+                String::new(),
+                c[1].to_string(),
+                c[2].to_string(),
+            )
         };
-    Some(Diag { file, line: line_no, code, msg, chain: Vec::new() })
+    Some(Diag {
+        file,
+        line: line_no,
+        code,
+        msg,
+        chain: Vec::new(),
+    })
 }
 
 impl Rule for Tsc {
@@ -121,7 +136,10 @@ impl Rule for Tsc {
                 })
                 .push(d);
         }
-        let grouped: Vec<&Diag> = order.iter().flat_map(|f| groups[f].iter().copied()).collect();
+        let grouped: Vec<&Diag> = order
+            .iter()
+            .flat_map(|f| groups[f].iter().copied())
+            .collect();
 
         let mut body: Vec<String> = Vec::new();
         let mut current: Option<&str> = None;
@@ -130,7 +148,11 @@ impl Rule for Tsc {
                 body.push(d.file.clone());
                 current = Some(d.file.as_str());
             }
-            let at = if d.line.is_empty() { String::new() } else { format!("{}:{} ", d.file, d.line) };
+            let at = if d.line.is_empty() {
+                String::new()
+            } else {
+                format!("{}:{} ", d.file, d.line)
+            };
             body.push(format!("  {at}{} {}", d.code, d.msg));
             body.extend(d.chain.iter().map(|c| format!("    {c}")));
         }
@@ -138,7 +160,11 @@ impl Rule for Tsc {
         if grouped.len() > MAX_ERRORS {
             let hidden = &grouped[MAX_ERRORS..];
             let hidden_files: BTreeSet<&str> = hidden.iter().map(|d| d.file.as_str()).collect();
-            body.push(format!("+{} more in {} files", hidden.len(), hidden_files.len()));
+            body.push(format!(
+                "+{} more in {} files",
+                hidden.len(),
+                hidden_files.len()
+            ));
 
             let mut codes: Vec<(&str, usize)> = Vec::new();
             for d in &diags {
@@ -148,8 +174,11 @@ impl Rule for Tsc {
                 }
             }
             codes.sort_by_key(|c| std::cmp::Reverse(c.1)); // stable: ties keep first-seen order
-            let mut parts: Vec<String> =
-                codes.iter().take(MAX_CODES).map(|(c, n)| format!("{c}×{n}")).collect();
+            let mut parts: Vec<String> = codes
+                .iter()
+                .take(MAX_CODES)
+                .map(|(c, n)| format!("{c}×{n}"))
+                .collect();
             if codes.len() > MAX_CODES {
                 parts.push(format!("+{} more codes", codes.len() - MAX_CODES));
             }
@@ -159,7 +188,11 @@ impl Rule for Tsc {
         body.extend(leftovers.iter().cloned());
 
         let total = diags.len() + leftovers.len();
-        let outcome = if total > 0 { Outcome::Fail } else { Outcome::Pass };
+        let outcome = if total > 0 {
+            Outcome::Fail
+        } else {
+            Outcome::Pass
+        };
         let detail = if total > 0 {
             format!("{total} errors in {} files", order.len().max(1))
         } else {

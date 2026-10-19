@@ -37,7 +37,9 @@ fn timestamp(secs: u64) -> String {
 /// missing), then prunes logs older than 24 hours.
 pub fn save(dir: &Path, text: &str) -> io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let stamp = timestamp(now.as_secs());
     let mut nonce = now.subsec_nanos();
     let mut attempt = 0;
@@ -59,7 +61,9 @@ pub fn save(dir: &Path, text: &str) -> io::Result<PathBuf> {
 
 /// Deletes `*.log` files in `dir` older than `max_age`; errors are ignored.
 pub fn prune(dir: &Path, max_age: Duration) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().is_none_or(|e| e != "log") {

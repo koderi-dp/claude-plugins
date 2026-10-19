@@ -83,7 +83,13 @@ pub fn apply(lines: &[String], rule: &dyn Rule, log: LogTarget, input_truncated:
             let t = trim_safely(rule, lines);
             (format!("{}\n{full}", t.verdict), t.outcome)
         };
-        return Output { kept_chars: text.chars().count(), text, outcome, total_chars, trimmed: false };
+        return Output {
+            kept_chars: text.chars().count(),
+            text,
+            outcome,
+            total_chars,
+            trimmed: false,
+        };
     }
 
     let t = trim_safely(rule, lines);
@@ -98,7 +104,11 @@ pub fn apply(lines: &[String], rule: &dyn Rule, log: LogTarget, input_truncated:
         },
         LogTarget::Existing(p) => format!("full: {}", p.display()),
     };
-    let note = if input_truncated { " · input truncated at 64 MB" } else { "" };
+    let note = if input_truncated {
+        " · input truncated at 64 MB"
+    } else {
+        ""
+    };
     // Footer's own length is tiny; kept count is computed on the final text.
     let footer = |kept: usize| {
         format!(
@@ -111,7 +121,13 @@ pub fn apply(lines: &[String], rule: &dyn Rule, log: LogTarget, input_truncated:
     let mut text = format!("{head}\n{}", footer(0));
     let kept = text.chars().count();
     text = format!("{head}\n{}", footer(kept));
-    Output { kept_chars: text.chars().count(), text, outcome: t.outcome, total_chars, trimmed: true }
+    Output {
+        kept_chars: text.chars().count(),
+        text,
+        outcome: t.outcome,
+        total_chars,
+        trimmed: true,
+    }
 }
 
 /// `n/1000` with one decimal, trailing `.0` removed, plus `k`.
@@ -157,11 +173,17 @@ mod tests {
     }
 
     fn fixed(body: Vec<String>) -> Fixed {
-        Fixed { name: "fixed", body, panics: false }
+        Fixed {
+            name: "fixed",
+            body,
+            panics: false,
+        }
     }
 
     fn big(n: usize) -> Vec<String> {
-        (0..n).map(|i| format!("line {i:05} {}", "x".repeat(80))).collect()
+        (0..n)
+            .map(|i| format!("line {i:05} {}", "x".repeat(80)))
+            .collect()
     }
 
     fn files(dir: &Path) -> usize {
@@ -189,7 +211,16 @@ mod tests {
     fn small_input_passes_through() {
         let d = tempfile::tempdir().unwrap();
         let lines: Vec<String> = (0..10).map(|i| format!("l{i}")).collect();
-        let o = apply(&lines, &Fixed { name: "generic", body: vec![], panics: true }, LogTarget::SaveIn(d.path()), false);
+        let o = apply(
+            &lines,
+            &Fixed {
+                name: "generic",
+                body: vec![],
+                panics: true,
+            },
+            LogTarget::SaveIn(d.path()),
+            false,
+        );
         assert_eq!(o.text, lines.join("\n"));
         assert!(!o.trimmed);
         assert_eq!(files(d.path()), 0);
@@ -209,7 +240,12 @@ mod tests {
     fn footer_with_saved_path() {
         let d = tempfile::tempdir().unwrap();
         let lines = big(30); // > 1,500 chars
-        let o = apply(&lines, &fixed(vec!["kept".into()]), LogTarget::SaveIn(d.path()), false);
+        let o = apply(
+            &lines,
+            &fixed(vec!["kept".into()]),
+            LogTarget::SaveIn(d.path()),
+            false,
+        );
         assert!(o.trimmed);
         let last = o.text.lines().last().unwrap();
         let path = last.split("· full: ").nth(1).expect("footer path");
@@ -225,7 +261,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("persisted.txt");
         std::fs::write(&p, "x").unwrap();
-        let o = apply(&big(30), &fixed(vec!["kept".into()]), LogTarget::Existing(&p), false);
+        let o = apply(
+            &big(30),
+            &fixed(vec!["kept".into()]),
+            LogTarget::Existing(&p),
+            false,
+        );
         assert!(o.text.ends_with(&format!("· full: {}", p.display())));
         assert_eq!(files(d.path()), 1);
     }
@@ -235,7 +276,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let blocker = d.path().join("file");
         std::fs::write(&blocker, "x").unwrap();
-        let o = apply(&big(30), &fixed(vec!["kept".into()]), LogTarget::SaveIn(&blocker.join("sub")), false);
+        let o = apply(
+            &big(30),
+            &fixed(vec!["kept".into()]),
+            LogTarget::SaveIn(&blocker.join("sub")),
+            false,
+        );
         assert!(o.text.ends_with("· full log unavailable"));
     }
 
@@ -256,7 +302,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let huge = "z".repeat(5_000_000);
         let lines = vec![huge.clone()];
-        let o = apply(&lines, &fixed(vec![huge]), LogTarget::SaveIn(d.path()), false);
+        let o = apply(
+            &lines,
+            &fixed(vec![huge]),
+            LogTarget::SaveIn(d.path()),
+            false,
+        );
         assert!(o.text.chars().count() < 7_000);
         assert!(o.text.contains('…'));
         assert!(o.trimmed);
@@ -266,7 +317,12 @@ mod tests {
     #[test]
     fn truncated_note() {
         let d = tempfile::tempdir().unwrap();
-        let o = apply(&big(30), &fixed(vec!["k".into()]), LogTarget::SaveIn(d.path()), true);
+        let o = apply(
+            &big(30),
+            &fixed(vec!["k".into()]),
+            LogTarget::SaveIn(d.path()),
+            true,
+        );
         assert!(o.text.ends_with("· input truncated at 64 MB"));
         assert!(o.text.contains("· full: "));
     }
@@ -274,7 +330,16 @@ mod tests {
     #[test]
     fn panicking_rule_falls_back() {
         let d = tempfile::tempdir().unwrap();
-        let o = apply(&big(30), &Fixed { name: "bad", body: vec![], panics: true }, LogTarget::SaveIn(d.path()), false);
+        let o = apply(
+            &big(30),
+            &Fixed {
+                name: "bad",
+                body: vec![],
+                panics: true,
+            },
+            LogTarget::SaveIn(d.path()),
+            false,
+        );
         assert!(o.trimmed);
         assert!(o.text.starts_with("[output-trim] "));
         assert!(!o.text.starts_with("[output-trim] fixed"));

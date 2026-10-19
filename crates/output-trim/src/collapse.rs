@@ -53,7 +53,10 @@ pub fn collapse_runs(lines: &[String], min_run: usize) -> Vec<String> {
 /// Drop exact duplicates, keeping the first occurrence.
 pub fn dedupe_keep_order(lines: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut seen = HashSet::new();
-    lines.into_iter().filter(|l| seen.insert(l.clone())).collect()
+    lines
+        .into_iter()
+        .filter(|l| seen.insert(l.clone()))
+        .collect()
 }
 
 #[cfg(test)]

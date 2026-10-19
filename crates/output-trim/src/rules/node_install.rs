@@ -12,8 +12,10 @@ pub struct NodeInstall;
 const MAX_NAMES: usize = 8;
 
 static CONTENT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"added \d+ packages|npm ERR!|npm error|ERR_PNPM_|Progress: resolved|Packages: \+\d+")
-        .unwrap()
+    Regex::new(
+        r"added \d+ packages|npm ERR!|npm error|ERR_PNPM_|Progress: resolved|Packages: \+\d+",
+    )
+    .unwrap()
 });
 /// `npm warn deprecated pkg@1.0.0: msg`, pnpm ` WARN  deprecated pkg@1.0.0: msg`,
 /// yarn `warning pkg@1.0.0: msg ... deprecated ...`.
@@ -23,8 +25,9 @@ static DEPRECATED_RE: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
-static ERROR_BLOCK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*(?:npm error|npm ERR!|error\s|ERR_PNPM_)|\bERR_PNPM_").unwrap());
+static ERROR_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(?:npm error|npm ERR!|error\s|ERR_PNPM_)|\bERR_PNPM_").unwrap()
+});
 static WARN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*(?:npm warn|npm WARN|WARN|warning)\b").unwrap());
 static PEER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bpeer\b|ERESOLVE").unwrap());
@@ -50,8 +53,9 @@ static GATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
-static OK_SUMMARY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:added|removed|changed) \d+ packages?|^up to date|^Done in |^Already up.to.date|^success ").unwrap());
+static OK_SUMMARY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:added|removed|changed) \d+ packages?|^up to date|^Done in |^Already up.to.date|^success ").unwrap()
+});
 
 /// `@scope/pkg@1.2.3` -> `@scope/pkg`.
 fn package_name(spec: &str) -> &str {
@@ -113,7 +117,10 @@ impl Rule for NodeInstall {
             } else if NOISE_RE.is_match(line) && !GATE_RE.is_match(line) {
                 // Progress, funding and audit nags.
             } else if SUMMARY_RE.is_match(line) {
-                if let Some(c) = ADDED_RE.captures(line).or_else(|| PNPM_PACKAGES_RE.captures(line)) {
+                if let Some(c) = ADDED_RE
+                    .captures(line)
+                    .or_else(|| PNPM_PACKAGES_RE.captures(line))
+                {
                     added.get_or_insert_with(|| format!("added {} packages", &c[1]));
                 }
                 if OK_SUMMARY_RE.is_match(line) {
@@ -130,7 +137,10 @@ impl Rule for NodeInstall {
             let names = dedupe_keep_order(deprecated);
             let shown: Vec<&str> = names.iter().take(MAX_NAMES).map(String::as_str).collect();
             let more = if names.len() > MAX_NAMES { ", …" } else { "" };
-            body[i] = format!("{deprecated_count} deprecation warnings ({}{more})", shown.join(", "));
+            body[i] = format!(
+                "{deprecated_count} deprecation warnings ({}{more})",
+                shown.join(", ")
+            );
         }
         let body = dedupe_keep_order(body);
 
@@ -141,7 +151,11 @@ impl Rule for NodeInstall {
         } else {
             Outcome::Unknown
         };
-        let detail = if outcome == Outcome::Pass { added.unwrap_or_default() } else { String::new() };
+        let detail = if outcome == Outcome::Pass {
+            added.unwrap_or_default()
+        } else {
+            String::new()
+        };
         Trimmed {
             verdict: verdict("install", outcome, &detail),
             body,

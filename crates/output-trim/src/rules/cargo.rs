@@ -31,8 +31,9 @@ static SECTION_RE: LazyLock<Regex> =
 static RESULT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^test result: ").unwrap());
 static PASSED_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+) passed").unwrap());
 static FAILED_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+) failed").unwrap());
-static TEST_QUIET_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^test .* \.\.\. (?:ok|ignored.*|bench:.*)$|^running \d+ tests?$").unwrap());
+static TEST_QUIET_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^test .* \.\.\. (?:ok|ignored.*|bench:.*)$|^running \d+ tests?$").unwrap()
+});
 static TEST_FAILED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^test .* \.\.\. FAILED$").unwrap());
 static EXPLAIN_RE: LazyLock<Regex> =
@@ -130,7 +131,8 @@ impl Rule for Cargo {
 
             match mode {
                 Mode::Section => {
-                    if line == "failures:" || SECTION_RE.is_match(line) || RESULT_RE.is_match(line) {
+                    if line == "failures:" || SECTION_RE.is_match(line) || RESULT_RE.is_match(line)
+                    {
                         mode = Mode::Normal;
                     } else {
                         if !blank {
@@ -176,8 +178,12 @@ impl Rule for Cargo {
             } else if RESULT_RE.is_match(line) {
                 have_result = true;
                 failure_seen |= line.starts_with("test result: FAILED");
-                failed += FAILED_RE.captures(line).map_or(0, |c| c[1].parse().unwrap_or(0));
-                passed += PASSED_RE.captures(line).map_or(0, |c| c[1].parse().unwrap_or(0));
+                failed += FAILED_RE
+                    .captures(line)
+                    .map_or(0, |c| c[1].parse().unwrap_or(0));
+                passed += PASSED_RE
+                    .captures(line)
+                    .map_or(0, |c| c[1].parse().unwrap_or(0));
                 acc.body.push(line.to_string());
             } else if NOISE_RE.is_match(line) {
                 finished |= FINISHED_RE.is_match(line);
@@ -202,7 +208,9 @@ impl Rule for Cargo {
         acc.flush_block();
         // `test x ... FAILED` is redundant once `x` is in the `failures:` list.
         acc.body.retain(|l| {
-            let name = l.strip_prefix("test ").and_then(|r| r.strip_suffix(" ... FAILED"));
+            let name = l
+                .strip_prefix("test ")
+                .and_then(|r| r.strip_suffix(" ... FAILED"));
             !(TEST_FAILED_RE.is_match(l) && name.is_some_and(|n| listed.contains(n)))
         });
         while acc.body.last().is_some_and(|l| l.is_empty()) {
@@ -222,7 +230,11 @@ impl Rule for Cargo {
         } else {
             (
                 "cargo build",
-                format!("{} errors, {} warnings", acc.errors + leftover_errors, acc.warnings),
+                format!(
+                    "{} errors, {} warnings",
+                    acc.errors + leftover_errors,
+                    acc.warnings
+                ),
             )
         };
 

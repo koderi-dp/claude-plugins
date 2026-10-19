@@ -14,10 +14,7 @@ static DIAG_RE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 static SUMMARY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"^(Passed|Failed)!\s+- Failed:\s*(\d+), Passed:\s*(\d+), Skipped:\s*(\d+)",
-    )
-    .unwrap()
+    Regex::new(r"^(Passed|Failed)!\s+- Failed:\s*(\d+), Passed:\s*(\d+), Skipped:\s*(\d+)").unwrap()
 });
 static FAILED_TEST_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*Failed \S.*\[[^\]]*\]\s*$").unwrap());
@@ -36,10 +33,17 @@ fn is_gate(line: &str) -> bool {
     ERROR_WORD_RE.is_match(line) || FAILURE_RE.is_match(line)
 }
 static SIGNATURE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*(?:(?:\d+>)?\s*Build (?:succeeded|FAILED)\.|.*\berror (?:CS|NU|MSB)\d+)").unwrap()
+    Regex::new(r"^\s*(?:(?:\d+>)?\s*Build (?:succeeded|FAILED)\.|.*\berror (?:CS|NU|MSB)\d+)")
+        .unwrap()
 });
 
-const NOISE_FRAMES: [&str; 5] = ["at System.", "at Microsoft.", "at Xunit.", "at NUnit.", "at Castle."];
+const NOISE_FRAMES: [&str; 5] = [
+    "at System.",
+    "at Microsoft.",
+    "at Xunit.",
+    "at NUnit.",
+    "at Castle.",
+];
 
 #[derive(PartialEq)]
 enum Section {
@@ -104,7 +108,9 @@ impl Rule for Dotnet {
         for line in lines {
             if let Some(c) = DIAG_RE.captures(line) {
                 in_block = false;
-                let proj = c.name("proj").map(|p| format!(" [{}]", project_name(p.as_str())));
+                let proj = c
+                    .name("proj")
+                    .map(|p| format!(" [{}]", project_name(p.as_str())));
                 let rendered = format!(
                     "{}({},{}): {} {}: {}{}",
                     &c["file"],
@@ -115,7 +121,11 @@ impl Rule for Dotnet {
                     &c["msg"],
                     proj.unwrap_or_default()
                 );
-                let groups = if &c["sev"] == "error" { &mut errors } else { &mut warnings };
+                let groups = if &c["sev"] == "error" {
+                    &mut errors
+                } else {
+                    &mut warnings
+                };
                 push_grouped(groups, &c["code"], rendered);
                 continue;
             }
@@ -147,8 +157,14 @@ impl Rule for Dotnet {
                         section = Section::Stack;
                         tests.push(line.trim_end().to_string());
                     }
-                    t if t.ends_with("Messages:") || t.ends_with("Output:") => section = Section::Other,
-                    t if t.starts_with("Passed ") || t.starts_with("Skipped ") || t.starts_with("Test Run ") || t.starts_with("Time Elapsed") => {
+                    t if t.ends_with("Messages:") || t.ends_with("Output:") => {
+                        section = Section::Other
+                    }
+                    t if t.starts_with("Passed ")
+                        || t.starts_with("Skipped ")
+                        || t.starts_with("Test Run ")
+                        || t.starts_with("Time Elapsed") =>
+                    {
                         in_block = false
                     }
                     t => match section {
@@ -205,11 +221,19 @@ impl Rule for Dotnet {
         body.extend(elapsed);
         let body = dedupe_keep_order(body);
 
-        let fallback_errors = fallback.iter().filter(|l| ERROR_WORD_RE.is_match(l)).count();
+        let fallback_errors = fallback
+            .iter()
+            .filter(|l| ERROR_WORD_RE.is_match(l))
+            .count();
         let n_errors = err_count.unwrap_or(0).max(diag_errors + fallback_errors);
         let n_warnings = warn_count.unwrap_or(0).max(diag_warnings);
 
-        let outcome = if diag_errors > 0 || !fallback.is_empty() || build_failed || failed > 0 || failed_summary {
+        let outcome = if diag_errors > 0
+            || !fallback.is_empty()
+            || build_failed
+            || failed > 0
+            || failed_summary
+        {
             Outcome::Fail
         } else if build_ok || have_summary {
             Outcome::Pass
@@ -223,7 +247,10 @@ impl Rule for Dotnet {
                 format!("{failed} failed, {passed} passed, {skipped} skipped"),
             )
         } else {
-            ("dotnet build", format!("{n_errors} errors, {n_warnings} warnings"))
+            (
+                "dotnet build",
+                format!("{n_errors} errors, {n_warnings} warnings"),
+            )
         };
 
         Trimmed {
