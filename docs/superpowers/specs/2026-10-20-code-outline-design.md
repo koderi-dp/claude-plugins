@@ -26,6 +26,16 @@ then reads **just one symbol**.
 - All six grammars compile into the exe offline with MSVC; no runtime downloads, no DLLs.
 - Outlining `crates/**/*.rs` in this repo returns in under 100 ms.
 
+Verified (2026-10-20), release build:
+
+- `code-outline.exe` is 14,563,328 bytes (13.9 MiB), all six grammars statically linked.
+- `outline {"paths": "crates/**/*.rs", "limit": 500}` through the exe over stdio from the
+  repo root: 45-52 ms per call (3 runs, warm process), 14.5 KB of output.
+- `outline` of `crates/everything-find/src/pipeline.rs` is 2,382 bytes against a
+  27,210-byte file: 11.4x smaller (bytes as a token proxy), above the 5x target.
+- A headless `claude -p --plugin-dir plugins/code-outline` run called the `outline` tool
+  on `crates/everything-find/src/server.rs` and answered `fn find` is lines 20-28.
+
 ### Non-goals
 
 - Semantic analysis (types, references, go-to-definition). Claude Code's `LSP`

@@ -6,6 +6,11 @@
       "name": "everything-find",
       "source": "./plugins/everything-find",
       "description": "Instant file/folder lookup via voidtools Everything (Windows)."
+    },
+    {
+      "name": "code-outline",
+      "source": "./plugins/code-outline",
+      "description": "Symbol outlines and single-symbol reads via tree-sitter (Rust, TS/JS, Python, C#)."
     }
   ]
 }

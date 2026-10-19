@@ -1,0 +1,5 @@
+{
+  "name": "code-outline",
+  "version": "0.1.0",
+  "description": "Symbol outlines and single-symbol reads via tree-sitter (Rust, TS/JS, Python, C#)."
+}

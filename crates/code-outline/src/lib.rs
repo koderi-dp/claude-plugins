@@ -4,3 +4,4 @@ pub mod lang;
 pub mod resolve;
 pub mod format;
 pub mod pipeline;
+pub mod server;
