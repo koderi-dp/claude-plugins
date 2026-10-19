@@ -6,6 +6,8 @@ use crate::query::{Kind, build_query};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 const MAX_PAGES: u32 = 10;
 const NOT_RUNNING: &str = "Everything is not running — start it, or use Glob instead.";
@@ -123,6 +125,69 @@ impl Context {
     }
 }
 
+/// How long a cached `.gitignore` filter may be reused. Edits to ignore files
+/// it has read invalidate it at once; this bound catches newly added ones.
+const FILTER_MAX_AGE: Duration = Duration::from_secs(30);
+const FILTER_CACHE_SIZE: usize = 8;
+
+struct CachedFilter {
+    root: PathBuf,
+    built: Instant,
+    filter: IgnoreFilter,
+}
+
+/// Filters kept between calls: rebuilding one costs ~50 ms on a large repo.
+static FILTER_CACHE: Mutex<Vec<CachedFilter>> = Mutex::new(Vec::new());
+
+/// A filter taken out of the cache for one call; returned to it on drop.
+struct FilterLease(Option<CachedFilter>);
+
+impl FilterLease {
+    fn checkout(root: PathBuf) -> FilterLease {
+        let mut cache = FILTER_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let reusable = cache
+            .iter()
+            .position(|c| c.root == root && c.built.elapsed() < FILTER_MAX_AGE && !c.filter.is_stale());
+        let entry = match reusable {
+            Some(i) => cache.remove(i),
+            None => CachedFilter { filter: IgnoreFilter::new(&root), root, built: Instant::now() },
+        };
+        FilterLease(Some(entry))
+    }
+}
+
+impl Drop for FilterLease {
+    fn drop(&mut self) {
+        let Some(entry) = self.0.take() else { return };
+        let mut cache = FILTER_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        cache.retain(|c| c.root != entry.root);
+        if cache.len() >= FILTER_CACHE_SIZE {
+            cache.remove(0);
+        }
+        cache.push(entry);
+    }
+}
+
+impl std::ops::Deref for FilterLease {
+    type Target = IgnoreFilter;
+    fn deref(&self) -> &IgnoreFilter {
+        &self.0.as_ref().expect("lease holds a filter until dropped").filter
+    }
+}
+
+impl std::ops::DerefMut for FilterLease {
+    fn deref_mut(&mut self) -> &mut IgnoreFilter {
+        &mut self.0.as_mut().expect("lease holds a filter until dropped").filter
+    }
+}
+
+/// When the cached filter for `root` was built, if one is cached.
+#[cfg(test)]
+pub(crate) fn cached_filter_built_at(root: &Path) -> Option<Instant> {
+    let cache = FILTER_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.iter().find(|c| c.root == root).map(|c| c.built)
+}
+
 /// Canonical so 8.3 short names and `..` match the long paths Everything returns.
 pub(crate) fn repo_root(ctx: &Context) -> PathBuf {
     let dir = match &ctx.project_dir {
@@ -181,7 +246,7 @@ pub fn run_find(params: &FindParams, ctx: &Context, s: &dyn Searcher) -> Result<
         (Some(search_root), true) => {
             let repo = repo_root(ctx);
             let base = if strip_root_ci(search_root, &repo).is_some() { repo } else { search_root.clone() };
-            Some(IgnoreFilter::new(&git_root(&base).unwrap_or(base)))
+            Some(FilterLease::checkout(git_root(&base).unwrap_or(base)))
         }
         _ => None,
     };
@@ -584,6 +649,27 @@ mod tests {
         let fake = FakeSearcher::new(vec![]);
         run_find(&FindParams { sort: SortParam::Modified, ..params("x") }, &ctx, &fake).unwrap();
         assert_eq!(fake.last_opts().sort, SortKey::Modified);
+    }
+
+    #[test]
+    fn gitignore_filter_reused_between_calls() {
+        let (_d, root, ctx) = repo();
+        let fake = FakeSearcher::new(vec![file(&root.join(r"src\a.rs"))]);
+        run_find(&params("a"), &ctx, &fake).unwrap();
+        let first = cached_filter_built_at(&root).expect("filter cached after first call");
+        run_find(&params("a"), &ctx, &fake).unwrap();
+        assert_eq!(cached_filter_built_at(&root), Some(first));
+    }
+
+    #[test]
+    fn gitignore_edit_picked_up_by_next_call() {
+        let (_d, root, ctx) = repo();
+        let fake = FakeSearcher::new(vec![file(&root.join(r"src\a.rs")), file(&root.join(r"src\b.tmp"))]);
+        assert!(run_find(&params("*"), &ctx, &fake).unwrap().contains("b.tmp"));
+        fs::write(root.join(".gitignore"), "build/\n*.log\n*.tmp\n").unwrap();
+        let f = fs::OpenOptions::new().write(true).open(root.join(".gitignore")).unwrap();
+        f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5)).unwrap();
+        assert!(!run_find(&params("*"), &ctx, &fake).unwrap().contains("b.tmp"));
     }
 
     #[test]

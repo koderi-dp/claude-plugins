@@ -4,6 +4,7 @@ use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 
 /// Strips `root` from `path`, comparing components case-insensitively (Windows
 /// paths from Everything may differ in casing from the cwd). Returns the
@@ -26,11 +27,28 @@ pub struct IgnoreFilter {
     root: PathBuf,
     matchers: HashMap<PathBuf, Option<Gitignore>>,
     nested_repo: HashMap<PathBuf, bool>,
+    /// Ignore files read so far, with the modified time seen, for `is_stale`.
+    loaded: Vec<(PathBuf, Option<SystemTime>)>,
+}
+
+fn modified(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 impl IgnoreFilter {
     pub fn new(root: &Path) -> IgnoreFilter {
-        IgnoreFilter { root: root.to_path_buf(), matchers: HashMap::new(), nested_repo: HashMap::new() }
+        IgnoreFilter {
+            root: root.to_path_buf(),
+            matchers: HashMap::new(),
+            nested_repo: HashMap::new(),
+            loaded: Vec::new(),
+        }
+    }
+
+    /// True once any ignore file this filter has read was changed or removed.
+    /// New ignore files are not noticed; callers bound reuse with a max age.
+    pub fn is_stale(&self) -> bool {
+        self.loaded.iter().any(|(path, seen)| modified(path) != *seen)
     }
 
     pub fn is_ignored(&mut self, path: &Path, is_dir: bool) -> bool {
@@ -92,6 +110,7 @@ impl IgnoreFilter {
                 }
                 for f in files.iter().filter(|f| f.is_file()) {
                     any |= b.add(f).is_none();
+                    self.loaded.push((f.clone(), modified(f)));
                 }
                 if !any {
                     return None;
@@ -147,6 +166,22 @@ mod tests {
         let (_d, root, mut f) = fixture();
         let upper = PathBuf::from(root.to_string_lossy().to_uppercase());
         assert!(f.is_ignored(&upper.join("A.LOG"), false));
+    }
+
+    #[test]
+    fn fresh_filter_is_not_stale() {
+        let (_d, root, mut f) = fixture();
+        f.is_ignored(&root.join(r"sub\x.txt"), false);
+        assert!(!f.is_stale());
+    }
+
+    #[test]
+    fn edited_gitignore_makes_filter_stale() {
+        let (_d, root, mut f) = fixture();
+        f.is_ignored(&root.join(r"sub\x.txt"), false);
+        let file = fs::OpenOptions::new().write(true).open(root.join(r"sub\.gitignore")).unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5)).unwrap();
+        assert!(f.is_stale());
     }
 
     #[test]
