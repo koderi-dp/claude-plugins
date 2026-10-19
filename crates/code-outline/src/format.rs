@@ -24,7 +24,13 @@ fn push_symbols(out: &mut Vec<String>, symbols: &[Symbol], depth: usize, signatu
         } else {
             s.label()
         };
-        out.push(format!("{}{} {}-{}", "  ".repeat(depth), text, s.start_line, s.end_line));
+        out.push(format!(
+            "{}{} {}-{}",
+            "  ".repeat(depth),
+            text,
+            s.start_line,
+            s.end_line
+        ));
         push_symbols(out, &s.children, depth + 1, signatures);
     }
 }
@@ -32,7 +38,12 @@ fn push_symbols(out: &mut Vec<String>, symbols: &[Symbol], depth: usize, signatu
 fn render(file: &FileOutline, signatures: bool) -> Vec<String> {
     match file {
         FileOutline::Message(text) => text.lines().map(str::to_string).collect(),
-        FileOutline::Symbols { display, line_count, symbols, notes } => {
+        FileOutline::Symbols {
+            display,
+            line_count,
+            symbols,
+            notes,
+        } => {
             let mut lines = if symbols.is_empty() {
                 vec![format!("{display} ({line_count} lines): no symbols found")]
             } else {
@@ -71,7 +82,9 @@ pub fn outline(files: &[FileOutline], total: usize, limit_hit: bool, signatures:
         shown += 1;
     }
     let header = if output_limited {
-        Some(format!("showing {shown} of {total} files (output limit) — narrow paths"))
+        Some(format!(
+            "showing {shown} of {total} files (output limit) — narrow paths"
+        ))
     } else if limit_hit {
         Some(format!("showing {shown} of {total} files (limit)"))
     } else {
@@ -128,7 +141,14 @@ mod tests {
             display: "src/server.rs".into(),
             line_count: 52,
             symbols: vec![
-                sym("struct", "FindServer", 9, 12, "pub struct FindServer", vec![]),
+                sym(
+                    "struct",
+                    "FindServer",
+                    9,
+                    12,
+                    "pub struct FindServer",
+                    vec![],
+                ),
                 sym(
                     "impl",
                     "FindServer",
@@ -146,7 +166,9 @@ mod tests {
         FileOutline::Symbols {
             display: display.into(),
             line_count: n,
-            symbols: (0..n).map(|i| sym("fn", &format!("f{i}"), i + 1, i + 1, "", vec![])).collect(),
+            symbols: (0..n)
+                .map(|i| sym("fn", &format!("f{i}"), i + 1, i + 1, "", vec![]))
+                .collect(),
             notes: vec![],
         }
     }
@@ -179,8 +201,16 @@ mod tests {
 
     #[test]
     fn no_symbols() {
-        let f = FileOutline::Symbols { display: "a.py".into(), line_count: 3, symbols: vec![], notes: vec![] };
-        assert_eq!(outline(&[f], 1, false, false), "a.py (3 lines): no symbols found");
+        let f = FileOutline::Symbols {
+            display: "a.py".into(),
+            line_count: 3,
+            symbols: vec![],
+            notes: vec![],
+        };
+        assert_eq!(
+            outline(&[f], 1, false, false),
+            "a.py (3 lines): no symbols found"
+        );
     }
 
     #[test]
@@ -204,12 +234,20 @@ mod tests {
             symbols: vec![],
             notes: vec!["(note)".into()],
         };
-        assert_eq!(outline(&[f], 1, false, false), "a.rs (5 lines): no symbols found\n(note)");
+        assert_eq!(
+            outline(&[f], 1, false, false),
+            "a.rs (5 lines): no symbols found\n(note)"
+        );
     }
 
     #[test]
     fn message_renders_text() {
-        let out = outline(&[FileOutline::Message("x not found.".into())], 1, false, false);
+        let out = outline(
+            &[FileOutline::Message("x not found.".into())],
+            1,
+            false,
+            false,
+        );
         assert_eq!(out, "x not found.");
     }
 
@@ -221,7 +259,12 @@ mod tests {
             symbols: vec![sym("fn", "a", 10, 12, "", vec![])],
             notes: vec![],
         };
-        let b = FileOutline::Symbols { display: "b.rs".into(), line_count: 1, symbols: vec![], notes: vec![] };
+        let b = FileOutline::Symbols {
+            display: "b.rs".into(),
+            line_count: 1,
+            symbols: vec![],
+            notes: vec![],
+        };
         let out = outline(&[a, b], 2, false, false);
         assert!(out.contains("10-12\n\nb.rs ("));
     }

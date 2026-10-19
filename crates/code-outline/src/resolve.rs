@@ -167,8 +167,18 @@ mod tests {
     #[test]
     fn qualified_colons_and_dots() {
         let x = extract(SERVER, Lang::Rust);
-        assert!(found(resolve(&x.symbols, Lang::Rust, "FindServer::find", None)));
-        assert!(found(resolve(&x.symbols, Lang::Rust, "FindServer.find", None)));
+        assert!(found(resolve(
+            &x.symbols,
+            Lang::Rust,
+            "FindServer::find",
+            None
+        )));
+        assert!(found(resolve(
+            &x.symbols,
+            Lang::Rust,
+            "FindServer.find",
+            None
+        )));
     }
 
     #[test]

@@ -23,22 +23,33 @@ fn into_tool_result(
 #[tool_router]
 impl OutlineServer {
     pub fn new() -> Self {
-        Self { tool_router: Self::tool_router() }
+        Self {
+            tool_router: Self::tool_router(),
+        }
     }
 
     #[tool(
         description = "List the symbols (functions, classes, methods…) in source files with line ranges, without reading the bodies. Rust, TS/JS, Python, C#. Use before Read to find what you need, then read_symbol."
     )]
-    async fn outline(&self, Parameters(params): Parameters<OutlineParams>) -> Result<String, ErrorData> {
-        let joined = tokio::task::spawn_blocking(move || run_outline(&params, &Context::from_env())).await;
+    async fn outline(
+        &self,
+        Parameters(params): Parameters<OutlineParams>,
+    ) -> Result<String, ErrorData> {
+        let joined =
+            tokio::task::spawn_blocking(move || run_outline(&params, &Context::from_env())).await;
         into_tool_result(joined, "outline")
     }
 
     #[tool(
         description = "Read one symbol's source (with its doc comments and attributes) from a file, line-numbered like Read. symbol is a name or qualified path: ApiClient.get, FindServer::find."
     )]
-    async fn read_symbol(&self, Parameters(params): Parameters<ReadSymbolParams>) -> Result<String, ErrorData> {
-        let joined = tokio::task::spawn_blocking(move || run_read_symbol(&params, &Context::from_env())).await;
+    async fn read_symbol(
+        &self,
+        Parameters(params): Parameters<ReadSymbolParams>,
+    ) -> Result<String, ErrorData> {
+        let joined =
+            tokio::task::spawn_blocking(move || run_read_symbol(&params, &Context::from_env()))
+                .await;
         into_tool_result(joined, "read_symbol")
     }
 }
@@ -52,8 +63,9 @@ impl Default for OutlineServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for OutlineServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("code-outline", env!("CARGO_PKG_VERSION")))
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+            Implementation::new("code-outline", env!("CARGO_PKG_VERSION")),
+        )
     }
 }
 

@@ -47,7 +47,10 @@ struct Flat {
 }
 
 pub fn extract(source: &str, lang: Lang) -> Extracted {
-    let empty = || Extracted { symbols: Vec::new(), error_lines: Vec::new() };
+    let empty = || Extracted {
+        symbols: Vec::new(),
+        error_lines: Vec::new(),
+    };
     let mut parser = Parser::new();
     if parser.set_language(&lang.grammar()).is_err() {
         return empty();
@@ -102,7 +105,10 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
         let (end_byte, end_line) = if def.kind() == "file_scoped_namespace_declaration" {
             let mut walk = root.walk();
             let last = root.named_children(&mut walk).last().unwrap_or(def);
-            (root.end_byte(), last.end_position().row.max(def.end_position().row) + 1)
+            (
+                root.end_byte(),
+                last.end_position().row.max(def.end_position().row) + 1,
+            )
         } else {
             (def.end_byte(), range_node.end_position().row + 1)
         };
@@ -121,7 +127,10 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
         });
     }
 
-    Extracted { symbols: nest(flats), error_lines: error_lines(root) }
+    Extracted {
+        symbols: nest(flats),
+        error_lines: error_lines(root),
+    }
 }
 
 fn text(node: Node, bytes: &[u8]) -> String {
@@ -142,7 +151,9 @@ fn impl_target(s: &str) -> String {
             s = rest.trim_start();
             // a lifetime can only follow `&`
             if s.starts_with('\'') {
-                s = s.find(char::is_whitespace).map_or("", |i| s[i..].trim_start());
+                s = s
+                    .find(char::is_whitespace)
+                    .map_or("", |i| s[i..].trim_start());
             }
         }
         for prefix in ["mut ", "dyn "] {
@@ -189,15 +200,24 @@ fn placements<'t>(
             let n = stack.len();
             // Docs and decorators precede the wrapper, not the definition.
             let wrapped = n >= 2
-                && matches!(stack[n - 1].0.kind(), "decorated_definition" | "export_statement");
+                && matches!(
+                    stack[n - 1].0.kind(),
+                    "decorated_definition" | "export_statement"
+                );
             let (range_node, before): (Node, &[Node]) = if wrapped {
                 // The wrapper itself is the last named child seen at its level.
                 let seen = &stack[n - 2].1;
                 (stack[n - 1].0, &seen[..seen.len().saturating_sub(1)])
             } else {
-                (node, stack.last().map_or(&[][..], |(_, seen)| seen.as_slice()))
+                (
+                    node,
+                    stack.last().map_or(&[][..], |(_, seen)| seen.as_slice()),
+                )
             };
-            out.insert(node.id(), (range_node, range_start_row(range_node, before, lang, bytes)));
+            out.insert(
+                node.id(),
+                (range_node, range_start_row(range_node, before, lang, bytes)),
+            );
         }
         if node.is_named() {
             if let Some((_, seen)) = stack.last_mut() {
@@ -304,7 +324,11 @@ fn body_start(def: Node) -> Option<usize> {
 /// pathological files cannot make the recursive formatter, resolver or drop
 /// overflow the stack.
 fn nest(mut flats: Vec<Flat>) -> Vec<Symbol> {
-    flats.sort_by(|a, b| a.start_byte.cmp(&b.start_byte).then(b.end_byte.cmp(&a.end_byte)));
+    flats.sort_by(|a, b| {
+        a.start_byte
+            .cmp(&b.start_byte)
+            .then(b.end_byte.cmp(&a.end_byte))
+    });
     // Each stack entry is (end_byte, symbol under construction).
     let mut stack: Vec<(usize, Symbol)> = Vec::new();
     let mut roots: Vec<Symbol> = Vec::new();
@@ -437,7 +461,9 @@ mod tests {
 
     #[test]
     fn signature_cut_at_body() {
-        let x = rs("pub async fn find(&self,\n    p: Params)\n    -> Result<String, E> {\n    todo!()\n}\n");
+        let x = rs(
+            "pub async fn find(&self,\n    p: Params)\n    -> Result<String, E> {\n    todo!()\n}\n",
+        );
         assert_eq!(
             x.symbols[0].signature,
             "pub async fn find(&self, p: Params) -> Result<String, E>"
@@ -474,7 +500,10 @@ mod tests {
     fn broken_file_still_outlines() {
         let x = rs("fn ok() {}\nfn broken( {\nstruct S;\n");
         let names: Vec<String> = flatten_names(&x.symbols);
-        assert!(names.iter().any(|n| n == "ok") && names.iter().any(|n| n == "S"), "{names:?}");
+        assert!(
+            names.iter().any(|n| n == "ok") && names.iter().any(|n| n == "S"),
+            "{names:?}"
+        );
         assert_eq!(x.error_lines.first(), Some(&2));
     }
 
@@ -489,11 +518,15 @@ mod tests {
 
     #[test]
     fn kinds() {
-        let x = rs("fn f() {}\nstruct S;\nenum E { A }\ntrait T {}\nimpl S {}\nmod m {}\nmacro_rules! mac { () => {} }\ntype A = u8;\nconst C: u8 = 1;\nstatic ST: u8 = 1;\n");
+        let x = rs(
+            "fn f() {}\nstruct S;\nenum E { A }\ntrait T {}\nimpl S {}\nmod m {}\nmacro_rules! mac { () => {} }\ntype A = u8;\nconst C: u8 = 1;\nstatic ST: u8 = 1;\n",
+        );
         let kinds: Vec<&str> = x.symbols.iter().map(|s| s.kind.as_str()).collect();
         assert_eq!(
             kinds,
-            ["fn", "struct", "enum", "trait", "impl", "mod", "macro", "type", "const", "static"]
+            [
+                "fn", "struct", "enum", "trait", "impl", "mod", "macro", "type", "const", "static"
+            ]
         );
     }
 
@@ -505,23 +538,32 @@ mod tests {
 
     #[test]
     fn file_scoped_namespace_contains_following_declarations() {
-        let x = extract("namespace Demo;
+        let x = extract(
+            "namespace Demo;
 
 public class Calc
 {
     public int Add() { return 1; }
 }
-", Lang::CSharp);
-        assert_eq!(tree(&x), "namespace Demo 1-6
+",
+            Lang::CSharp,
+        );
+        assert_eq!(
+            tree(&x),
+            "namespace Demo 1-6
   class Calc 3-6
-    method Add 5-5");
+    method Add 5-5"
+        );
     }
 
     #[test]
     fn async_kind_has_a_space() {
-        let x = extract("async def f():
+        let x = extract(
+            "async def f():
     pass
-", Lang::Python);
+",
+            Lang::Python,
+        );
         assert_eq!(x.symbols[0].label(), "async def f");
     }
 
@@ -531,24 +573,49 @@ public class Calc
 
     #[test]
     fn four_slashes_and_empty_block_are_not_docs() {
-        assert_eq!(rs("//// banner
+        assert_eq!(
+            rs("//// banner
 fn f() {}
-").symbols[0].start_line, 2);
-        assert_eq!(rs("/**/
+")
+            .symbols[0]
+                .start_line,
+            2
+        );
+        assert_eq!(
+            rs("/**/
 fn f() {}
-").symbols[0].start_line, 2);
-        assert_eq!(rs("/***
+")
+            .symbols[0]
+                .start_line,
+            2
+        );
+        assert_eq!(
+            rs("/***
  * banner
  */
 fn f() {}
-").symbols[0].start_line, 4);
-        assert_eq!(rs("/** real */
+")
+            .symbols[0]
+                .start_line,
+            4
+        );
+        assert_eq!(
+            rs("/** real */
 fn f() {}
-").symbols[0].start_line, 1);
-        assert_eq!(rs("/// real
+")
+            .symbols[0]
+                .start_line,
+            1
+        );
+        assert_eq!(
+            rs("/// real
 //// banner
 fn f() {}
-").symbols[0].start_line, 3);
+")
+            .symbols[0]
+                .start_line,
+            3
+        );
     }
 
     #[test]
@@ -561,7 +628,8 @@ fn f() {}
     #[test]
     fn many_symbols_are_collected() {
         let src = "fn f() {}
-".repeat(5000);
+"
+        .repeat(5000);
         assert_eq!(rs(&src).symbols.len(), 5000);
     }
 
@@ -613,12 +681,22 @@ fn e( {
     fn impl_key_strips_reference_sigils() {
         for (src, name) in [
             ("impl Tr for &Foo {\n    fn m(&self) {}\n}\n", "Tr for Foo"),
-            ("impl<'a> Tr for &'a mut Foo<'a> {\n    fn m(&self) {}\n}\n", "Tr for Foo"),
-            ("impl Tr for &mut Foo {\n    fn m(&self) {}\n}\n", "Tr for Foo"),
+            (
+                "impl<'a> Tr for &'a mut Foo<'a> {\n    fn m(&self) {}\n}\n",
+                "Tr for Foo",
+            ),
+            (
+                "impl Tr for &mut Foo {\n    fn m(&self) {}\n}\n",
+                "Tr for Foo",
+            ),
             ("impl dyn Foo {\n    fn m(&self) {}\n}\n", "Foo"),
         ] {
             let x = rs(src);
-            assert_eq!((x.symbols[0].key.as_str(), x.symbols[0].name.as_str()), ("Foo", name), "{src}");
+            assert_eq!(
+                (x.symbols[0].key.as_str(), x.symbols[0].name.as_str()),
+                ("Foo", name),
+                "{src}"
+            );
             let r = crate::resolve::resolve(&x.symbols, Lang::Rust, "Foo::m", None);
             assert!(matches!(r, crate::resolve::Resolution::Found(_)), "{src}");
         }

@@ -25,20 +25,35 @@ impl Client {
             .expect("spawn server");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut c = Client { child, stdin, stdout, next_id: 1 };
+        let mut c = Client {
+            child,
+            stdin,
+            stdout,
+            next_id: 1,
+        };
         let init = c.request(
             "initialize",
             json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}),
         );
         assert_eq!(init["result"]["serverInfo"]["name"], "code-outline");
-        writeln!(c.stdin, "{}", json!({"jsonrpc":"2.0","method":"notifications/initialized"})).unwrap();
+        writeln!(
+            c.stdin,
+            "{}",
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+        )
+        .unwrap();
         c
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
-        writeln!(self.stdin, "{}", json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})).unwrap();
+        writeln!(
+            self.stdin,
+            "{}",
+            json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
+        )
+        .unwrap();
         let mut line = String::new();
         self.stdout.read_line(&mut line).unwrap();
         serde_json::from_str(&line).expect(&line)
@@ -56,7 +71,9 @@ impl Drop for Client {
 }
 
 fn text_of(resp: &Value) -> &str {
-    resp["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("no text in {resp}"))
+    resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no text in {resp}"))
 }
 
 fn sorted_keys(v: &Value) -> Vec<&str> {
@@ -78,27 +95,44 @@ fn tools_list_advertises_outline_and_read_symbol() {
     let outline = tool("outline");
     assert_eq!(outline["description"], OUTLINE_DESCRIPTION);
     assert_eq!(outline["inputSchema"]["required"], json!(["paths"]));
-    assert_eq!(sorted_keys(&outline["inputSchema"]["properties"]), ["limit", "paths", "signatures"]);
+    assert_eq!(
+        sorted_keys(&outline["inputSchema"]["properties"]),
+        ["limit", "paths", "signatures"]
+    );
 
     let read = tool("read_symbol");
     assert_eq!(read["description"], READ_SYMBOL_DESCRIPTION);
     assert_eq!(read["inputSchema"]["required"], json!(["path", "symbol"]));
-    assert_eq!(sorted_keys(&read["inputSchema"]["properties"]), ["line", "path", "symbol"]);
+    assert_eq!(
+        sorted_keys(&read["inputSchema"]["properties"]),
+        ["line", "path", "symbol"]
+    );
 }
 
 #[test]
 fn outline_call_returns_file_outline() {
     let mut c = Client::start();
     let resp = c.call("outline", json!({"paths": "tests/fixtures/sample.rs"}));
-    assert!(text_of(&resp).starts_with("tests/fixtures/sample.rs ("), "{resp}");
+    assert!(
+        text_of(&resp).starts_with("tests/fixtures/sample.rs ("),
+        "{resp}"
+    );
 }
 
 #[test]
 fn read_symbol_call_returns_numbered_lines() {
     let mut c = Client::start();
-    let resp = c.call("read_symbol", json!({"path": "tests/fixtures/sample.rs", "symbol": "Greeter::greet"}));
-    let second = text_of(&resp).lines().nth(1).unwrap_or_else(|| panic!("too short: {resp}"));
-    let (num, _) = second.split_once('\t').unwrap_or_else(|| panic!("no tab: {second:?}"));
+    let resp = c.call(
+        "read_symbol",
+        json!({"path": "tests/fixtures/sample.rs", "symbol": "Greeter::greet"}),
+    );
+    let second = text_of(&resp)
+        .lines()
+        .nth(1)
+        .unwrap_or_else(|| panic!("too short: {resp}"));
+    let (num, _) = second
+        .split_once('\t')
+        .unwrap_or_else(|| panic!("no tab: {second:?}"));
     assert_eq!(num.len(), 6, "{second:?}");
     assert!(num.trim().parse::<u32>().is_ok(), "{second:?}");
 }
@@ -107,6 +141,8 @@ fn read_symbol_call_returns_numbered_lines() {
 fn invalid_limit_is_an_invalid_params_error() {
     let mut c = Client::start();
     let resp = c.call("outline", json!({"paths": "x", "limit": 0}));
-    let msg = resp["error"]["message"].as_str().unwrap_or_else(|| panic!("expected error: {resp}"));
+    let msg = resp["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected error: {resp}"));
     assert!(msg.contains("limit"), "{msg}");
 }

@@ -48,16 +48,28 @@ pub fn repo_root(ctx: &Context) -> PathBuf {
 
 pub fn resolve_file(root: &Path, path: &str) -> PathBuf {
     let p = Path::new(path);
-    let joined = if p.is_absolute() { p.to_path_buf() } else { root.join(p) };
+    let joined = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    };
     dunce::canonicalize(&joined).unwrap_or(joined)
 }
 
 /// Strips `root` from `path`, comparing components case-insensitively.
 fn strip_root_ci(path: &Path, root: &Path) -> Option<PathBuf> {
-    let mut path_parts = path.components().filter(|c| !matches!(c, Component::CurDir));
-    for root_part in root.components().filter(|c| !matches!(c, Component::CurDir)) {
+    let mut path_parts = path
+        .components()
+        .filter(|c| !matches!(c, Component::CurDir));
+    for root_part in root
+        .components()
+        .filter(|c| !matches!(c, Component::CurDir))
+    {
         let p = path_parts.next()?;
-        let (a, b) = (p.as_os_str().to_string_lossy(), root_part.as_os_str().to_string_lossy());
+        let (a, b) = (
+            p.as_os_str().to_string_lossy(),
+            root_part.as_os_str().to_string_lossy(),
+        );
         if a != b && a.to_lowercase() != b.to_lowercase() {
             return None;
         }
@@ -99,7 +111,8 @@ fn walk_matches(
         .require_git(false)
         .parents(true)
         .filter_entry(move |e| {
-            e.file_name() != ".git" && (e.path().starts_with(&target) || target.starts_with(e.path()))
+            e.file_name() != ".git"
+                && (e.path().starts_with(&target) || target.starts_with(e.path()))
         });
     if !standard_filters {
         builder.standard_filters(false);
@@ -110,7 +123,9 @@ fn walk_matches(
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        let Ok(rel) = entry.path().strip_prefix(base) else { continue };
+        let Ok(rel) = entry.path().strip_prefix(base) else {
+            continue;
+        };
         let rel = rel.to_string_lossy().replace('\\', "/");
         if !matcher.is_match(&rel) {
             continue;
@@ -149,7 +164,11 @@ pub fn expand(root: &Path, patterns: &[String], limit: usize) -> Expanded {
             }
             continue;
         } else if literal.is_dir() {
-            (format!("{}/**/*", pattern.trim_end_matches('/')), literal, "**/*".to_string())
+            (
+                format!("{}/**/*", pattern.trim_end_matches('/')),
+                literal,
+                "**/*".to_string(),
+            )
         } else if !is_glob(&pattern) {
             diagnostics.push(Entry::Missing(pattern));
             continue;
@@ -192,14 +211,27 @@ pub fn expand(root: &Path, patterns: &[String], limit: usize) -> Expanded {
     }
 
     if !files.is_empty() || !diagnostics.is_empty() {
-        diagnostics.extend(empty_patterns.drain(..).map(|(p, hidden)| Entry::NoMatch(p, hidden)));
+        diagnostics.extend(
+            empty_patterns
+                .drain(..)
+                .map(|(p, hidden)| Entry::NoMatch(p, hidden)),
+        );
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
     let mut entries = diagnostics;
-    entries.extend(files.into_iter().map(|(_, path, lang)| Entry::File(path, lang)));
+    entries.extend(
+        files
+            .into_iter()
+            .map(|(_, path, lang)| Entry::File(path, lang)),
+    );
     let total = entries.len();
     entries.truncate(limit);
-    Expanded { entries, total, empty_patterns, unsupported_only }
+    Expanded {
+        entries,
+        total,
+        empty_patterns,
+        unsupported_only,
+    }
 }
 
 #[cfg(test)]
@@ -248,7 +280,10 @@ mod tests {
     #[test]
     fn double_star_and_braces() {
         let (_d, root) = repo();
-        assert_eq!(names(&root, &ex(&root, "src/**/*.{ts,py}")), ["src/b.ts", "src/deep/d.py"]);
+        assert_eq!(
+            names(&root, &ex(&root, "src/**/*.{ts,py}")),
+            ["src/b.ts", "src/deep/d.py"]
+        );
     }
 
     #[test]
@@ -295,7 +330,10 @@ mod tests {
     #[test]
     fn empty_glob_counts_hidden() {
         let (_d, root) = repo();
-        assert_eq!(ex(&root, "build/*.rs").empty_patterns, [("build/*.rs".to_string(), 1)]);
+        assert_eq!(
+            ex(&root, "build/*.rs").empty_patterns,
+            [("build/*.rs".to_string(), 1)]
+        );
     }
 
     #[test]
@@ -323,8 +361,14 @@ mod tests {
     fn literal_path_with_glob_characters() {
         let (_d, root) = repo();
         add(&root, &["app/[id]/page.tsx", "app/{slug}/page.tsx"]);
-        assert_eq!(names(&root, &ex(&root, "app/[id]/page.tsx")), ["app/[id]/page.tsx"]);
-        assert_eq!(names(&root, &ex(&root, "app/{slug}/page.tsx")), ["app/{slug}/page.tsx"]);
+        assert_eq!(
+            names(&root, &ex(&root, "app/[id]/page.tsx")),
+            ["app/[id]/page.tsx"]
+        );
+        assert_eq!(
+            names(&root, &ex(&root, "app/{slug}/page.tsx")),
+            ["app/{slug}/page.tsx"]
+        );
     }
 
     #[test]
@@ -332,29 +376,47 @@ mod tests {
         let (_d, root) = repo();
         add(&root, &["src/Mixed.rs"]);
         assert_eq!(names(&root, &ex(&root, "src/m*.rs")), ["src/Mixed.rs"]);
-        assert_eq!(names(&root, &ex(&root, "src/*.RS")), ["src/Mixed.rs", "src/a.rs"]);
+        assert_eq!(
+            names(&root, &ex(&root, "src/*.RS")),
+            ["src/Mixed.rs", "src/a.rs"]
+        );
     }
 
     #[test]
     fn directory_expands_to_its_files() {
         let (_d, root) = repo();
         add(&root, &["app/[id]/page.tsx"]);
-        assert_eq!(names(&root, &ex(&root, "src")), ["src/a.rs", "src/b.ts", "src/deep/d.py"]);
-        assert_eq!(names(&root, &ex(&root, "src/")), ["src/a.rs", "src/b.ts", "src/deep/d.py"]);
+        assert_eq!(
+            names(&root, &ex(&root, "src")),
+            ["src/a.rs", "src/b.ts", "src/deep/d.py"]
+        );
+        assert_eq!(
+            names(&root, &ex(&root, "src/")),
+            ["src/a.rs", "src/b.ts", "src/deep/d.py"]
+        );
         assert_eq!(names(&root, &ex(&root, "app/[id]")), ["app/[id]/page.tsx"]);
-        assert_eq!(ex(&root, "build").empty_patterns, [("build/**/*".to_string(), 1)]);
+        assert_eq!(
+            ex(&root, "build").empty_patterns,
+            [("build/**/*".to_string(), 1)]
+        );
     }
 
     #[test]
     fn dotdot_relative() {
         let (_d, root) = repo();
-        assert_eq!(resolve_file(&root, "src/../src/a.rs"), root.join("src").join("a.rs"));
+        assert_eq!(
+            resolve_file(&root, "src/../src/a.rs"),
+            root.join("src").join("a.rs")
+        );
     }
 
     #[test]
     fn project_dir_preferred() {
         let (_d, root) = repo();
-        let ctx = Context { cwd: PathBuf::from(r"C:\"), project_dir: Some(root.clone()) };
+        let ctx = Context {
+            cwd: PathBuf::from(r"C:\"),
+            project_dir: Some(root.clone()),
+        };
         assert_eq!(repo_root(&ctx), root);
         let gone = Context {
             cwd: root.clone(),

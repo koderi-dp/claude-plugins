@@ -50,10 +50,15 @@ const LOSSY_NOTE: &str = "(file is not valid UTF-8; some characters replaced)";
 
 fn unsupported_message(path: &Path) -> String {
     match path.extension().filter(|e| !e.is_empty()) {
-        Some(ext) => format!("code-outline doesn't support .{} files — use Read.", ext.to_string_lossy()),
+        Some(ext) => format!(
+            "code-outline doesn't support .{} files — use Read.",
+            ext.to_string_lossy()
+        ),
         None => format!(
             "code-outline doesn't support {} — use Read.",
-            path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
+            path.file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
         ),
     }
 }
@@ -67,7 +72,11 @@ fn no_match_message(pattern: &str, hidden: usize, root: &Path) -> String {
 }
 
 fn error_note(lines: &[usize]) -> String {
-    let list = lines.iter().map(usize::to_string).collect::<Vec<_>>().join(", ");
+    let list = lines
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
     format!("(syntax errors near lines {list} — outline may be incomplete)")
 }
 
@@ -89,7 +98,10 @@ fn load(root: &Path, path: &Path) -> Result<(String, Vec<String>), String> {
     let bytes = bytes.strip_prefix(BOM).unwrap_or(&bytes);
     Ok(match std::str::from_utf8(bytes) {
         Ok(s) => (s.to_string(), Vec::new()),
-        Err(_) => (String::from_utf8_lossy(bytes).into_owned(), vec![LOSSY_NOTE.to_string()]),
+        Err(_) => (
+            String::from_utf8_lossy(bytes).into_owned(),
+            vec![LOSSY_NOTE.to_string()],
+        ),
     })
 }
 
@@ -144,14 +156,21 @@ pub fn run_outline(p: &OutlineParams, ctx: &Context) -> Result<String, String> {
         .iter()
         .map(|entry| match entry {
             Entry::Missing(pattern) => FileOutline::Message(format!("{pattern} not found.")),
-            Entry::Unsupported(pattern) => FileOutline::Message(unsupported_message(Path::new(pattern))),
+            Entry::Unsupported(pattern) => {
+                FileOutline::Message(unsupported_message(Path::new(pattern)))
+            }
             Entry::NoMatch(pattern, hidden) => {
                 FileOutline::Message(no_match_message(pattern, *hidden, &root))
             }
             Entry::File(path, lang) => file_outline(&root, path, *lang),
         })
         .collect();
-    Ok(outline(&files, expanded.total, expanded.total > p.limit as usize, p.signatures))
+    Ok(outline(
+        &files,
+        expanded.total,
+        expanded.total > p.limit as usize,
+        p.signatures,
+    ))
 }
 
 pub fn run_read_symbol(p: &ReadSymbolParams, ctx: &Context) -> Result<String, String> {
@@ -179,7 +198,12 @@ pub fn run_read_symbol(p: &ReadSymbolParams, ctx: &Context) -> Result<String, St
         Err(message) => return Ok(message),
     };
     let extracted = extract(&source, lang);
-    let out = match resolve(&extracted.symbols, lang, &p.symbol, p.line.map(|n| n as usize)) {
+    let out = match resolve(
+        &extracted.symbols,
+        lang,
+        &p.symbol,
+        p.line.map(|n| n as usize),
+    ) {
         Resolution::Found(hit) => {
             let s = hit.symbol;
             format!(
@@ -224,16 +248,27 @@ mod tests {
             std::fs::create_dir_all(f.parent().unwrap()).unwrap();
             std::fs::write(f, body).unwrap();
         }
-        let ctx = Context { cwd: root, project_dir: None };
+        let ctx = Context {
+            cwd: root,
+            project_dir: None,
+        };
         (dir, ctx)
     }
 
     fn op(path: &str, limit: u32) -> OutlineParams {
-        OutlineParams { paths: Paths::One(path.into()), signatures: false, limit }
+        OutlineParams {
+            paths: Paths::One(path.into()),
+            signatures: false,
+            limit,
+        }
     }
 
     fn rsp(path: &str, symbol: &str, line: Option<u32>) -> ReadSymbolParams {
-        ReadSymbolParams { path: path.into(), symbol: symbol.into(), line }
+        ReadSymbolParams {
+            path: path.into(),
+            symbol: symbol.into(),
+            line,
+        }
     }
 
     const DEMO: &str = "namespace Demo\n{\n    class Calc\n    {\n        int Add(int a)\n        {\n            return a;\n        }\n\n        int Add(int a, int b)\n        {\n            return a + b;\n        }\n    }\n}\n";
@@ -241,18 +276,37 @@ mod tests {
     #[test]
     fn validates_limit() {
         let (_d, ctx) = setup(&[]);
-        assert_eq!(run_outline(&op("x", 0), &ctx).unwrap_err(), "limit must be between 1 and 500");
+        assert_eq!(
+            run_outline(&op("x", 0), &ctx).unwrap_err(),
+            "limit must be between 1 and 500"
+        );
         assert!(run_outline(&op("x", 501), &ctx).is_err());
     }
 
     #[test]
     fn validates_empty_inputs() {
         let (_d, ctx) = setup(&[]);
-        assert_eq!(run_outline(&op("", 50), &ctx).unwrap_err(), "paths must not be empty");
-        let empty = OutlineParams { paths: Paths::Many(vec![]), signatures: false, limit: 50 };
-        assert_eq!(run_outline(&empty, &ctx).unwrap_err(), "paths must not be empty");
-        assert_eq!(run_read_symbol(&rsp("", "a", None), &ctx).unwrap_err(), "path must not be empty");
-        assert_eq!(run_read_symbol(&rsp("a.rs", "", None), &ctx).unwrap_err(), "symbol must not be empty");
+        assert_eq!(
+            run_outline(&op("", 50), &ctx).unwrap_err(),
+            "paths must not be empty"
+        );
+        let empty = OutlineParams {
+            paths: Paths::Many(vec![]),
+            signatures: false,
+            limit: 50,
+        };
+        assert_eq!(
+            run_outline(&empty, &ctx).unwrap_err(),
+            "paths must not be empty"
+        );
+        assert_eq!(
+            run_read_symbol(&rsp("", "a", None), &ctx).unwrap_err(),
+            "path must not be empty"
+        );
+        assert_eq!(
+            run_read_symbol(&rsp("a.rs", "", None), &ctx).unwrap_err(),
+            "symbol must not be empty"
+        );
         assert_eq!(
             run_read_symbol(&rsp("a.rs", "a", Some(0)), &ctx).unwrap_err(),
             "line must be 1 or greater"
@@ -268,9 +322,15 @@ mod tests {
                 signatures: false,
                 limit: 50,
             };
-            assert_eq!(run_outline(&p, &ctx).unwrap_err(), "paths must not be empty");
+            assert_eq!(
+                run_outline(&p, &ctx).unwrap_err(),
+                "paths must not be empty"
+            );
         }
-        assert_eq!(run_outline(&op("  ", 50), &ctx).unwrap_err(), "paths must not be empty");
+        assert_eq!(
+            run_outline(&op("  ", 50), &ctx).unwrap_err(),
+            "paths must not be empty"
+        );
     }
 
     #[test]
@@ -285,7 +345,8 @@ mod tests {
 
     #[test]
     fn paths_string_or_list() {
-        let one: OutlineParams = serde_json::from_value(serde_json::json!({"paths": "a.rs"})).unwrap();
+        let one: OutlineParams =
+            serde_json::from_value(serde_json::json!({"paths": "a.rs"})).unwrap();
         assert!(matches!(one.paths, Paths::One(ref s) if s == "a.rs"));
         assert!(!one.signatures && one.limit == 50);
         let many: OutlineParams =
@@ -295,14 +356,20 @@ mod tests {
 
     #[test]
     fn outline_two_files() {
-        let (_d, ctx) = setup(&[("a.rs", b"fn run() {}\n"), ("b.py", b"def go():\n    pass\n")]);
+        let (_d, ctx) = setup(&[
+            ("a.rs", b"fn run() {}\n"),
+            ("b.py", b"def go():\n    pass\n"),
+        ]);
         let p = OutlineParams {
             paths: Paths::Many(vec!["a.rs".into(), "b.py".into()]),
             signatures: false,
             limit: 50,
         };
         let out = run_outline(&p, &ctx).unwrap();
-        assert!(out.contains("a.rs (") && out.contains("\n\nb.py ("), "{out}");
+        assert!(
+            out.contains("a.rs (") && out.contains("\n\nb.py ("),
+            "{out}"
+        );
     }
 
     #[test]
@@ -314,7 +381,10 @@ mod tests {
             limit: 50,
         };
         let out = run_outline(&p, &ctx).unwrap();
-        assert!(out.contains("nope.rs not found.") && out.contains("fn run 1-1"), "{out}");
+        assert!(
+            out.contains("nope.rs not found.") && out.contains("fn run 1-1"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -331,7 +401,8 @@ mod tests {
         let (_d, ctx) = setup(&[(".gitignore", b"build/\n"), ("build/gen.rs", b"")]);
         let out = run_outline(&op("build/*.rs", 50), &ctx).unwrap();
         assert!(
-            out.starts_with("0 files match build/*.rs in ") && out.ends_with(" (1 hidden by .gitignore)"),
+            out.starts_with("0 files match build/*.rs in ")
+                && out.ends_with(" (1 hidden by .gitignore)"),
             "{out}"
         );
     }
@@ -357,7 +428,10 @@ mod tests {
         let big = vec![b'a'; 2 * 1024 * 1024 + 1];
         let (_d, ctx) = setup(&[("big.rs", &big)]);
         let out = run_outline(&op("big.rs", 50), &ctx).unwrap();
-        assert!(out.contains("big.rs is 2.0 MB, over the 2 MB limit — use Read with offset/limit."), "{out}");
+        assert!(
+            out.contains("big.rs is 2.0 MB, over the 2 MB limit — use Read with offset/limit."),
+            "{out}"
+        );
         let rs = run_read_symbol(&rsp("big.rs", "x", None), &ctx).unwrap();
         assert!(rs.contains("over the 2 MB limit"), "{rs}");
     }
@@ -375,7 +449,10 @@ mod tests {
     fn invalid_utf8_note() {
         let (_d, ctx) = setup(&[("a.rs", b"fn run() {} // \xff\n")]);
         let out = run_outline(&op("a.rs", 50), &ctx).unwrap();
-        assert!(out.contains("(file is not valid UTF-8; some characters replaced)"), "{out}");
+        assert!(
+            out.contains("(file is not valid UTF-8; some characters replaced)"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -383,7 +460,8 @@ mod tests {
         let (_d, ctx) = setup(&[("a.rs", b"fn ok() {}\nfn broken( {\n")]);
         let out = run_outline(&op("a.rs", 50), &ctx).unwrap();
         assert!(
-            out.contains("(syntax errors near lines ") && out.contains("— outline may be incomplete)"),
+            out.contains("(syntax errors near lines ")
+                && out.contains("— outline may be incomplete)"),
             "{out}"
         );
     }
@@ -400,11 +478,17 @@ mod tests {
     fn read_symbol_ambiguous() {
         let (_d, ctx) = setup(&[("Calc.cs", DEMO.as_bytes())]);
         let rs = run_read_symbol(&rsp("Calc.cs", "Add", None), &ctx).unwrap();
-        assert!(rs.starts_with("Add matches 2 symbols — pass line:\nmethod Demo.Calc.Add 5-8\n"), "{rs}");
+        assert!(
+            rs.starts_with("Add matches 2 symbols — pass line:\nmethod Demo.Calc.Add 5-8\n"),
+            "{rs}"
+        );
         let off = run_read_symbol(&rsp("Calc.cs", "Add", Some(1)), &ctx).unwrap();
         assert!(off.starts_with("Add matches 2 symbols"), "{off}");
         let ok = run_read_symbol(&rsp("Calc.cs", "Add", Some(11)), &ctx).unwrap();
-        assert!(ok.starts_with("Calc.cs:10-13 method Demo.Calc.Add\n"), "{ok}");
+        assert!(
+            ok.starts_with("Calc.cs:10-13 method Demo.Calc.Add\n"),
+            "{ok}"
+        );
     }
 
     #[test]
@@ -428,14 +512,23 @@ mod tests {
     fn outline_bracket_path() {
         let (_d, ctx) = setup(&[("app/[id]/page.tsx", b"export function Page() {}\n")]);
         let out = run_outline(&op("app/[id]/page.tsx", 50), &ctx).unwrap();
-        assert!(out.starts_with("app/[id]/page.tsx (1 lines)\n  function Page 1-1"), "{out}");
+        assert!(
+            out.starts_with("app/[id]/page.tsx (1 lines)\n  function Page 1-1"),
+            "{out}"
+        );
     }
 
     #[test]
     fn outline_directory() {
-        let (_d, ctx) = setup(&[("src/a.rs", b"fn a() {}\n"), ("src/sub/b.py", b"def b():\n    pass\n")]);
+        let (_d, ctx) = setup(&[
+            ("src/a.rs", b"fn a() {}\n"),
+            ("src/sub/b.py", b"def b():\n    pass\n"),
+        ]);
         let out = run_outline(&op("src", 50), &ctx).unwrap();
-        assert!(out.contains("src/a.rs (1 lines)") && out.contains("src/sub/b.py (2 lines)"), "{out}");
+        assert!(
+            out.contains("src/a.rs (1 lines)") && out.contains("src/sub/b.py (2 lines)"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -461,15 +554,21 @@ mod tests {
         let root = dunce::canonicalize(d.path()).unwrap();
         let out = run_outline(&many(&["a.rs", "nothing/*.rs", "build/*.rs"]), &ctx).unwrap();
         let root = root.display();
-        assert!(out.contains(&format!("0 files match nothing/*.rs in {root}")), "{out}");
         assert!(
-            out.contains(&format!("0 files match build/*.rs in {root} (1 hidden by .gitignore)")),
+            out.contains(&format!("0 files match nothing/*.rs in {root}")),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!(
+                "0 files match build/*.rs in {root} (1 hidden by .gitignore)"
+            )),
             "{out}"
         );
         assert!(out.contains("a.rs (1 lines)\n  fn a 1-1"), "{out}");
         let missing = run_outline(&many(&["nope.rs", "nothing/*.rs"]), &ctx).unwrap();
         assert!(
-            missing.contains("nope.rs not found.") && missing.contains("0 files match nothing/*.rs"),
+            missing.contains("nope.rs not found.")
+                && missing.contains("0 files match nothing/*.rs"),
             "{missing}"
         );
     }
@@ -479,23 +578,38 @@ mod tests {
         let (_d, ctx) = setup(&[("Makefile", b"all:\n")]);
         let msg = "code-outline doesn't support Makefile — use Read.";
         assert_eq!(run_outline(&op("Makefile", 50), &ctx).unwrap(), msg);
-        assert_eq!(run_read_symbol(&rsp("Makefile", "all", None), &ctx).unwrap(), msg);
+        assert_eq!(
+            run_read_symbol(&rsp("Makefile", "all", None), &ctx).unwrap(),
+            msg
+        );
     }
 
     #[test]
     fn blank_symbol_is_rejected() {
         let (_d, ctx) = setup(&[("a.rs", b"fn a() {}\n")]);
-        assert_eq!(run_read_symbol(&rsp("a.rs", "  ", None), &ctx).unwrap_err(), "symbol must not be empty");
+        assert_eq!(
+            run_read_symbol(&rsp("a.rs", "  ", None), &ctx).unwrap_err(),
+            "symbol must not be empty"
+        );
     }
 
     /// Runs `f` on a thread with the 1 MB stack the Windows exe's main thread has.
     fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new().stack_size(1 << 20).spawn(f).unwrap().join().unwrap()
+        std::thread::Builder::new()
+            .stack_size(1 << 20)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap()
     }
 
     #[test]
     fn deeply_nested_functions_do_not_overflow() {
-        let src = format!("{}{}", "function a(){\n".repeat(10_000), "}\n".repeat(10_000));
+        let src = format!(
+            "{}{}",
+            "function a(){\n".repeat(10_000),
+            "}\n".repeat(10_000)
+        );
         let (dir, ctx) = setup(&[("deep.js", src.as_bytes())]);
         let (out, rs) = on_small_stack(move || {
             let out = run_outline(&op("deep.js", 50), &ctx).unwrap();
@@ -504,15 +618,24 @@ mod tests {
         });
         drop(dir);
         assert!(out.lines().count() <= 2001, "{} lines", out.lines().count());
-        assert!(out.ends_with("(outline truncated — narrow with read_symbol)"), "{out}");
-        assert!(out.lines().all(|l| l.len() < 200), "indentation must be capped");
+        assert!(
+            out.ends_with("(outline truncated — narrow with read_symbol)"),
+            "{out}"
+        );
+        assert!(
+            out.lines().all(|l| l.len() < 200),
+            "indentation must be capped"
+        );
         assert!(rs.starts_with("deep.js:"), "{}", &rs[..rs.len().min(300)]);
     }
 
     #[test]
     fn read_symbol_missing_and_unsupported() {
         let (_d, ctx) = setup(&[("x.go", b"package x\n")]);
-        assert_eq!(run_read_symbol(&rsp("nope.rs", "a", None), &ctx).unwrap(), "nope.rs not found.");
+        assert_eq!(
+            run_read_symbol(&rsp("nope.rs", "a", None), &ctx).unwrap(),
+            "nope.rs not found."
+        );
         assert_eq!(
             run_read_symbol(&rsp("x.go", "a", None), &ctx).unwrap(),
             "code-outline doesn't support .go files — use Read."

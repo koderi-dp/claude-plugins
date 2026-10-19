@@ -3,7 +3,13 @@ use code_outline::lang::Lang;
 
 fn render(syms: &[Symbol], depth: usize, out: &mut Vec<String>) {
     for s in syms {
-        out.push(format!("{}{} {}-{}", "  ".repeat(depth), s.label(), s.start_line, s.end_line));
+        out.push(format!(
+            "{}{} {}-{}",
+            "  ".repeat(depth),
+            s.label(),
+            s.start_line,
+            s.end_line
+        ));
         render(&s.children, depth + 1, out);
     }
 }
@@ -44,7 +50,10 @@ fn typescript_outline() {
 
 #[test]
 fn tsx_outline() {
-    assert_eq!(outline_of("sample.tsx"), "function Button 1-1\nfunction Card 3-3");
+    assert_eq!(
+        outline_of("sample.tsx"),
+        "function Button 1-1\nfunction Card 3-3"
+    );
 }
 
 #[test]
@@ -101,7 +110,10 @@ fn python_decorator_in_range() {
 fn python_decorated_signature_starts_at_def() {
     let syms = extract_fixture("sample.py");
     assert_eq!(find(&syms, "Point").signature, "class Point");
-    assert_eq!(find(&find(&syms, "Box").children, "x").signature, "def x(self)");
+    assert_eq!(
+        find(&find(&syms, "Box").children, "x").signature,
+        "def x(self)"
+    );
     assert_eq!(find(&syms, "fetch").signature, "async def fetch()");
 }
 
