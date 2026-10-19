@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 pub struct Header {
     pub count: u32,
     pub count_is_upper_bound: bool,
+    /// Visible results skipped before the first one shown (the `offset` param).
+    pub first: usize,
     pub shown: usize,
     /// `repo C:\Source\app`, `C:\some\path` or `all drives`.
     pub scope_label: String,
@@ -15,11 +17,41 @@ pub struct Header {
     pub indexing: bool,
 }
 
-pub fn render(entries: &[Entry], header: &Header, root: Option<&Path>, details: bool) -> String {
-    let mut out = String::new();
-    if header.indexing {
-        out.push_str("Everything is still indexing; results may be incomplete.\n");
+/// Header only, for `count_only`.
+pub fn render_count(header: &Header) -> String {
+    let mut out = indexing_line(header);
+    out.push_str(&format!(
+        "{}{} {} — {}{}",
+        bound(header),
+        header.count,
+        noun(header.count),
+        header.scope_label,
+        notes(header)
+    ));
+    out
+}
+
+/// One full path per line, for `flat`.
+pub fn render_flat(entries: &[Entry], header: &Header, details: bool) -> String {
+    let mut out = indexing_line(header);
+    out.push_str(&header_line(header));
+    out.push('\n');
+    for e in entries {
+        let mut line = e.full_path.display().to_string();
+        if e.is_dir {
+            line.push('\\');
+        }
+        if details {
+            line.push_str(&detail_suffix(e));
+        }
+        out.push_str(&line);
+        out.push('\n');
     }
+    out
+}
+
+pub fn render(entries: &[Entry], header: &Header, root: Option<&Path>, details: bool) -> String {
+    let mut out = indexing_line(header);
     out.push_str(&header_line(header));
     out.push('\n');
 
@@ -37,15 +69,7 @@ pub fn render(entries: &[Entry], header: &Header, root: Option<&Path>, details: 
         out.push('\n');
         if details {
             for e in list {
-                let mut line = format!("  {}", display_name(e));
-                if let Some(size) = e.size.filter(|_| !e.is_dir) {
-                    line.push_str(&format!("  {}", human_size(size)));
-                }
-                if let Some(ts) = e.modified.and_then(local_time) {
-                    line.push_str(&format!("  {ts}"));
-                }
-                out.push_str(&line);
-                out.push('\n');
+                out.push_str(&format!("  {}{}\n", display_name(e), detail_suffix(e)));
             }
         } else {
             let names: Vec<String> = list.iter().map(|e| display_name(e)).collect();
@@ -69,17 +93,45 @@ pub fn human_size(bytes: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
-fn header_line(h: &Header) -> String {
-    let bound = if h.count_is_upper_bound { "≤" } else { "" };
-    let limit = if (h.shown as u64) < h.count as u64 { " (limit)" } else { "" };
-    let mut line = format!("{bound}{} matches, showing {}{limit} — {}", h.count, h.shown, h.scope_label);
+fn indexing_line(h: &Header) -> String {
+    if h.indexing { "Everything is still indexing; results may be incomplete.\n".to_string() } else { String::new() }
+}
+
+fn bound(h: &Header) -> &'static str {
+    if h.count_is_upper_bound { "≤" } else { "" }
+}
+
+pub fn noun(count: u32) -> &'static str {
+    if count == 1 { "match" } else { "matches" }
+}
+
+fn notes(h: &Header) -> String {
+    let mut notes = String::new();
     if h.page_capped {
-        line.push_str(" (scan capped at 10 pages)");
+        notes.push_str(" (scan capped at 10 pages)");
     }
     if h.hidden_by_ignore > 0 {
-        line.push_str(&format!(" ({} hidden by .gitignore — retry with include_ignored: true)", h.hidden_by_ignore));
+        notes.push_str(&format!(" ({} hidden by .gitignore — retry with include_ignored: true)", h.hidden_by_ignore));
     }
-    line
+    notes
+}
+
+fn header_line(h: &Header) -> String {
+    let end = h.first + h.shown;
+    let limit = if (end as u64) < h.count as u64 { " (limit)" } else { "" };
+    let showing = if h.first == 0 { h.shown.to_string() } else { format!("{}–{end}", h.first + 1) };
+    format!("{}{} {}, showing {showing}{limit} — {}{}", bound(h), h.count, noun(h.count), h.scope_label, notes(h))
+}
+
+fn detail_suffix(e: &Entry) -> String {
+    let mut s = String::new();
+    if let Some(size) = e.size.filter(|_| !e.is_dir) {
+        s.push_str(&format!("  {}", human_size(size)));
+    }
+    if let Some(ts) = e.modified.and_then(local_time) {
+        s.push_str(&format!("  {ts}"));
+    }
+    s
 }
 
 fn group_key(e: &Entry, root: Option<&Path>) -> String {
@@ -119,12 +171,57 @@ mod tests {
         Header {
             count,
             count_is_upper_bound: false,
+            first: 0,
             shown,
             scope_label: label.to_string(),
             page_capped: false,
             hidden_by_ignore: 0,
             indexing: false,
         }
+    }
+
+    #[test]
+    fn singular_match() {
+        let out = render(&[file(r"C:\r\a.rs")], &hdr(1, 1, r"repo C:\r"), Some(Path::new(r"C:\r")), false);
+        assert!(out.starts_with("1 match, showing 1 — repo C:\\r\n"), "{out}");
+    }
+
+    #[test]
+    fn offset_shows_range() {
+        let h = Header { first: 50, ..hdr(120, 50, "all drives") };
+        let out = render(&[file(r"C:\x\a")], &h, None, false);
+        assert!(out.starts_with("120 matches, showing 51–100 (limit) — all drives\n"), "{out}");
+    }
+
+    #[test]
+    fn offset_last_page_has_no_limit_marker() {
+        let h = Header { first: 100, ..hdr(120, 20, "all drives") };
+        let out = render(&[file(r"C:\x\a")], &h, None, false);
+        assert!(out.starts_with("120 matches, showing 101–120 — all drives\n"), "{out}");
+    }
+
+    #[test]
+    fn count_only_header() {
+        let h = Header { count_is_upper_bound: true, hidden_by_ignore: 2, ..hdr(7, 0, r"repo C:\r") };
+        assert_eq!(
+            render_count(&h),
+            "≤7 matches — repo C:\\r (2 hidden by .gitignore — retry with include_ignored: true)"
+        );
+        assert_eq!(render_count(&hdr(1, 0, "all drives")), "1 match — all drives");
+    }
+
+    #[test]
+    fn flat_full_paths() {
+        let e = [
+            Entry { size: Some(4300), ..file(r"C:\r\src\a.rs") },
+            dir(r"C:\r\src\lib"),
+        ];
+        assert_eq!(
+            render_flat(&e, &hdr(2, 2, r"repo C:\r"), false),
+            "2 matches, showing 2 — repo C:\\r\nC:\\r\\src\\a.rs\nC:\\r\\src\\lib\\\n"
+        );
+        let detailed = render_flat(&e, &hdr(2, 2, r"repo C:\r"), true);
+        assert!(detailed.contains("C:\\r\\src\\a.rs  4.2 KB\n"), "{detailed}");
     }
 
     #[test]
@@ -156,7 +253,7 @@ mod tests {
     fn indexing_warning_first_line() {
         let h = Header { indexing: true, ..hdr(1, 1, "all drives") };
         let out = render(&[file(r"C:\x\a")], &h, None, false);
-        assert!(out.starts_with("Everything is still indexing; results may be incomplete.\n1 matches"));
+        assert!(out.starts_with("Everything is still indexing; results may be incomplete.\n1 match,"));
     }
 
     #[test]

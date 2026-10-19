@@ -1,7 +1,7 @@
 //! The `find` pipeline: resolve root → build query → paged search → filter → format.
 
 use crate::filter::{IgnoreFilter, strip_root_ci};
-use crate::format::{Header, render};
+use crate::format::{Header, noun, render, render_count, render_flat};
 use crate::query::{Kind, build_query};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -62,6 +62,18 @@ pub struct FindParams {
     /// Repo scope only: don't hide .gitignore'd and build/vendor folders.
     #[serde(default)]
     pub include_ignored: bool,
+    /// Extra excludes: folder names (`dist`) or path wildcards (`*/worktrees/*`).
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    /// Skip this many results, for paging (max 10000).
+    #[serde(default)]
+    pub offset: u32,
+    /// Return only the match count.
+    #[serde(default)]
+    pub count_only: bool,
+    /// One full path per line instead of grouping by folder.
+    #[serde(default)]
+    pub flat: bool,
 }
 
 fn default_limit() -> u32 {
@@ -79,8 +91,21 @@ impl Default for FindParams {
             sort: SortParam::Name,
             details: false,
             include_ignored: false,
+            exclude: Vec::new(),
+            offset: 0,
+            count_only: false,
+            flat: false,
         }
     }
+}
+
+/// True when the query filters on date modified; folder dates only echo their
+/// newest child, so such searches default to files.
+fn is_date_query(query: &str) -> bool {
+    query.split_whitespace().any(|token| {
+        let t = token.trim_start_matches(['!', '<', '(']).to_lowercase();
+        t.starts_with("dm:") || t.starts_with("datemodified:")
+    })
 }
 
 pub struct Context {
@@ -138,6 +163,9 @@ pub fn run_find(params: &FindParams, ctx: &Context, s: &dyn Searcher) -> Result<
     if params.query.trim().is_empty() {
         return Err("query must not be empty".to_string());
     }
+    if params.offset > 10_000 {
+        return Err("offset must be at most 10000".to_string());
+    }
     let root = match resolve_root(params, ctx) {
         Ok(root) => root,
         Err(msg) => return Ok(msg),
@@ -160,18 +188,50 @@ pub fn run_find(params: &FindParams, ctx: &Context, s: &dyn Searcher) -> Result<
     let kind = match params.kind {
         KindParam::File => Kind::File,
         KindParam::Dir => Kind::Dir,
+        KindParam::Any if is_date_query(&params.query) => Kind::File,
         KindParam::Any => Kind::Any,
     };
-    let query = build_query(&params.query, root.as_deref(), kind, filtering);
+    let query = build_query(&params.query, root.as_deref(), kind, filtering, &params.exclude);
     let sort = match params.sort {
         SortParam::Name => SortKey::Name,
         SortParam::Modified => SortKey::Modified,
         SortParam::Size => SortKey::Size,
     };
-    let limit = params.limit as usize;
-    let mut opts = SearchOpts { sort, offset: 0, max: (params.limit * 2).max(100), want_details: params.details };
+    let scope_label = match (params.scope, &root) {
+        (Scope::Repo, Some(r)) => format!("repo {}", r.display()),
+        (_, Some(r)) => r.display().to_string(),
+        (_, None) => "all drives".to_string(),
+    };
+    let offset = params.offset as usize;
+    // Visible results to reach before stopping: everything for a count.
+    let target = if params.count_only { usize::MAX } else { offset + params.limit as usize };
+    let page_size = if params.count_only { 1000 } else { (target as u32 * 2).max(100) };
+    let mut opts = SearchOpts { sort, offset: 0, max: page_size, want_details: params.details };
+
+    if params.count_only && filter.is_none() {
+        // Nothing to filter locally: Everything's total is exact, one call suffices.
+        let page = match s.search(&query, &SearchOpts { max: 1, ..opts }) {
+            Ok(page) => page,
+            Err(SdkError::NotRunning) => return Ok(NOT_RUNNING.to_string()),
+            Err(SdkError::Rejected(reason)) => {
+                return Ok(format!("Everything rejected the query: {reason}\n{QUERY_HINT}"));
+            }
+        };
+        let header = Header {
+            count: page.total,
+            count_is_upper_bound: false,
+            first: 0,
+            shown: 0,
+            scope_label,
+            page_capped: false,
+            hidden_by_ignore: 0,
+            indexing: !status.db_loaded,
+        };
+        return Ok(render_count(&header));
+    }
 
     let mut kept: Vec<Entry> = Vec::new();
+    let mut visible: usize = 0;
     let mut hidden: u32 = 0;
     let mut total: u32 = 0;
     let mut examined_all = false;
@@ -188,14 +248,17 @@ pub fn run_find(params: &FindParams, ctx: &Context, s: &dyn Searcher) -> Result<
         total = page.total;
         let n = page.entries.len() as u32;
         for entry in page.entries {
-            if kept.len() == limit {
+            if visible == target {
                 // Stopped mid-page: the rest of this page is unexamined.
                 break 'paging;
             }
             let ignored = filter.as_mut().is_some_and(|f| f.is_ignored(&entry.full_path, entry.is_dir));
             if ignored {
                 hidden += 1;
-            } else {
+                continue;
+            }
+            visible += 1;
+            if visible > offset && !params.count_only {
                 kept.push(entry);
             }
         }
@@ -204,11 +267,11 @@ pub fn run_find(params: &FindParams, ctx: &Context, s: &dyn Searcher) -> Result<
             examined_all = true;
             break;
         }
-        if kept.len() == limit {
+        if visible == target {
             break;
         }
     }
-    let page_capped = pages == MAX_PAGES && !examined_all && kept.len() < limit;
+    let page_capped = pages == MAX_PAGES && !examined_all && visible < target;
 
     let root_label = root.as_ref().map(|r| r.display().to_string()).unwrap_or_else(|| "all drives".to_string());
     let hidden_note = if hidden > 0 {
@@ -218,31 +281,37 @@ pub fn run_find(params: &FindParams, ctx: &Context, s: &dyn Searcher) -> Result<
     } else {
         String::new()
     };
-    if kept.is_empty() {
-        let warning = if status.db_loaded { "" } else { "Everything is still indexing; results may be incomplete.\n" };
-        return Ok(format!("{warning}0 matches for {} in {root_label}{hidden_note}", params.query));
-    }
-
     let (count, count_is_upper_bound) = match (hidden, examined_all) {
         (0, _) => (total, false),
         (_, true) => (total.saturating_sub(hidden), false),
         (_, false) => (total.saturating_sub(hidden), true),
     };
-    let scope_label = match (params.scope, &root) {
-        (Scope::Repo, Some(r)) => format!("repo {}", r.display()),
-        (_, Some(r)) => r.display().to_string(),
-        (_, None) => "all drives".to_string(),
-    };
     let header = Header {
         count,
         count_is_upper_bound,
+        first: offset,
         shown: kept.len(),
         scope_label,
         page_capped,
         hidden_by_ignore: hidden,
         indexing: !status.db_loaded,
     };
-    Ok(render(&kept, &header, root.as_deref(), params.details))
+    if params.count_only {
+        return Ok(render_count(&Header { count: if visible == 0 { 0 } else { count }, ..header }));
+    }
+    if visible == 0 {
+        let warning = if status.db_loaded { "" } else { "Everything is still indexing; results may be incomplete.\n" };
+        return Ok(format!("{warning}0 matches for {} in {root_label}{hidden_note}", params.query));
+    }
+    if kept.is_empty() {
+        let bound = if count_is_upper_bound { "≤" } else { "" };
+        return Ok(format!("{bound}{count} {} — offset {offset} is past the end", noun(count)));
+    }
+    if params.flat {
+        Ok(render_flat(&kept, &header, params.details))
+    } else {
+        Ok(render(&kept, &header, root.as_deref(), params.details))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -410,7 +479,7 @@ mod tests {
         let (_d, root, ctx) = repo();
         let entries = vec![file(&root.join("a.log")), file(&root.join(r"src\a.rs"))];
         let out = run_find(&params("a"), &ctx, &FakeSearcher::new(entries)).unwrap();
-        assert!(out.starts_with("1 matches, showing 1 — repo "), "{out}");
+        assert!(out.starts_with("1 match, showing 1 — repo "), "{out}");
         assert!(out.contains("(1 hidden by .gitignore"));
     }
 
@@ -514,6 +583,88 @@ mod tests {
         let fake = FakeSearcher::new(vec![]);
         run_find(&FindParams { sort: SortParam::Modified, ..params("x") }, &ctx, &fake).unwrap();
         assert_eq!(fake.last_opts().sort, SortKey::Modified);
+    }
+
+    #[test]
+    fn date_query_defaults_to_files() {
+        let (_d, _root, ctx) = repo();
+        let fake = FakeSearcher::new(vec![]);
+        run_find(&params("dm:today"), &ctx, &fake).unwrap();
+        assert!(fake.last_query().contains(" file: "), "{}", fake.last_query());
+        run_find(&params("*.rs !datemodified:lastweek"), &ctx, &fake).unwrap();
+        assert!(fake.last_query().contains(" file: "), "{}", fake.last_query());
+        run_find(&FindParams { kind: KindParam::Dir, ..params("dm:today") }, &ctx, &fake).unwrap();
+        assert!(fake.last_query().contains(" folder: "), "{}", fake.last_query());
+        run_find(&params("adm:x"), &ctx, &fake).unwrap();
+        assert!(!fake.last_query().contains("file:"), "{}", fake.last_query());
+    }
+
+    #[test]
+    fn user_excludes_reach_query_even_with_include_ignored() {
+        let (_d, _root, ctx) = repo();
+        let fake = FakeSearcher::new(vec![]);
+        let p = FindParams { exclude: vec!["*/worktrees/*".into()], include_ignored: true, ..params("x") };
+        run_find(&p, &ctx, &fake).unwrap();
+        assert!(fake.last_query().contains(r#"!"*\worktrees\*""#), "{}", fake.last_query());
+    }
+
+    #[test]
+    fn offset_skips_visible_results() {
+        let (_d, root, ctx) = repo();
+        // Ignored entries interleaved: offset counts only visible ones.
+        let mut entries = Vec::new();
+        for i in 0..10 {
+            entries.push(file(&root.join(format!(r"build\x{i}.rs"))));
+            entries.push(file(&root.join(format!(r"src\f{i:02}.rs"))));
+        }
+        let fake = FakeSearcher::new(entries);
+        let out = run_find(&FindParams { offset: 3, limit: 2, ..params("*.rs") }, &ctx, &fake).unwrap();
+        assert!(out.contains("f03.rs  f04.rs"), "{out}");
+        assert!(!out.contains("f02.rs") && !out.contains("f05.rs"), "{out}");
+        assert!(out.contains("showing 4–5"), "{out}");
+    }
+
+    #[test]
+    fn offset_past_end() {
+        let (_d, root, ctx) = repo();
+        let fake = FakeSearcher::new(vec![file(&root.join(r"src\a.rs"))]);
+        let out = run_find(&FindParams { offset: 5, ..params("*.rs") }, &ctx, &fake).unwrap();
+        assert!(out.starts_with("1 match — offset 5 is past the end"), "{out}");
+    }
+
+    #[test]
+    fn offset_too_large_rejected() {
+        let (_d, _root, ctx) = repo();
+        assert!(run_find(&FindParams { offset: 10_001, ..params("x") }, &ctx, &FakeSearcher::new(vec![])).is_err());
+    }
+
+    #[test]
+    fn count_only_counts_without_listing() {
+        let (_d, root, ctx) = repo();
+        let mut entries: Vec<Entry> = (0..30).map(|i| file(&root.join(format!(r"src\f{i}.rs")))).collect();
+        entries.push(file(&root.join("a.log")));
+        let fake = FakeSearcher::new(entries);
+        let out = run_find(&FindParams { count_only: true, limit: 5, ..params("*") }, &ctx, &fake).unwrap();
+        assert!(out.starts_with("30 matches — repo "), "{out}");
+        assert!(!out.contains("f1.rs"), "{out}");
+        assert!(out.contains("(1 hidden by .gitignore"), "{out}");
+    }
+
+    #[test]
+    fn count_only_unfiltered_uses_everything_total_in_one_call() {
+        let fake = FakeSearcher::new((0..250).map(|i| file(Path::new(&format!(r"C:\x\f{i}")))).collect());
+        let ctx = Context { cwd: PathBuf::from(r"C:\"), project_dir: None };
+        let p = FindParams { scope: Scope::All, count_only: true, ..params("f") };
+        assert_eq!(run_find(&p, &ctx, &fake).unwrap(), "250 matches — all drives");
+        assert_eq!(fake.calls(), 1);
+    }
+
+    #[test]
+    fn flat_lists_full_paths() {
+        let (_d, root, ctx) = repo();
+        let fake = FakeSearcher::new(vec![file(&root.join(r"src\a.rs"))]);
+        let out = run_find(&FindParams { flat: true, ..params("a") }, &ctx, &fake).unwrap();
+        assert!(out.ends_with(&format!("\n{}\n", root.join(r"src\a.rs").display())), "{out}");
     }
 
     #[test]

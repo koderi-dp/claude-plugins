@@ -38,6 +38,12 @@ fn tools_list_advertises_find_only() {
     let props = tools[0]["inputSchema"]["properties"].as_object().unwrap();
     let mut names: Vec<&str> = props.keys().map(String::as_str).collect();
     names.sort();
-    assert_eq!(names, ["details", "include_ignored", "kind", "limit", "path", "query", "scope", "sort"]);
+    assert_eq!(
+        names,
+        [
+            "count_only", "details", "exclude", "flat", "include_ignored", "kind", "limit", "offset", "path", "query",
+            "scope", "sort"
+        ]
+    );
     assert_eq!(tools[0]["inputSchema"]["required"], serde_json::json!(["query"]));
 }

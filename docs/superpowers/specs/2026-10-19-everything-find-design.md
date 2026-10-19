@@ -56,6 +56,14 @@ One MCP tool: `find`.
 | `sort`            | `"name"` \| `"modified"` \| `"size"`| `"name"` | `modified` and `size` sort descending (newest / largest first) |
 | `details`         | bool                                | `false`  | Append size and modified date to each entry |
 | `include_ignored` | bool                                | `false`  | Repo scope only: disable `.gitignore` and default-junk filtering |
+| `exclude`         | string[]                            | `[]`     | (0.2) Folder names (`dist`, hides the folder and its contents) or path wildcards (`*/worktrees/*`). Applies even with `include_ignored` |
+| `offset`          | integer, 0–10000                    | `0`      | (0.2) Skip this many visible (post-filter) results; header shows `showing 51–100` |
+| `count_only`      | bool                                | `false`  | (0.2) Header line only: `N matches — <scope>` |
+| `flat`            | bool                                | `false`  | (0.2) One full absolute path per line instead of grouping |
+
+0.2 behaviour changes: default-excluded folders (`.git`, `node_modules`, …) no
+longer appear as entries themselves (`!wfn:<name>`); a query with `dm:` /
+`datemodified:` and `kind: "any"` lists files only; "1 match" is singular.
 
 The tool description must stay short: it is loaded into every session.
 
