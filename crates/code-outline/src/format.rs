@@ -33,10 +33,11 @@ fn render(file: &FileOutline, signatures: bool) -> Vec<String> {
     match file {
         FileOutline::Message(text) => text.lines().map(str::to_string).collect(),
         FileOutline::Symbols { display, line_count, symbols, notes } => {
-            if symbols.is_empty() && notes.is_empty() {
-                return vec![format!("{display} ({line_count} lines): no symbols found")];
-            }
-            let mut lines = vec![format!("{display} ({line_count} lines)")];
+            let mut lines = if symbols.is_empty() {
+                vec![format!("{display} ({line_count} lines): no symbols found")]
+            } else {
+                vec![format!("{display} ({line_count} lines)")]
+            };
             push_symbols(&mut lines, symbols, 1, signatures);
             lines.extend(notes.iter().cloned());
             lines
@@ -196,14 +197,14 @@ mod tests {
     }
 
     #[test]
-    fn notes_without_symbols_have_no_empty_message() {
+    fn notes_without_symbols_keep_empty_message() {
         let f = FileOutline::Symbols {
             display: "a.rs".into(),
             line_count: 5,
             symbols: vec![],
             notes: vec!["(note)".into()],
         };
-        assert_eq!(outline(&[f], 1, false, false), "a.rs (5 lines)\n(note)");
+        assert_eq!(outline(&[f], 1, false, false), "a.rs (5 lines): no symbols found\n(note)");
     }
 
     #[test]

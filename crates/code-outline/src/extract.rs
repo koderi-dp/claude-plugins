@@ -133,13 +133,36 @@ fn strip_generics(s: &str) -> String {
     cut.trim().to_string()
 }
 
+/// The bare type or trait an impl names: `&'a mut Foo<T>` and `dyn Foo` give `Foo`.
+fn impl_target(s: &str) -> String {
+    let mut s = s.trim();
+    loop {
+        let before = s;
+        if let Some(rest) = s.strip_prefix('&') {
+            s = rest.trim_start();
+            // a lifetime can only follow `&`
+            if s.starts_with('\'') {
+                s = s.find(char::is_whitespace).map_or("", |i| s[i..].trim_start());
+            }
+        }
+        for prefix in ["mut ", "dyn "] {
+            if let Some(rest) = s.strip_prefix(prefix) {
+                s = rest.trim_start();
+            }
+        }
+        if s == before {
+            return strip_generics(s);
+        }
+    }
+}
+
 fn rust_impl_names(def: Node, bytes: &[u8]) -> (String, String) {
     let key = def
         .child_by_field_name("type")
-        .map(|n| strip_generics(&text(n, bytes)))
+        .map(|n| impl_target(&text(n, bytes)))
         .unwrap_or_default();
     let name = match def.child_by_field_name("trait") {
-        Some(t) => format!("{} for {key}", strip_generics(&text(t, bytes))),
+        Some(t) => format!("{} for {key}", impl_target(&text(t, bytes))),
         None => key.clone(),
     };
     (name, key)
@@ -245,6 +268,9 @@ fn signature(def: Node, lang: Lang, bytes: &[u8]) -> String {
     let raw = String::from_utf8_lossy(&bytes[start..end.max(start)]);
     let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut s = collapsed.as_str();
+    if let Some(rest) = s.strip_suffix(';') {
+        s = rest.trim_end();
+    }
     if let Some(rest) = s.strip_suffix('{').or_else(|| s.strip_suffix(':')) {
         s = rest.trim_end();
     }
@@ -256,30 +282,21 @@ fn signature(def: Node, lang: Lang, bytes: &[u8]) -> String {
     }
 }
 
-/// Start byte of the first node (pre-order) that is the `body` field of its parent.
+/// Start byte of the definition's own `body`: a direct child, or for
+/// `const f = () => {}` a direct child of the function value. Bodies deeper
+/// down, such as a default-argument lambda's, belong to something else.
 fn body_start(def: Node) -> Option<usize> {
-    let mut cursor = def.walk();
-    'outer: loop {
-        let node = cursor.node();
-        if node != def && cursor.field_name() == Some("body") {
-            return Some(node.start_byte());
-        }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        loop {
-            if cursor.node() == def {
-                break 'outer;
-            }
-            if cursor.goto_next_sibling() {
-                continue 'outer;
-            }
-            if !cursor.goto_parent() {
-                break 'outer;
-            }
-        }
+    if let Some(body) = def.child_by_field_name("body") {
+        return Some(body.start_byte());
     }
-    None
+    if !matches!(def.kind(), "lexical_declaration" | "variable_declaration") {
+        return None;
+    }
+    let mut walk = def.walk();
+    def.named_children(&mut walk)
+        .filter(|c| c.kind() == "variable_declarator")
+        .find_map(|d| d.child_by_field_name("value")?.child_by_field_name("body"))
+        .map(|body| body.start_byte())
 }
 
 /// Builds the symbol tree from byte ranges, at most `MAX_DEPTH` levels deep:
@@ -572,6 +589,39 @@ fn e( {
         assert!(x.error_lines.len() <= 3);
         assert!(x.error_lines.windows(2).all(|w| w[0] < w[1]));
         assert_eq!(x.error_lines.len(), 3);
+    }
+
+    #[test]
+    fn signature_ignores_bodies_inside_parameters() {
+        let py = extract("def f(x=lambda: 1):\n    pass\n", Lang::Python);
+        assert_eq!(py.symbols[0].signature, "def f(x=lambda: 1)");
+        let x = ts("function f(cb = () => {}) {\n}\nconst g = (cb = () => {}) => {\n};\n");
+        assert_eq!(x.symbols[0].signature, "function f(cb = () => {})");
+        assert_eq!(x.symbols[1].signature, "const g = (cb = () => {}) =>");
+    }
+
+    #[test]
+    fn signature_drops_trailing_semicolon() {
+        let cs = extract("namespace Demo;\n\nclass C {}\n", Lang::CSharp);
+        assert_eq!(cs.symbols[0].signature, "namespace Demo");
+        let x = ts("function f(a: string): void;\nfunction f(a: any) {}\n");
+        assert_eq!(x.symbols[0].signature, "function f(a: string): void");
+        assert_eq!(rs("struct S;\n").symbols[0].signature, "struct S");
+    }
+
+    #[test]
+    fn impl_key_strips_reference_sigils() {
+        for (src, name) in [
+            ("impl Tr for &Foo {\n    fn m(&self) {}\n}\n", "Tr for Foo"),
+            ("impl<'a> Tr for &'a mut Foo<'a> {\n    fn m(&self) {}\n}\n", "Tr for Foo"),
+            ("impl Tr for &mut Foo {\n    fn m(&self) {}\n}\n", "Tr for Foo"),
+            ("impl dyn Foo {\n    fn m(&self) {}\n}\n", "Foo"),
+        ] {
+            let x = rs(src);
+            assert_eq!((x.symbols[0].key.as_str(), x.symbols[0].name.as_str()), ("Foo", name), "{src}");
+            let r = crate::resolve::resolve(&x.symbols, Lang::Rust, "Foo::m", None);
+            assert!(matches!(r, crate::resolve::Resolution::Found(_)), "{src}");
+        }
     }
 
     fn depth(syms: &[Symbol]) -> usize {
