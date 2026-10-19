@@ -1058,6 +1058,36 @@ mod docker {
     }
 
     #[test]
+    fn compound_exception_names_keep_their_frames() {
+        for first in [
+            "TypeError: foo is not a function",
+            "java.lang.NullPointerException: boom",
+            "System.TimeoutException: timed out",
+            "ZeroDivisionError: division by zero",
+        ] {
+            let mut l = lines(&[first, "    at a (x.js:1:1)", "    at b (x.js:2:2)", "    at c (x.js:3:3)"]);
+            l.extend((0..60).map(|i| format!("normal line {i}")));
+            let t = DockerLogs.trim(&l);
+            for kept in &l[..4] {
+                assert!(t.body.contains(kept), "{kept}: {:#?}", t.body);
+            }
+        }
+    }
+
+    #[test]
+    fn successful_build_with_stray_failed_word_passes() {
+        let l = lines(&[
+            "#2 [1/2] RUN run-tests",
+            "#2 0.3 0 failed, 12 passed",
+            "#2 DONE 0.4s",
+            "#3 naming to docker.io/library/app:latest done",
+        ]);
+        let t = DockerBuild.trim(&l);
+        assert!(t.body.iter().any(|b| b.contains("0 failed")), "{:#?}", t.body);
+        assert_eq!(t.outcome, Outcome::Pass);
+    }
+
+    #[test]
     fn detects_by_content() {
         assert_eq!(rules::by_content(&fixture("docker", "build_fail")).name(), "docker_build");
         assert_ne!(rules::by_content(&fixture("docker", "logs_repetitive")).name(), "docker_build");

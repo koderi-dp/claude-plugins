@@ -21,6 +21,8 @@ static GATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
+static HARD_FAIL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:#\d+ )?ERROR\b|failed to solve").unwrap());
 static IMAGE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"naming to |writing image ").unwrap());
 
@@ -100,7 +102,11 @@ impl Rule for DockerBuild {
         keep.sort_by_key(|(i, _)| *i);
         let body = dedupe_keep_order(keep.into_iter().map(|(_, l)| l));
 
-        let failed = !failing.is_empty() || lines.iter().any(|l| GATE_RE.is_match(l));
+        // Stray gate words ("0 failed", "ignoring error") only fail a build
+        // that never produced an image; they are kept in the body either way.
+        let hard = !failing.is_empty() || lines.iter().any(|l| HARD_FAIL_RE.is_match(l));
+        let stray = lines.iter().any(|l| GATE_RE.is_match(l));
+        let failed = hard || (stray && !image);
         let outcome = if failed {
             Outcome::Fail
         } else if image {

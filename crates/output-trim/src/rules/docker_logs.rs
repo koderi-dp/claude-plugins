@@ -16,7 +16,7 @@ const MIN_RUN: usize = 3;
 
 static ERROR_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)\b(warn|warning|error|err|fatal|exception|panic|crit|critical|fail|failed|failure|traceback)\b",
+        r"(?i)\b(warn|warning|error|err|fatal|exception|panic|crit|critical|fail|failed|failure|traceback)\b|(?-i:[A-Za-z]+(?:Error|Exception)\b)",
     )
     .unwrap()
 });
