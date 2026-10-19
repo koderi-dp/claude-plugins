@@ -3,7 +3,9 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
-const DESCRIPTION: &str = "Instantly find files/folders by name via the Everything index (Windows). Defaults to the current repo and respects .gitignore; scope:\"all\" searches every drive. Query uses Everything syntax (wildcards, ext:, dm:today). Not for content search — use Grep.";
+const DESCRIPTION: &str = "Use instead of Glob to find files/folders by name, via the Everything index (Windows). Defaults to the current repo, respecting .gitignore and hiding build output, nested repos and worktrees; scope:\"all\" searches every drive. Query uses Everything syntax (wildcards, ext:, dm:today). Not for content search — use Grep.";
+
+const INSTRUCTIONS: &str = "For finding files or folders by name or pattern, prefer `find` over Glob: it respects .gitignore, hides build output, nested repos and worktrees, and returns compact grouped results. Use Grep for content search.";
 
 #[test]
 fn tools_list_advertises_find_only() {
@@ -26,6 +28,7 @@ fn tools_list_advertises_find_only() {
         "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}));
     let init = recv();
     assert_eq!(init["result"]["serverInfo"]["name"], "everything-find");
+    assert_eq!(init["result"]["instructions"], INSTRUCTIONS);
     send(serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     send(serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
     let list = recv();

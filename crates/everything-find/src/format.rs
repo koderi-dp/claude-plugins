@@ -111,7 +111,7 @@ fn notes(h: &Header) -> String {
         notes.push_str(" (scan capped at 10 pages)");
     }
     if h.hidden_by_ignore > 0 {
-        notes.push_str(&format!(" ({} hidden by .gitignore — retry with include_ignored: true)", h.hidden_by_ignore));
+        notes.push_str(&format!(" ({} hidden by .gitignore)", h.hidden_by_ignore));
     }
     notes
 }
@@ -205,7 +205,7 @@ mod tests {
         let h = Header { count_is_upper_bound: true, hidden_by_ignore: 2, ..hdr(7, 0, r"repo C:\r") };
         assert_eq!(
             render_count(&h),
-            "≤7 matches — repo C:\\r (2 hidden by .gitignore — retry with include_ignored: true)"
+            "≤7 matches — repo C:\\r (2 hidden by .gitignore)"
         );
         assert_eq!(render_count(&hdr(1, 0, "all drives")), "1 match — all drives");
     }
@@ -238,7 +238,7 @@ mod tests {
         let e = [file(r"C:\r\a.rs")];
         let h = Header { count: 40, count_is_upper_bound: true, shown: 20, hidden_by_ignore: 3, ..hdr(0, 0, r"repo C:\r") };
         assert!(render(&e, &h, Some(Path::new(r"C:\r")), false).starts_with(
-            "≤40 matches, showing 20 (limit) — repo C:\\r (3 hidden by .gitignore — retry with include_ignored: true)\n"
+            "≤40 matches, showing 20 (limit) — repo C:\\r (3 hidden by .gitignore)\n"
         ));
     }
 

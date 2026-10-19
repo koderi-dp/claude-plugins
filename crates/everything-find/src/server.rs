@@ -18,7 +18,7 @@ impl FindServer {
     }
 
     #[tool(
-        description = "Instantly find files/folders by name via the Everything index (Windows). Defaults to the current repo and respects .gitignore; scope:\"all\" searches every drive. Query uses Everything syntax (wildcards, ext:, dm:today). Not for content search — use Grep."
+        description = "Use instead of Glob to find files/folders by name, via the Everything index (Windows). Defaults to the current repo, respecting .gitignore and hiding build output, nested repos and worktrees; scope:\"all\" searches every drive. Query uses Everything syntax (wildcards, ext:, dm:today). Not for content search — use Grep."
     )]
     async fn find(&self, Parameters(params): Parameters<FindParams>) -> Result<String, ErrorData> {
         let outcome = tokio::task::spawn_blocking(move || run_find(&params, &Context::from_env(), &EverythingSdk))
@@ -39,6 +39,9 @@ impl ServerHandler for FindServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("everything-find", env!("CARGO_PKG_VERSION")))
+            .with_instructions(
+                "For finding files or folders by name or pattern, prefer `find` over Glob: it respects .gitignore, hides build output, nested repos and worktrees, and returns compact grouped results. Use Grep for content search.",
+            )
     }
 }
 
