@@ -48,8 +48,22 @@ const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 const LOSSY_NOTE: &str = "(file is not valid UTF-8; some characters replaced)";
 
-fn unsupported_message(ext: &str) -> String {
-    format!("code-outline doesn't support .{ext} files — use Read.")
+fn unsupported_message(path: &Path) -> String {
+    match path.extension().filter(|e| !e.is_empty()) {
+        Some(ext) => format!("code-outline doesn't support .{} files — use Read.", ext.to_string_lossy()),
+        None => format!(
+            "code-outline doesn't support {} — use Read.",
+            path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
+        ),
+    }
+}
+
+fn no_match_message(pattern: &str, hidden: usize, root: &Path) -> String {
+    let mut line = format!("0 files match {pattern} in {}", root.display());
+    if hidden > 0 {
+        line.push_str(&format!(" ({hidden} hidden by .gitignore)"));
+    }
+    line
 }
 
 fn error_note(lines: &[usize]) -> String {
@@ -114,13 +128,7 @@ pub fn run_outline(p: &OutlineParams, ctx: &Context) -> Result<String, String> {
         let mut lines: Vec<String> = expanded
             .empty_patterns
             .iter()
-            .map(|(pattern, hidden)| {
-                let mut line = format!("0 files match {pattern} in {}", root.display());
-                if *hidden > 0 {
-                    line.push_str(&format!(" ({hidden} hidden by .gitignore)"));
-                }
-                line
-            })
+            .map(|(pattern, hidden)| no_match_message(pattern, *hidden, &root))
             .collect();
         if expanded.unsupported_only > 0 {
             lines.push(format!(
@@ -136,7 +144,10 @@ pub fn run_outline(p: &OutlineParams, ctx: &Context) -> Result<String, String> {
         .iter()
         .map(|entry| match entry {
             Entry::Missing(pattern) => FileOutline::Message(format!("{pattern} not found.")),
-            Entry::Unsupported(_, ext) => FileOutline::Message(unsupported_message(ext)),
+            Entry::Unsupported(pattern) => FileOutline::Message(unsupported_message(Path::new(pattern))),
+            Entry::NoMatch(pattern, hidden) => {
+                FileOutline::Message(no_match_message(pattern, *hidden, &root))
+            }
             Entry::File(path, lang) => file_outline(&root, path, *lang),
         })
         .collect();
@@ -147,7 +158,7 @@ pub fn run_read_symbol(p: &ReadSymbolParams, ctx: &Context) -> Result<String, St
     if p.path.is_empty() {
         return Err("path must not be empty".into());
     }
-    if p.symbol.is_empty() {
+    if p.symbol.trim().is_empty() {
         return Err("symbol must not be empty".into());
     }
     if p.line == Some(0) {
@@ -157,9 +168,11 @@ pub fn run_read_symbol(p: &ReadSymbolParams, ctx: &Context) -> Result<String, St
     let root = repo_root(ctx);
     let path = resolve_file(&root, &p.path);
     let shown = display(&root, &path);
+    if path.is_dir() {
+        return Ok(format!("{shown} is a directory — pass a file."));
+    }
     let Some(lang) = Lang::from_path(&path) else {
-        let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-        return Ok(unsupported_message(&ext));
+        return Ok(unsupported_message(&path));
     };
     let (source, notes) = match load(&root, &path) {
         Ok(loaded) => loaded,
@@ -401,6 +414,78 @@ mod tests {
         assert_eq!(rs, "No symbol rnu in a.rs. Closest: run");
         let none = run_read_symbol(&rsp("a.rs", "zzzzzzzzzz", None), &ctx).unwrap();
         assert_eq!(none, "No symbol zzzzzzzzzz in a.rs.");
+    }
+
+    fn many(paths: &[&str]) -> OutlineParams {
+        OutlineParams {
+            paths: Paths::Many(paths.iter().map(|s| s.to_string()).collect()),
+            signatures: false,
+            limit: 50,
+        }
+    }
+
+    #[test]
+    fn outline_bracket_path() {
+        let (_d, ctx) = setup(&[("app/[id]/page.tsx", b"export function Page() {}\n")]);
+        let out = run_outline(&op("app/[id]/page.tsx", 50), &ctx).unwrap();
+        assert!(out.starts_with("app/[id]/page.tsx (1 lines)\n  function Page 1-1"), "{out}");
+    }
+
+    #[test]
+    fn outline_directory() {
+        let (_d, ctx) = setup(&[("src/a.rs", b"fn a() {}\n"), ("src/sub/b.py", b"def b():\n    pass\n")]);
+        let out = run_outline(&op("src", 50), &ctx).unwrap();
+        assert!(out.contains("src/a.rs (1 lines)") && out.contains("src/sub/b.py (2 lines)"), "{out}");
+    }
+
+    #[test]
+    fn read_symbol_on_directory() {
+        let (_d, ctx) = setup(&[("src/a.rs", b"fn a() {}\n"), ("dir.rs/x.rs", b"")]);
+        assert_eq!(
+            run_read_symbol(&rsp("src", "a", None), &ctx).unwrap(),
+            "src is a directory — pass a file."
+        );
+        assert_eq!(
+            run_read_symbol(&rsp("dir.rs", "a", None), &ctx).unwrap(),
+            "dir.rs is a directory — pass a file."
+        );
+    }
+
+    #[test]
+    fn mixed_patterns_report_empty_ones() {
+        let (d, ctx) = setup(&[
+            (".gitignore", b"build/\n"),
+            ("a.rs", b"fn a() {}\n"),
+            ("build/gen.rs", b""),
+        ]);
+        let root = dunce::canonicalize(d.path()).unwrap();
+        let out = run_outline(&many(&["a.rs", "nothing/*.rs", "build/*.rs"]), &ctx).unwrap();
+        let root = root.display();
+        assert!(out.contains(&format!("0 files match nothing/*.rs in {root}")), "{out}");
+        assert!(
+            out.contains(&format!("0 files match build/*.rs in {root} (1 hidden by .gitignore)")),
+            "{out}"
+        );
+        assert!(out.contains("a.rs (1 lines)\n  fn a 1-1"), "{out}");
+        let missing = run_outline(&many(&["nope.rs", "nothing/*.rs"]), &ctx).unwrap();
+        assert!(
+            missing.contains("nope.rs not found.") && missing.contains("0 files match nothing/*.rs"),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn file_without_extension() {
+        let (_d, ctx) = setup(&[("Makefile", b"all:\n")]);
+        let msg = "code-outline doesn't support Makefile — use Read.";
+        assert_eq!(run_outline(&op("Makefile", 50), &ctx).unwrap(), msg);
+        assert_eq!(run_read_symbol(&rsp("Makefile", "all", None), &ctx).unwrap(), msg);
+    }
+
+    #[test]
+    fn blank_symbol_is_rejected() {
+        let (_d, ctx) = setup(&[("a.rs", b"fn a() {}\n")]);
+        assert_eq!(run_read_symbol(&rsp("a.rs", "  ", None), &ctx).unwrap_err(), "symbol must not be empty");
     }
 
     /// Runs `f` on a thread with the 1 MB stack the Windows exe's main thread has.

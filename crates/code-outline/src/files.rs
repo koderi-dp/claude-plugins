@@ -23,12 +23,16 @@ impl Context {
 pub enum Entry {
     File(PathBuf, Lang),
     Missing(String),
-    Unsupported(String, String),
+    Unsupported(String),
+    /// A pattern that matched no file, with how many `.gitignore` hid.
+    NoMatch(String, usize),
 }
 
 pub struct Expanded {
     pub entries: Vec<Entry>,
     pub total: usize,
+    /// Patterns that matched no file, when nothing else was found either;
+    /// otherwise they are `Entry::NoMatch` entries.
     pub empty_patterns: Vec<(String, usize)>,
     pub unsupported_only: usize,
 }
@@ -75,10 +79,6 @@ pub fn display(root: &Path, path: &Path) -> String {
 
 fn is_glob(pattern: &str) -> bool {
     pattern.contains(['*', '?', '[', '{'])
-}
-
-fn ext_of(path: &Path) -> String {
-    path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 /// Walks `base`, returning the supported files (with language) whose
@@ -139,27 +139,36 @@ pub fn expand(root: &Path, patterns: &[String], limit: usize) -> Expanded {
 
     for original in patterns {
         let pattern = original.replace('\\', "/");
-        if !is_glob(&pattern) {
-            let path = resolve_file(root, &pattern);
-            if !path.is_file() {
-                diagnostics.push(Entry::Missing(pattern));
-            } else if let Some(lang) = Lang::from_path(&path) {
-                add_file(&mut files, path, lang);
-            } else {
-                diagnostics.push(Entry::Unsupported(pattern, ext_of(&path)));
+        // An existing path is taken literally even if it contains glob
+        // characters, e.g. `app/[id]/page.tsx`.
+        let literal = resolve_file(root, &pattern);
+        let (pattern, base, rest) = if literal.is_file() {
+            match Lang::from_path(&literal) {
+                Some(lang) => add_file(&mut files, literal, lang),
+                None => diagnostics.push(Entry::Unsupported(pattern)),
             }
             continue;
-        }
-
-        let parts: Vec<&str> = pattern.split('/').collect();
-        let literal_len = parts.iter().take_while(|p| !is_glob(p)).count();
-        let base_str = match parts[..literal_len].join("/") {
-            s if s.is_empty() && pattern.starts_with('/') => "/".to_string(),
-            s => s,
+        } else if literal.is_dir() {
+            (format!("{}/**/*", pattern.trim_end_matches('/')), literal, "**/*".to_string())
+        } else if !is_glob(&pattern) {
+            diagnostics.push(Entry::Missing(pattern));
+            continue;
+        } else {
+            let parts: Vec<&str> = pattern.split('/').collect();
+            let literal_len = parts.iter().take_while(|p| !is_glob(p)).count();
+            let base_str = match parts[..literal_len].join("/") {
+                s if s.is_empty() && pattern.starts_with('/') => "/".to_string(),
+                s => s,
+            };
+            let base = resolve_file(root, &base_str);
+            let rest = parts[literal_len..].join("/");
+            (pattern, base, rest)
         };
-        let base = resolve_file(root, &base_str);
-        let rest = parts[literal_len..].join("/");
-        let matcher = match globset::GlobBuilder::new(&rest).literal_separator(true).build() {
+        let matcher = match globset::GlobBuilder::new(&rest)
+            .literal_separator(true)
+            .case_insensitive(true)
+            .build()
+        {
             Ok(glob) => glob.compile_matcher(),
             Err(_) => {
                 empty_patterns.push((pattern, 0));
@@ -182,6 +191,9 @@ pub fn expand(root: &Path, patterns: &[String], limit: usize) -> Expanded {
         }
     }
 
+    if !files.is_empty() || !diagnostics.is_empty() {
+        diagnostics.extend(empty_patterns.drain(..).map(|(p, hidden)| Entry::NoMatch(p, hidden)));
+    }
     files.sort_by(|a, b| a.0.cmp(&b.0));
     let mut entries = diagnostics;
     entries.extend(files.into_iter().map(|(_, path, lang)| Entry::File(path, lang)));
@@ -277,7 +289,7 @@ mod tests {
         let (_d, root) = repo();
         let x = expand(&root, &["nope.rs".into(), "src/c.go".into()], 50);
         assert!(matches!(&x.entries[0], Entry::Missing(_)));
-        assert!(matches!(&x.entries[1], Entry::Unsupported(_, e) if e == "go"));
+        assert!(matches!(&x.entries[1], Entry::Unsupported(p) if p == "src/c.go"));
     }
 
     #[test]
@@ -297,6 +309,40 @@ mod tests {
         let (_d, root) = repo();
         let x = expand(&root, &["**/*".into()], 2);
         assert_eq!((x.entries.len(), x.total), (2, 4));
+    }
+
+    fn add(root: &Path, files: &[&str]) {
+        for p in files {
+            let f = root.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, "").unwrap();
+        }
+    }
+
+    #[test]
+    fn literal_path_with_glob_characters() {
+        let (_d, root) = repo();
+        add(&root, &["app/[id]/page.tsx", "app/{slug}/page.tsx"]);
+        assert_eq!(names(&root, &ex(&root, "app/[id]/page.tsx")), ["app/[id]/page.tsx"]);
+        assert_eq!(names(&root, &ex(&root, "app/{slug}/page.tsx")), ["app/{slug}/page.tsx"]);
+    }
+
+    #[test]
+    fn glob_ignores_case() {
+        let (_d, root) = repo();
+        add(&root, &["src/Mixed.rs"]);
+        assert_eq!(names(&root, &ex(&root, "src/m*.rs")), ["src/Mixed.rs"]);
+        assert_eq!(names(&root, &ex(&root, "src/*.RS")), ["src/Mixed.rs", "src/a.rs"]);
+    }
+
+    #[test]
+    fn directory_expands_to_its_files() {
+        let (_d, root) = repo();
+        add(&root, &["app/[id]/page.tsx"]);
+        assert_eq!(names(&root, &ex(&root, "src")), ["src/a.rs", "src/b.ts", "src/deep/d.py"]);
+        assert_eq!(names(&root, &ex(&root, "src/")), ["src/a.rs", "src/b.ts", "src/deep/d.py"]);
+        assert_eq!(names(&root, &ex(&root, "app/[id]")), ["app/[id]/page.tsx"]);
+        assert_eq!(ex(&root, "build").empty_patterns, [("build/**/*".to_string(), 1)]);
     }
 
     #[test]
