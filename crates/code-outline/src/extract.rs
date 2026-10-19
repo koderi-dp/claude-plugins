@@ -92,15 +92,24 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
         } else {
             (name_text.clone(), name_text)
         };
+        // `namespace X;` has no body: the declarations after it are its siblings,
+        // so it spans the rest of the file.
+        let (end_byte, end_line) = if def.kind() == "file_scoped_namespace_declaration" {
+            let mut walk = root.walk();
+            let last = root.named_children(&mut walk).last().unwrap_or(def);
+            (root.end_byte(), last.end_position().row.max(def.end_position().row) + 1)
+        } else {
+            (def.end_byte(), range_node.end_position().row + 1)
+        };
         flats.push(Flat {
             start_byte: def.start_byte(),
-            end_byte: def.end_byte(),
+            end_byte,
             symbol: Symbol {
-                kind: kind.to_string(),
+                kind: kind.replace('_', " "),
                 name,
                 key,
                 start_line: range_start_row(range_node, lang, bytes) + 1,
-                end_line: range_node.end_position().row + 1,
+                end_line,
                 signature: signature(def, lang, bytes),
                 children: Vec::new(),
             },
@@ -415,6 +424,28 @@ mod tests {
     fn test_module_nesting() {
         let x = rs("#[cfg(test)]\nmod tests {\n    #[test] fn t() {}\n}\n");
         assert_eq!(tree(&x), "mod tests 1-4\n  fn t 3-3");
+    }
+
+    #[test]
+    fn file_scoped_namespace_contains_following_declarations() {
+        let x = extract("namespace Demo;
+
+public class Calc
+{
+    public int Add() { return 1; }
+}
+", Lang::CSharp);
+        assert_eq!(tree(&x), "namespace Demo 1-6
+  class Calc 3-6
+    method Add 5-5");
+    }
+
+    #[test]
+    fn async_kind_has_a_space() {
+        let x = extract("async def f():
+    pass
+", Lang::Python);
+        assert_eq!(x.symbols[0].label(), "async def f");
     }
 
     fn ts(src: &str) -> Extracted {
