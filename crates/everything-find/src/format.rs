@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 pub struct Header {
     pub count: u32,
-    pub count_is_lower_bound: bool,
+    pub count_is_upper_bound: bool,
     pub shown: usize,
     /// `repo C:\Source\app`, `C:\some\path` or `all drives`.
     pub scope_label: String,
@@ -70,7 +70,7 @@ pub fn human_size(bytes: u64) -> String {
 }
 
 fn header_line(h: &Header) -> String {
-    let bound = if h.count_is_lower_bound { "≥" } else { "" };
+    let bound = if h.count_is_upper_bound { "≤" } else { "" };
     let limit = if (h.shown as u64) < h.count as u64 { " (limit)" } else { "" };
     let mut line = format!("{bound}{} matches, showing {}{limit} — {}", h.count, h.shown, h.scope_label);
     if h.page_capped {
@@ -118,7 +118,7 @@ mod tests {
     fn hdr(count: u32, shown: usize, label: &str) -> Header {
         Header {
             count,
-            count_is_lower_bound: false,
+            count_is_upper_bound: false,
             shown,
             scope_label: label.to_string(),
             page_capped: false,
@@ -139,9 +139,9 @@ mod tests {
     #[test]
     fn truncated_lower_bound_hidden() {
         let e = [file(r"C:\r\a.rs")];
-        let h = Header { count: 40, count_is_lower_bound: true, shown: 20, hidden_by_ignore: 3, ..hdr(0, 0, r"repo C:\r") };
+        let h = Header { count: 40, count_is_upper_bound: true, shown: 20, hidden_by_ignore: 3, ..hdr(0, 0, r"repo C:\r") };
         assert!(render(&e, &h, Some(Path::new(r"C:\r")), false).starts_with(
-            "≥40 matches, showing 20 (limit) — repo C:\\r (3 hidden by .gitignore — retry with include_ignored: true)\n"
+            "≤40 matches, showing 20 (limit) — repo C:\\r (3 hidden by .gitignore — retry with include_ignored: true)\n"
         ));
     }
 
