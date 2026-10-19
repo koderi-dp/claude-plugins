@@ -509,6 +509,336 @@ mod tsc {
             assert_eq!(rules::by_command(cmd).map(|r| r.name()), Some("tsc"), "{cmd}");
         }
         assert!(rules::by_command("tscx").is_none());
-        assert!(rules::by_command("npx vitest").is_none());
+        assert!(rules::by_command("npx eslint .").is_none());
+    }
+}
+
+mod jstest {
+    use super::*;
+    use output_trim::engine::{self, LogTarget};
+    use output_trim::rules::jstest::JsTest;
+    use output_trim::rules::{self, Outcome, Rule};
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn reduction(case: &str) -> (usize, usize) {
+        let l = fixture("jstest", case);
+        let dir = tempfile::tempdir().unwrap();
+        let out = engine::apply(&l, &JsTest, LogTarget::SaveIn(dir.path()), false);
+        (out.kept_chars, out.total_chars)
+    }
+
+    #[test]
+    fn fail_keeps_failures_and_drops_passes() {
+        let t = JsTest.trim(&fixture("jstest", "vitest_fail"));
+        let text = t.body.join("\n");
+        assert!(text.contains("adds numbers wrongly"), "{text}");
+        assert!(text.contains("compares totals wrongly"), "{text}");
+        assert_eq!(text.matches("expected 1 to be 2").count(), 2, "{text}");
+        assert!(text.contains("src/broken.test.ts:3:48"), "{text}");
+        assert!(t.body.iter().all(|l| !l.contains('✓')), "{text}");
+        assert!(t.body.iter().all(|l| !l.contains("expect(1).toBe(2)")), "code frames dropped: {text}");
+        assert!(text.contains("Test Files  1 failed | 4 passed (5)"), "{text}");
+        assert!(text.contains("Duration"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert_eq!(t.verdict, "[output-trim] tests: FAILED — 2 failed, 12 passed");
+    }
+
+    #[test]
+    fn fail_is_reduced() {
+        let (kept, total) = reduction("vitest_fail");
+        assert!(total >= 1500, "{total}");
+        assert!(kept * 100 <= total * 70, "kept {kept} of {total}");
+    }
+
+    #[test]
+    fn pass_gives_short_body() {
+        let t = JsTest.trim(&fixture("jstest", "vitest_pass"));
+        assert_eq!(t.outcome, Outcome::Pass);
+        assert!(t.body.len() <= 3, "{:#?}", t.body);
+        assert!(t.body.iter().any(|l| l == "Tests  12 passed (12)"), "{:#?}", t.body);
+        assert_eq!(t.verdict, "[output-trim] tests: PASSED — 12 passed");
+    }
+
+    #[test]
+    fn tsc_error_before_vitest_output_is_kept() {
+        let t = JsTest.trim(&fixture("jstest", "npm_test_tsc_then_vitest"));
+        let text = t.body.join("\n");
+        assert!(
+            text.contains("src/typed.ts(2,9): error TS2322: Type 'string' is not assignable to type 'number'."),
+            "{text}"
+        );
+        assert!(text.contains("adds numbers wrongly"), "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert_eq!(t.verdict, "[output-trim] tests: FAILED — 2 failed, 12 passed");
+    }
+
+    #[test]
+    fn unexpected_error_lines_in_odd_positions_are_kept() {
+        let l = lines(&[
+            " RUN  v5.0.5 C:/src/js",
+            "Error: spawn ENOENT before anything else",
+            " ✓ src/a.test.ts (3 tests) 3ms",
+            "Unhandled Rejection: socket crashed",
+            "",
+            " Test Files  1 passed (1)",
+            "      Tests  3 passed (3)",
+            "Error: worker exited after the summary",
+        ]);
+        let t = JsTest.trim(&l);
+        for needle in [
+            "Error: spawn ENOENT before anything else",
+            "Unhandled Rejection: socket crashed",
+            "Error: worker exited after the summary",
+        ] {
+            assert!(t.body.iter().any(|b| b == needle), "{needle}: {:#?}", t.body);
+        }
+        assert_eq!(t.outcome, Outcome::Fail);
+    }
+
+    #[test]
+    fn real_jest_output_keeps_failures_and_diff() {
+        let t = JsTest.trim(&fixture("jstest", "jest_fail"));
+        let text = t.body.join("\n");
+        for needle in [
+            "● sum › subtracts",
+            "● sum › multiplies",
+            "Expected: 1",
+            "Received: 2",
+            "-     3,",
+            "+     2,",
+            "at Object.toBe (t/sum.test.js:3:41)",
+            "at Object.toEqual (t/sum.test.js:4:56)",
+            "Tests:       2 failed, 3 passed, 5 total",
+        ] {
+            assert!(text.contains(needle), "{needle}\n{text}");
+        }
+        assert!(!text.contains("hello from test") && !text.contains("PASS"), "{text}");
+        assert!(!text.contains("expect(3 - 1)"), "code frame dropped: {text}");
+        assert_eq!(t.verdict, "[output-trim] tests: FAILED — 2 failed, 3 passed");
+        assert_eq!(rules::by_content(&fixture("jstest", "jest_fail")).name(), "jstest");
+        let l = fixture("jstest", "jest_fail");
+        let dir = tempfile::tempdir().unwrap();
+        let out = engine::apply(&l, &JsTest, LogTarget::SaveIn(dir.path()), false);
+        assert!(out.total_chars >= 1500 && out.kept_chars * 100 <= out.total_chars * 70);
+    }
+
+    #[test]
+    fn jest_style_failure_block_is_trimmed() {
+        let l = lines(&[
+            "FAIL src/sum.test.js",
+            "  sum",
+            "    ✓ adds (2 ms)",
+            "    ✕ subtracts (3 ms)",
+            "",
+            "  ● sum › subtracts",
+            "",
+            "    expect(received).toBe(expected) // Object.is equality",
+            "",
+            "    Expected: 2",
+            "    Received: 1",
+            "",
+            "      3 |   it('subtracts', () => {",
+            "    > 4 |     expect(1).toBe(2);",
+            "        |               ^",
+            "      5 |   });",
+            "",
+            "      at Object.<anonymous> (node_modules/jest-circus/build/run.js:1:1)",
+            "      at Object.<anonymous> (src/sum.test.js:4:15)",
+            "      at Object.<anonymous> (src/other.js:9:9)",
+            "",
+            "  ● Console",
+            "",
+            "    console.log",
+            "      noise",
+            "",
+            "Test Suites: 1 failed, 1 total",
+            "Tests:       1 failed, 1 passed, 2 total",
+            "Snapshots:   0 total",
+            "Time:        0.5 s",
+            "Ran all test suites.",
+        ]);
+        let t = JsTest.trim(&l);
+        let text = t.body.join("\n");
+        assert!(text.contains("● sum › subtracts"), "{text}");
+        assert!(text.contains("Expected: 2") && text.contains("Received: 1"), "{text}");
+        assert!(text.contains("src/sum.test.js:4:15"), "{text}");
+        assert!(!text.contains("jest-circus") && !text.contains("other.js"), "{text}");
+        assert!(!text.contains("adds") && !text.contains("noise") && !text.contains("Console"), "{text}");
+        assert!(text.contains("Test Suites: 1 failed, 1 total"), "{text}");
+        assert_eq!(t.verdict, "[output-trim] tests: FAILED — 1 failed, 1 passed");
+    }
+
+    #[test]
+    fn detects_by_content() {
+        for case in ["vitest_fail", "vitest_pass"] {
+            assert_eq!(rules::by_content(&fixture("jstest", case)).name(), "jstest", "{case}");
+        }
+        assert!(JsTest.matches_content(&lines(&["Tests:       1 failed, 2 total"])));
+    }
+
+    #[test]
+    fn detects_by_command() {
+        for cmd in [
+            "vitest run",
+            "jest --ci",
+            "npx vitest run",
+            "npx jest",
+            "npm test",
+            "npm run test",
+            "npm run test:unit",
+            "pnpm test",
+            "pnpm run test",
+            "yarn test",
+            "cd x && npm test | tail",
+        ] {
+            assert_eq!(rules::by_command(cmd).map(|r| r.name()), Some("jstest"), "{cmd}");
+        }
+        for cmd in ["npm run build", "npm install", "yarn", "pnpm install", "npx eslint ."] {
+            assert_ne!(rules::by_command(cmd).map(|r| r.name()), Some("jstest"), "{cmd}");
+        }
+    }
+}
+
+mod node_install {
+    use super::*;
+    use output_trim::engine::{self, LogTarget};
+    use output_trim::rules::node_install::NodeInstall;
+    use output_trim::rules::{self, Outcome, Rule};
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn reduction(case: &str) -> (usize, usize) {
+        let l = fixture("node_install", case);
+        let dir = tempfile::tempdir().unwrap();
+        let out = engine::apply(&l, &NodeInstall, LogTarget::SaveIn(dir.path()), false);
+        (out.kept_chars, out.total_chars)
+    }
+
+    #[test]
+    fn npm_install_keeps_summary_and_collapses_deprecations() {
+        let t = NodeInstall.trim(&fixture("node_install", "npm_install"));
+        let text = t.body.join("\n");
+        assert!(text.contains("added 414 packages, and audited 415 packages in 48s"), "{text}");
+        assert!(text.contains("38 vulnerabilities (8 moderate, 28 high, 2 critical)"), "{text}");
+        for noise in ["Progress:", "fund", "audit fix", "npm audit"] {
+            assert!(!text.contains(noise), "{noise}: {text}");
+        }
+        assert!(!text.contains("npm warn deprecated"), "{text}");
+        let collapsed = "9 deprecation warnings (inflight, @humanwhocodes/config-array, rimraf, glob, har-validator, @humanwhocodes/object-schema, uuid, request, …)";
+        assert_eq!(t.body.iter().filter(|l| l.as_str() == collapsed).count(), 1, "{text}");
+        assert_eq!(t.outcome, Outcome::Pass);
+        assert_eq!(t.verdict, "[output-trim] install: PASSED — added 414 packages");
+    }
+
+    #[test]
+    fn npm_install_is_reduced() {
+        let (kept, total) = reduction("npm_install");
+        assert!(total >= 1500, "{total}");
+        assert!(kept * 100 <= total * 70, "kept {kept} of {total}");
+    }
+
+    #[test]
+    fn pnpm_install_keeps_packages_and_done() {
+        let t = NodeInstall.trim(&fixture("node_install", "pnpm_install"));
+        let text = t.body.join("\n");
+        assert!(text.contains("Packages: +405"), "{text}");
+        assert!(text.contains("Done in 23.3s using pnpm v10.15.0"), "{text}");
+        assert!(text.contains("+ vitest 5.0.5"), "{text}");
+        assert!(text.contains("5 deprecated subdependencies found"), "{text}");
+        assert!(t.body.iter().all(|l| !l.contains("Progress:") && !l.starts_with("++++")), "{text}");
+        assert!(text.contains("4 deprecation warnings (request, rimraf, glob, eslint)"), "{text}");
+        assert_eq!(t.outcome, Outcome::Pass);
+        assert_eq!(t.verdict, "[output-trim] install: PASSED — added 405 packages");
+    }
+
+    #[test]
+    fn pnpm_install_is_reduced() {
+        let (kept, total) = reduction("pnpm_install");
+        assert!(total >= 1500, "{total}");
+        assert!(kept * 100 <= total * 50, "kept {kept} of {total}");
+    }
+
+    #[test]
+    fn npm_err_keeps_404_error() {
+        let t = NodeInstall.trim(&fixture("node_install", "npm_err"));
+        let text = t.body.join("\n");
+        assert!(text.contains("npm error code E404"), "{text}");
+        assert!(
+            text.contains("npm error 404 Not Found - GET https://registry.npmjs.org/this-package-does-not-exist-ot"),
+            "{text}"
+        );
+        assert_eq!(t.body.iter().filter(|l| l.as_str() == "npm error 404").count(), 1, "{text}");
+        assert_eq!(t.outcome, Outcome::Fail);
+        assert_eq!(t.verdict, "[output-trim] install: FAILED");
+    }
+
+    #[test]
+    fn peer_and_eresolve_lines_are_kept() {
+        let l = lines(&[
+            "npm warn ERESOLVE overriding peer dependency",
+            "npm warn While resolving: a@1.0.0",
+            "npm warn Found: react@17.0.2",
+            " WARN  Issues with peer dependencies found",
+            "added 3 packages in 2s",
+        ]);
+        let t = NodeInstall.trim(&l);
+        assert_eq!(t.body.len(), 5, "{:#?}", t.body);
+        assert_eq!(t.outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn unexpected_error_line_in_odd_position_is_kept() {
+        let l = lines(&[
+            "Progress: resolved 10, reused 0, downloaded 0, added 0",
+            "added 3 packages in 2s",
+            "gyp info it worked if it ends with ok",
+            "gyp ERR! build error",
+            "Error: EACCES: permission denied, mkdir 'C:\\x'",
+            "Done in 2s",
+        ]);
+        let t = NodeInstall.trim(&l);
+        assert!(t.body.iter().any(|b| b == "gyp ERR! build error"), "{:#?}", t.body);
+        assert!(t.body.iter().any(|b| b.starts_with("Error: EACCES")), "{:#?}", t.body);
+        assert_eq!(t.outcome, Outcome::Fail);
+    }
+
+    #[test]
+    fn detects_by_content() {
+        for case in ["npm_install", "pnpm_install", "npm_err"] {
+            assert_eq!(rules::by_content(&fixture("node_install", case)).name(), "node_install", "{case}");
+        }
+    }
+
+    #[test]
+    fn detects_by_command() {
+        for cmd in [
+            "npm i",
+            "npm install",
+            "npm install -D vitest",
+            "npm ci",
+            "pnpm i",
+            "pnpm install",
+            "pnpm add react",
+            "yarn",
+            "yarn install",
+            "yarn add react",
+            "cd x && npm ci | tail",
+        ] {
+            assert_eq!(rules::by_command(cmd).map(|r| r.name()), Some("node_install"), "{cmd}");
+        }
+        for cmd in ["yarn test", "npm run build", "npm test", "pnpm run dev"] {
+            assert_ne!(rules::by_command(cmd).map(|r| r.name()), Some("node_install"), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn registry_order() {
+        let names: Vec<_> = rules::registry().iter().map(|r| r.name()).collect();
+        assert_eq!(names, ["dotnet", "cargo", "tsc", "jstest", "node_install", "generic"]);
     }
 }

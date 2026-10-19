@@ -1,0 +1,38 @@
+ WARN  deprecated request@2.88.2: request has been deprecated, see https://github.com/request/request/issues/3142
+Progress: resolved 1, reused 0, downloaded 0, added 0
+ WARN  deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+ WARN  deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting the maintainer
+ WARN  deprecated eslint@8.57.1: This version is no longer supported. Please see https://eslint.org/version-support for other options.
+Progress: resolved 57, reused 32, downloaded 11, added 0
+Progress: resolved 99, reused 43, downloaded 34, added 0
+Progress: resolved 168, reused 83, downloaded 53, added 0
+Progress: resolved 240, reused 134, downloaded 70, added 0
+Progress: resolved 295, reused 167, downloaded 97, added 0
+Progress: resolved 356, reused 212, downloaded 111, added 0
+Progress: resolved 415, reused 259, downloaded 132, added 0
+Progress: resolved 431, reused 263, downloaded 133, added 0
+Progress: resolved 433, reused 263, downloaded 133, added 0
+ WARN  5 deprecated subdependencies found: @humanwhocodes/config-array@0.13.0, @humanwhocodes/object-schema@2.0.3, har-validator@5.1.5, inflight@1.0.6, uuid@3.4.0
+Packages: +405
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 449, reused 264, downloaded 140, added 8
+Progress: resolved 449, reused 264, downloaded 140, added 74
+Progress: resolved 449, reused 264, downloaded 140, added 170
+Progress: resolved 449, reused 264, downloaded 140, added 252
+Progress: resolved 449, reused 264, downloaded 140, added 281
+Progress: resolved 449, reused 264, downloaded 140, added 391
+Progress: resolved 449, reused 264, downloaded 140, added 404
+Progress: resolved 449, reused 264, downloaded 141, added 404
+Progress: resolved 449, reused 264, downloaded 141, added 405, done
+
+devDependencies:
++ eslint 8.57.1 (10.13.0 is available) deprecated
++ glob 7.2.3 (13.0.6 is available) deprecated
++ jest 29.7.0 (30.5.2 is available)
++ mkdirp 0.5.6 (3.0.1 is available)
++ request 2.88.2 deprecated
++ rimraf 3.0.2 (6.1.3 is available) deprecated
++ typescript 7.0.2
++ vitest 5.0.5
+
+Done in 23.3s using pnpm v10.15.0
