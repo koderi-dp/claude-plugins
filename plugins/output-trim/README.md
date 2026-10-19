@@ -15,7 +15,9 @@ Failed Studio.Api.Tests.AuthTests.Login_Expired
 [output-trim] kept 0.3k of 50k chars · full: C:\Users\…\Temp\output-trim\20261020-153212-ab12.log
 ```
 
-The full path of the untrimmed log is always in the footer, so nothing is lost.
+When anything was trimmed, the footer gives the path of the saved full log. Small
+outputs pass through unchanged, with no footer. If saving the log failed, the footer
+says "full log unavailable".
 
 A session-start note tells Claude the tool exists. A post hook shrinks large
 successful output from known noisy commands (dotnet, cargo, npm, docker logs and
@@ -32,8 +34,13 @@ Bash(output-trim *)
 Use `/permissions` and add it under Allow, or put it in `permissions.allow` in
 `~/.claude/settings.json`.
 
-This is safe: `output-trim` only reads stdin and prints text. It never executes
-anything.
+Claude Code checks each segment of a pipeline separately, so
+`dotnet test 2>&1 | output-trim` also needs your existing rule for the left side
+(for example `Bash(dotnet *)`). `Bash(output-trim *)` only covers the filter.
+
+This is safe: `output-trim` reads stdin (in hook mode, also the output file Claude
+Code itself saved), writes and prunes its own log folder at `%TEMP%\output-trim`
+(logs older than 24 hours are deleted), and never executes anything.
 
 ## Limitation
 
