@@ -2,6 +2,14 @@
 resolver = "2"
 members = ["crates/*"]
 
+# Slimmer debug builds: line tables keep panic backtraces readable for our
+# crates; dependencies (tree-sitter grammars, tokio, rmcp) get no debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 opt-level = 3
 lto = true
