@@ -1,6 +1,6 @@
 [package]
 name = "code-outline"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "MCP server that outlines source files and reads single symbols via tree-sitter"
 license = "MIT"
