@@ -11,6 +11,11 @@
       "name": "output-trim",
       "source": "./plugins/output-trim",
       "description": "Trims noisy build/test/log output to errors, failures and summaries."
+    },
+    {
+      "name": "code-outline",
+      "source": "./plugins/code-outline",
+      "description": "Symbol outlines and single-symbol reads via tree-sitter (Rust, TS/JS, Python, C#)."
     }
   ]
 }

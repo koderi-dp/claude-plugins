@@ -20,11 +20,22 @@ then reads **just one symbol**.
 ### Success criteria
 
 - `outline` of a source file costs ≥5× fewer tokens than reading that file.
-- `read_symbol` output is line-numbered exactly like Read, so Claude can Edit
-  straight after it without re-reading.
+- `read_symbol` output is line-numbered exactly like Read, and its header gives
+  the symbol's exact line range, so before an Edit (which needs a prior Read of
+  the file) Claude does one cheap Read with offset/limit of just that range.
 - Files with syntax errors (half-written code) still give a useful outline.
 - All six grammars compile into the exe offline with MSVC; no runtime downloads, no DLLs.
 - Outlining `crates/**/*.rs` in this repo returns in under 100 ms.
+
+Verified (2026-10-20), release build:
+
+- `code-outline.exe` is 14,563,328 bytes (13.9 MiB), all six grammars statically linked.
+- `outline {"paths": "crates/**/*.rs", "limit": 500}` through the exe over stdio from the
+  repo root: 45-52 ms per call (3 runs, warm process), 14.5 KB of output.
+- `outline` of `crates/everything-find/src/pipeline.rs` is 2,382 bytes against a
+  27,210-byte file: 11.4x smaller (bytes as a token proxy), above the 5x target.
+- A headless `claude -p --plugin-dir plugins/code-outline` run called the `outline` tool
+  on `crates/everything-find/src/server.rs` and answered `fn find` is lines 20-28.
 
 ### Non-goals
 
@@ -92,7 +103,8 @@ Globs respect `.gitignore` (same rules as everything-find: nested `.gitignore`,
 `.git/info/exclude`, git root) and silently skip unsupported files. Files are
 sorted by path.
 
-Output (plain text, two-space indent per nesting level, `start-end` 1-based inclusive):
+Output (plain text, two-space indent per nesting level, at most 64 levels —
+deeper symbols are listed at level 64 — `start-end` 1-based inclusive):
 
 ```
 src/api/client.ts (210 lines)
@@ -202,9 +214,11 @@ The TSX grammar reuses `typescript.scm`; the query is compiled once per `Lang`.
 - **`files.rs`**: `repo_root()` (`CLAUDE_PROJECT_DIR` if set and exists, else
   cwd; canonicalised with `dunce`, matching everything-find's fix) and
   `expand(root, patterns, limit) -> Expanded { files, hidden_by_gitignore, unsupported, total }`.
-  Literal paths are taken as-is; patterns with glob metacharacters walk the
-  root with `ignore::WalkBuilder` and match with `globset`. Root-prefix
-  comparison is case-insensitive.
+  A path that exists is taken as-is, even with `[` or `{` in it
+  (`app/[id]/page.tsx`); an existing directory expands as `<dir>/**/*`. Other
+  patterns with glob metacharacters walk the root with `ignore::WalkBuilder`
+  and match with `globset`, case-insensitively. Root-prefix comparison is
+  case-insensitive.
 - **`format.rs`**: pure functions `outline(files: &[FileOutline], opts) -> String`
   and `numbered(source, start, end) -> String`. Knows nothing about tree-sitter.
 - **`pipeline.rs`**: `run_outline(&OutlineParams, &Context) -> Result<String, String>`
@@ -236,12 +250,14 @@ server never panics on bad input.
 | Situation | Message |
 |---|---|
 | File not found | `<path> not found.` |
-| Unsupported extension (named explicitly) | `code-outline doesn't support .<ext> files — use Read.` |
-| Glob matched nothing | `0 files match <pattern> in <root>`, plus ` (N hidden by .gitignore)` when N > 0 |
+| Unsupported extension (named explicitly) | `code-outline doesn't support .<ext> files — use Read.` (no extension: `code-outline doesn't support <filename> — use Read.`) |
+| Directory passed to `outline` | Outlined as `<dir>/**/*` |
+| Directory passed to `read_symbol` | `<path> is a directory — pass a file.` |
+| Glob matched nothing | `0 files match <pattern> in <root>`, plus ` (N hidden by .gitignore)` when N > 0; in multi-pattern outlines, one such line per empty pattern |
 | Glob matched only unsupported files | `<N> files matched but none are supported (rs, ts, tsx, js, jsx, mjs, cjs, py, cs) — use Read.` |
 | File > 2 MB | `<path> is <size>, over the 2 MB limit — use Read with offset/limit.` |
 | Not valid UTF-8 | Decode lossily; append `(file is not valid UTF-8; some characters replaced)` |
-| No symbols | `<path> (N lines): no symbols found` |
+| No symbols | `<path> (N lines): no symbols found` (any notes follow on their own lines) |
 | Syntax errors | Normal output plus `(syntax errors near lines a, b, c — outline may be incomplete)` |
 | `read_symbol` ambiguous | `<symbol> matches N symbols — pass line:` then one `kind qualified.name start-end` per line |
 | `read_symbol` not found | `No symbol <symbol> in <path>. Closest: a, b, c` (or `No symbol <symbol> in <path>.` with no suggestions) |
