@@ -1,0 +1,15 @@
+npm notice run js@1.0.0 npx
+npm notice run vitest run --reporter=default
+
+ RUN  v5.0.5 C:/src/js
+
+ ✓ src/string.test.ts (3 tests) 3ms
+ ✓ src/array.test.ts (3 tests) 3ms
+ ✓ src/date.test.ts (3 tests) 3ms
+ ✓ src/math.test.ts (3 tests) 3ms
+
+ Test Files  4 passed (4)
+      Tests  12 passed (12)
+   Start at  01:10:20
+   Duration  242ms (transform 42%, import 38%, worker 13%, tests 7%)
+

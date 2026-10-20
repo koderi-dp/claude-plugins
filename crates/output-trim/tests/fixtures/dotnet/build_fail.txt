@@ -1,0 +1,13 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+C:\src\Fx\Lib\Calc.cs(7,29): error CS0029: Cannot implicitly convert type 'string' to 'int' [C:\src\Fx\Lib\Lib.csproj]
+C:\src\Fx\Lib\Calc.cs(7,13): warning CS0168: The variable 'unused' is declared but never used [C:\src\Fx\Lib\Lib.csproj]
+
+Build FAILED.
+
+C:\src\Fx\Lib\Calc.cs(7,13): warning CS0168: The variable 'unused' is declared but never used [C:\src\Fx\Lib\Lib.csproj]
+C:\src\Fx\Lib\Calc.cs(7,29): error CS0029: Cannot implicitly convert type 'string' to 'int' [C:\src\Fx\Lib\Lib.csproj]
+    1 Warning(s)
+    1 Error(s)
+
+Time Elapsed 00:00:00.78

@@ -1,0 +1,14 @@
+  Determining projects to restore...
+  Restored C:\src\Fx\Lib.Tests\Lib.Tests.csproj (in 220 ms).
+  1 of 2 projects are up-to-date for restore.
+C:\src\Fx\Lib\Calc.cs(7,13): warning CS0168: The variable 'unused' is declared but never used [C:\src\Fx\Lib\Lib.csproj]
+  Lib -> C:\src\Fx\Lib\bin\Debug\net10.0\Lib.dll
+  Lib.Tests -> C:\src\Fx\Lib.Tests\bin\Debug\net10.0\Lib.Tests.dll
+
+Build succeeded.
+
+C:\src\Fx\Lib\Calc.cs(7,13): warning CS0168: The variable 'unused' is declared but never used [C:\src\Fx\Lib\Lib.csproj]
+    1 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:03.59

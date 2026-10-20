@@ -1,0 +1,61 @@
+npm notice run js@1.0.0 test
+npm notice run tsc --noEmit & vitest run --reporter=default
+src/typed.ts(2,9): error TS2322: Type 'string' is not assignable to type 'number'.
+
+ RUN  v5.0.5 C:/src/js
+
+ ✓ src/string.test.ts (3 tests) 3ms
+ ✓ src/array.test.ts (3 tests) 3ms
+ ❯ src/broken.test.ts (2 tests | 2 failed) 7ms
+   ❯ broken (2)
+     × adds numbers wrongly 5ms
+     × compares totals wrongly 1ms
+ ✓ src/math.test.ts (3 tests) 3ms
+ ✓ src/date.test.ts (3 tests) 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/broken.test.ts > broken > adds numbers wrongly
+AssertionError: expected 1 to be 2 // Object.is equality
+
+- Expected
++ Received
+
+- 2
++ 1
+
+ ❯ src/broken.test.ts:3:48
+      1| import { describe, it, expect } from 'vitest';
+      2| describe('broken', () => {
+      3|   it('adds numbers wrongly', () => { expect(1).toBe(2); });
+       |                                                ^
+      4|   it('compares totals wrongly', () => { expect(1).toBe(2); });
+      5| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/broken.test.ts > broken > compares totals wrongly
+AssertionError: expected 1 to be 2 // Object.is equality
+
+- Expected
++ Received
+
+- 2
++ 1
+
+ ❯ src/broken.test.ts:4:51
+      2| describe('broken', () => {
+      3|   it('adds numbers wrongly', () => { expect(1).toBe(2); });
+      4|   it('compares totals wrongly', () => { expect(1).toBe(2); });
+       |                                                   ^
+      5| });
+      6|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 4 passed (5)
+      Tests  2 failed | 12 passed (14)
+   Start at  01:10:39
+   Duration  246ms (import 55%, worker 19%, tests 13%, transform 12%, environment 1%)
+
