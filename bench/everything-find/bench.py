@@ -68,7 +68,7 @@ def parse_find(text):
 
 
 def run_glob(repo, cases, runs):
-    patterns = [g for _, g, _ in cases] * runs
+    patterns = [c["glob_pattern"] for c in cases] * runs
     prompt = ("Call the Glob tool once for each of these patterns, in this exact order, one call per "
               "message, with no path argument and nothing else: " + ", ".join(f"'{p}'" for p in patterns)
               + ". Then reply 'done'.")
