@@ -170,10 +170,18 @@ No async runtime.
 Trim only when all of these hold:
 
 1. `tool_name` is `Bash`, and `interrupted` and `isImage` are false.
-2. The command's first pipeline segment starts with a known noisy command:
-   `dotnet`, `cargo`, `npm`, `pnpm`, `yarn`, `npx`, `tsc`, `vitest`, `jest`,
-   `docker logs`, `docker compose logs`, `docker build`, `docker compose build`.
-   A leading `cd <dir> &&` is skipped before matching.
+2. A specific rule's `matches_command` claims the command's first pipeline segment
+   (the gate is derived from the rules, so the two cannot drift):
+   `cargo build|b|check|c|clippy|test|t|nextest|bench|doc|install` (after any
+   `+toolchain` or leading flags); `dotnet build|test|restore|publish|pack|clean`;
+   `npm`/`pnpm`/`yarn` install, ci, add and test commands (as the `node_install` and
+   `jstest` rules match them); `tsc`, `npx tsc`, `vitest`, `jest`; `docker logs`,
+   `docker compose logs`, `docker-compose logs`; `docker build`, `docker buildx
+   build`, `docker compose build`. The segment must not contain a flag starting with
+   `--list` (`--list`, `--list-tests`, `--listFiles`, `--listTests`, …),
+   `--nocapture`, `--showConfig`, `--version` or `--help`. So `cargo run`,
+   `cargo metadata`, `dotnet run`, `dotnet ef` and `cargo test -- --nocapture` are
+   left alone. A leading `cd <dir> &&` is skipped before matching.
 3. The command does not already pipe into `output-trim`, `tail`, `head`, `grep`,
    `Select-Object` or `Select-String` (Claude already chose a view).
 4. Combined stdout+stderr exceeds 2,000 characters, or `persistedOutputPath` is set.
@@ -204,12 +212,23 @@ The absolute path comes from the exe's own location (`std::env::current_exe`).
 2. **Select rule** (`rules/mod.rs`): by command when known (hook mode), otherwise by
    content signature. Signatures are checked in a fixed order; the first match wins.
    `generic` is the fallback.
-3. **Apply rule.** It returns `Trimmed { verdict: String, body: Vec<String>, outcome:
-   Pass | Fail | Unknown }`.
-4. **Cap**: the body is limited to about 6,000 characters. Overflow is replaced by
-   `… +N more <items>` (the rule names the item: errors, tests, lines).
+3. **Apply rule.** It returns `Trimmed { verdict: String, body: Vec<String>, tail:
+   Vec<String>, outcome: Pass | Fail | Unknown }`. The body is in priority order:
+   errors, then failed tests with their details, then warnings last (at most 3 per
+   code, such as a CS code or a cargo lint, then `+K more <code> warnings`). The
+   protected tail holds summaries (`test result:`, `Failed!`/`Passed!`, `Time
+   Elapsed`, the vitest/jest summary block, tsc's `+N more`/`by code:` lines, the
+   install summary, the docker image line) and, for `generic` and `docker_logs`,
+   the last N lines.
+4. **Cap**: body and tail together are limited to about 6,000 characters. Any
+   single line over 500 characters is cut to 500 plus `…`. The tail is always kept
+   and the rest of the budget goes to the start of the body; dropped body lines
+   become `… +N more lines` between body and tail. A tail over the budget keeps its
+   last lines.
 5. **Store**: if anything was dropped, save the normalised full text and append the
    footer. Hook mode with `persistedOutputPath` references that file instead.
+   Footer character counts use `k` (`0.3k`, `48.7k`, `50k`), and `M` from one
+   million characters (`55.4M`).
 6. **Threshold**: in hook mode, gate 5 applies. In filter mode, input under 1,500
    characters passes through unchanged (verdict line still added when a rule
    recognised the tool).
@@ -226,7 +245,8 @@ pub trait Rule {
 ```
 
 Each rule is a pure function of the normalised lines, so it is tested without
-processes or files.
+processes or files. Each rule fills `body` in the priority order above and puts its
+summaries in the protected `tail`.
 
 ## Rules
 
@@ -243,7 +263,7 @@ alone, plus warnings.
 | `jstest` (vitest/jest, also via `npm test`/`pnpm test`) | cmd `vitest`, `jest`; content `Test Files `, `Tests: ` | Failing test names, assertion diff, first stack frame outside `node_modules`, summary block | Passing test lines, progress |
 | `docker_logs` | cmd `docker logs`, `docker compose logs` (filter mode: no content signature; falls to `generic`) | Last 40 lines verbatim. Above them: warning/error/exception lines with following stack-trace lines; runs of lines identical after stripping timestamps, hex ids and numbers collapse to `(×N similar) <first line>` | Repetition |
 | `docker_build` | cmd `docker build`, `docker compose build`; content `#\d+ \[` | Failing step and its error, final `naming to`/image line | Layer download/extract progress |
-| `generic` | fallback (filter mode only; never selected in hook mode) | Lines matching `error|warn|fail|panic|exception` (case-insensitive) with 2 lines of context, repeated-line collapse, first 15 and last 30 lines | The rest |
+| `generic` | fallback (filter mode only; never selected in hook mode) | Repeated-line collapse over the whole input first; then the first 15 entries, middle entries matching `error|warn|fail|panic|exception` (case-insensitive) with 2 entries of context, every `(×N similar)` run, and the last 30 entries (tail). Each skipped gap becomes `… N lines omitted`, with N counted in input lines | The rest |
 
 Outcome rules: `Fail` only when a rule sees a definite failure marker (failed-test
 count > 0, `error CS`/`error[E`/`error TS`, `npm ERR!`, `ERR_PNPM_`, `Build FAILED.`,
