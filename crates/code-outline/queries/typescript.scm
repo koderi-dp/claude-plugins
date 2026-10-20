@@ -15,8 +15,7 @@
   name: (property_identifier) @name
   (#eq? @name "constructor")) @item.constructor
 
-; overload signatures and abstract methods, class members only (interface
-; members are not outlined)
+; overload signatures and abstract methods
 (class_body
   (method_signature
     name: (_) @name
@@ -27,6 +26,20 @@
     (#eq? @name "constructor")) @item.constructor)
 (class_body
   (abstract_method_signature name: (_) @name) @item.method)
+(class_body
+  (public_field_definition name: (_) @name) @item.property)
+
+; interface and object type members. extract.rs keeps object type members
+; only for `type X = { ... }` and nested property types, not inline
+; parameter or return types.
+(interface_body
+  (property_signature name: (_) @name) @item.property)
+(interface_body
+  (method_signature name: (_) @name) @item.method)
+(object_type
+  (property_signature name: (_) @name) @item.property)
+(object_type
+  (method_signature name: (_) @name) @item.method)
 
 (interface_declaration name: (type_identifier) @name) @item.interface
 (type_alias_declaration name: (type_identifier) @name) @item.type

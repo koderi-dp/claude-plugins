@@ -86,6 +86,19 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
             items.push((def, kind, name_node));
         }
     }
+    // Outer members first, so a nested member can check its owner was kept.
+    items.sort_by_key(|(def, _, _)| def.start_byte());
+    let mut kept_members: HashSet<usize> = HashSet::new();
+    items.retain(|(def, _, _)| {
+        if !matches!(def.kind(), "property_signature" | "method_signature") {
+            return true;
+        }
+        let keep = keep_member(*def, &kept_members);
+        if keep {
+            kept_members.insert(def.id());
+        }
+        keep
+    });
 
     let defs: HashSet<usize> = items.iter().map(|(def, _, _)| def.id()).collect();
     let placed = placements(root, &defs, lang, bytes);
@@ -129,7 +142,27 @@ pub fn extract(source: &str, lang: Lang) -> Extracted {
 
     Extracted {
         symbols: nest(flats),
-        error_lines: error_lines(root),
+        error_lines: error_lines(root, lang, bytes),
+    }
+}
+
+/// Members of an object type literal are outlined only when the literal is a
+/// type alias's value or the type of an outlined member, so inline parameter
+/// and return types such as `f(o: { a: string })` add nothing. Interface and
+/// class members are always kept.
+fn keep_member(def: Node, kept: &HashSet<usize>) -> bool {
+    let Some(obj) = def.parent().filter(|p| p.kind() == "object_type") else {
+        return true;
+    };
+    let Some(owner) = obj.parent() else {
+        return false;
+    };
+    match owner.kind() {
+        "type_alias_declaration" => true,
+        "type_annotation" => owner
+            .parent()
+            .is_some_and(|p| p.kind() == "property_signature" && kept.contains(&p.id())),
+        _ => false,
     }
 }
 
@@ -355,21 +388,39 @@ fn nest(mut flats: Vec<Flat>) -> Vec<Symbol> {
     roots
 }
 
-fn error_lines(root: Node) -> Vec<usize> {
+/// A TypeScript type parameter list using `in`/`out` variance annotations
+/// (TS 4.7), which tree-sitter-typescript 0.23 cannot parse. Its errors are
+/// not reported: they say nothing about the outline, which stays intact.
+fn variance_list(node: Node, lang: Lang, bytes: &[u8]) -> bool {
+    if !matches!(lang, Lang::TypeScript | Lang::Tsx) || node.kind() != "type_parameters" {
+        return false;
+    }
+    let mut walk = node.walk();
+    // Depending on what follows, the modifiers parse as an ERROR before the
+    // parameter or as the parameter's name with the rest in an ERROR.
+    node.named_children(&mut walk)
+        .filter(|c| matches!(c.kind(), "type_parameter" | "ERROR"))
+        .any(|c| {
+            let first = c.utf8_text(bytes).unwrap_or("").split_whitespace().next();
+            matches!(first, Some("in" | "out"))
+        })
+}
+
+fn error_lines(root: Node, lang: Lang, bytes: &[u8]) -> Vec<usize> {
     let mut rows = Vec::new();
     if root.has_error() {
-        collect_errors(root, &mut rows);
+        collect_errors(root, lang, bytes, &mut rows);
     }
     rows
 }
 
 /// Pre-order walk (rows come out ascending) that stops at `MAX_ERROR_LINES`
 /// distinct lines. Iterative so deeply nested files cannot overflow the stack.
-fn collect_errors(root: Node, rows: &mut Vec<usize>) {
+fn collect_errors(root: Node, lang: Lang, bytes: &[u8], rows: &mut Vec<usize>) {
     let mut cursor = root.walk();
     loop {
         let node = cursor.node();
-        if node.has_error() {
+        if node.has_error() && !variance_list(node, lang, bytes) {
             if node.is_error() || node.is_missing() {
                 let row = node.start_position().row + 1;
                 if !rows.contains(&row) {

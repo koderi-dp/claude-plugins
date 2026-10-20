@@ -29,6 +29,7 @@ fn outline_of(fixture: &str) -> String {
 fn typescript_outline() {
     let expected = [
         "interface ClientOptions 1-4",
+        "  property baseUrl 3-3",
         "type Id 6-6",
         "enum Color 8-11",
         "namespace Util 13-15",
@@ -141,4 +142,73 @@ fn csharp_signature_skips_attributes() {
     let syms = extract_fixture("sample.cs");
     let cls = find(&find(&syms, "Demo").children, "Store");
     assert_eq!(cls.signature, "public class Store");
+}
+
+#[test]
+fn typescript_declaration_members() {
+    let expected = [
+        "interface Table 1-11",
+        "  property _reactivity 3-4",
+        "  property _rowModels 5-5",
+        "  property options 6-8",
+        "    property debug 7-7",
+        "  method getState 9-9",
+        "type Options 13-16",
+        "  property data 14-14",
+        "  method onChange 15-15",
+        "type Mapped 18-18",
+        "class Store 20-25",
+        "  property value 21-21",
+        "  property _listeners 22-22",
+        "  constructor 23-23",
+        "  method get 24-24",
+        "function make 27-27",
+    ];
+    assert_eq!(outline_of("declarations.d.ts"), expected.join("\n"));
+}
+
+#[test]
+fn typescript_member_signatures() {
+    let syms = extract_fixture("declarations.d.ts");
+    let table = find(&syms, "Table");
+    assert_eq!(
+        find(&table.children, "_reactivity").signature,
+        "readonly _reactivity: Bindings"
+    );
+    assert_eq!(
+        find(&table.children, "getState").signature,
+        "getState(): State"
+    );
+}
+
+#[test]
+fn typescript_variance_annotations_are_not_syntax_errors() {
+    let path = format!(
+        "{}/tests/fixtures/declarations.d.ts",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let source = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        extract(&source, Lang::TypeScript).error_lines,
+        Vec::<usize>::new()
+    );
+}
+
+#[test]
+fn typescript_real_errors_still_reported_beside_variance() {
+    let x = extract(
+        "interface A<in out T> {}\nlet x = ;\ntype B<out T> = T;\n",
+        Lang::TypeScript,
+    );
+    assert_eq!(x.error_lines, vec![2]);
+}
+
+#[test]
+fn typescript_interface_member_resolves() {
+    use code_outline::resolve::{Resolution, resolve};
+    let syms = extract_fixture("declarations.d.ts");
+    let r = resolve(&syms, Lang::TypeScript, "Table._rowModels", None);
+    assert!(matches!(r, Resolution::Found(h) if h.qualified == "Table._rowModels"));
+    let r = resolve(&syms, Lang::TypeScript, "Table.options.debug", None);
+    assert!(matches!(r, Resolution::Found(h) if h.symbol.start_line == 7));
 }
