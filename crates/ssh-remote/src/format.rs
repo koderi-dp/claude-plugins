@@ -30,13 +30,7 @@ pub fn render_exec(
     let (shown_err, trimmed_err) = trim_lines(&stderr, max_lines);
 
     let mut out = String::new();
-    if let HostKeyStatus::Changed { old, new } = &o.key_status {
-        out.push_str(&format!(
-            "warning: host key for {} changed ({old} → {new}), accepted
-",
-            o.host
-        ));
-    }
+    out.push_str(&key_warning(&o.host, &o.key_status));
     let status = match (o.timed_out, o.exit) {
         (Some(s), _) => format!("timed out after {s} s"),
         (None, Some(code)) => format!("exit {code}"),
@@ -75,21 +69,31 @@ full output: not saved ({e})")),
 }
 
 pub fn render_download(
+    host: &str,
     remote: &str,
     local: &Path,
     bytes: u64,
     elapsed: Duration,
     key_status: &HostKeyStatus,
 ) -> String {
-    // The host is not part of this signature, so the changed-key warning
-    // cannot be rendered here; the caller prepends it if needed.
-    let _ = key_status;
     format!(
-        "downloaded {remote} → {} ({}, {})",
+        "{}downloaded {remote} → {} ({}, {})",
+        key_warning(host, key_status),
         local.display(),
         size(bytes),
         secs(elapsed)
     )
+}
+
+/// The changed-host-key warning line (with trailing newline), or empty.
+fn key_warning(host: &str, status: &HostKeyStatus) -> String {
+    match status {
+        HostKeyStatus::Changed { old, new } => {
+            format!("warning: host key for {host} changed ({old} → {new}), accepted
+")
+        }
+        _ => String::new(),
+    }
 }
 
 fn push_section(out: &mut String, text: &str) {
@@ -335,6 +339,7 @@ mod tests {
     #[test]
     fn download_line() {
         let out = render_download(
+            "h",
             "/var/log/syslog",
             Path::new(r"C:\x\syslog"),
             2_516_582,
@@ -345,11 +350,22 @@ mod tests {
     }
 
     #[test]
+    fn download_changed_key_warning_first_line() {
+        let st = HostKeyStatus::Changed { old: "SHA256:old".into(), new: "SHA256:new".into() };
+        let out = render_download("h", "/f", Path::new("g"), 1, Duration::from_millis(0), &st);
+        assert_eq!(
+            out,
+            "warning: host key for h changed (SHA256:old → SHA256:new), accepted
+downloaded /f → g (1 B, 0.0 s)"
+        );
+    }
+
+    #[test]
     fn download_small_and_kb_sizes() {
         let st = HostKeyStatus::New;
-        let out = render_download("/f", Path::new("g"), 512, Duration::from_millis(0), &st);
+        let out = render_download("h", "/f", Path::new("g"), 512, Duration::from_millis(0), &st);
         assert_eq!(out, "downloaded /f → g (512 B, 0.0 s)");
-        let out = render_download("/f", Path::new("g"), 1536, Duration::from_millis(0), &st);
+        let out = render_download("h", "/f", Path::new("g"), 1536, Duration::from_millis(0), &st);
         assert_eq!(out, "downloaded /f → g (1.5 KB, 0.0 s)");
     }
 }
