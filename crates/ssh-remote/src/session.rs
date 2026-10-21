@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use russh::client::{self, AuthResult};
+use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse, Prompt};
 use russh::keys::{self, Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
-use russh::{ChannelMsg, Preferred, kex, mac};
+use russh::{ChannelMsg, MethodKind, MethodSet, Preferred, kex, mac};
 
 use crate::format::{CAPTURE_HALF, Capture, ExecOutcome};
 use crate::known_hosts::{HostKeyStatus, KnownHosts};
@@ -18,6 +18,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// closes, so the pool reconnects on the next call.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const KEEPALIVE_MAX: usize = 3;
+/// Keyboard-interactive prompt rounds answered before giving up.
+const KBD_ROUNDS: usize = 3;
 
 /// Credentials for one user. The key is a path plus an optional passphrase. Each `Secret`
 /// remembers its file, so errors can name it.
@@ -185,6 +187,51 @@ impl KeyProblem {
     }
 }
 
+/// Whether keyboard-interactive is worth trying after a password failure. An empty list means
+/// the server did not say.
+fn offers_keyboard_interactive(remaining: &MethodSet) -> bool {
+    remaining.is_empty() || remaining.contains(&MethodKind::KeyboardInteractive)
+}
+
+/// Keyboard-interactive with the password: answers up to `KBD_ROUNDS` prompt rounds. True on
+/// success.
+async fn keyboard_interactive(
+    handle: &mut client::Handle<Handler>,
+    user: &str,
+    pw: &Secret,
+) -> Result<bool, russh::Error> {
+    let mut resp = handle
+        .authenticate_keyboard_interactive_start(user, None::<String>)
+        .await?;
+    for _ in 0..KBD_ROUNDS {
+        match resp {
+            KeyboardInteractiveAuthResponse::Success => return Ok(true),
+            KeyboardInteractiveAuthResponse::Failure { .. } => return Ok(false),
+            KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                resp = handle
+                    .authenticate_keyboard_interactive_respond(kbd_answers(&prompts, pw.expose()))
+                    .await?;
+            }
+        }
+    }
+    Ok(matches!(resp, KeyboardInteractiveAuthResponse::Success))
+}
+
+/// The password for every hidden prompt, an empty answer for every echoed one (those ask for
+/// something other than the password, e.g. a user name or a banner acknowledgement).
+fn kbd_answers(prompts: &[Prompt], pw: &str) -> Vec<String> {
+    prompts
+        .iter()
+        .map(|p| {
+            if p.echo {
+                String::new()
+            } else {
+                pw.to_string()
+            }
+        })
+        .collect()
+}
+
 fn reach_error(t: &Target, e: &russh::Error) -> String {
     let why = match e {
         russh::Error::IO(io) => match io.kind() {
@@ -275,13 +322,25 @@ impl Session {
                     return Ok(());
                 }
             }
-            if let Some(pw) = &creds.password
-                && let AuthResult::Success = handle
+            if let Some(pw) = &creds.password {
+                let offered = match handle
                     .authenticate_password(&t.user, pw.expose())
                     .await
                     .map_err(transport)?
-            {
-                return Ok(());
+                {
+                    AuthResult::Success => return Ok(()),
+                    AuthResult::Failure {
+                        remaining_methods, ..
+                    } => offers_keyboard_interactive(&remaining_methods),
+                };
+                // Servers that take passwords only through PAM ask for them this way.
+                if offered
+                    && keyboard_interactive(&mut handle, &t.user, pw)
+                        .await
+                        .map_err(transport)?
+                {
+                    return Ok(());
+                }
             }
             let key_use = match (&key, &key_problem) {
                 (Some((p, _)), _) => Some(KeyUse::Tried(p)),
@@ -496,6 +555,32 @@ mod tests {
             .message(Path::new(r"C:\k\id"));
         assert!(msg.contains(&pf.display().to_string()), "{msg}");
         assert!(!msg.contains("hunter2"), "{msg}");
+    }
+
+    #[test]
+    fn kbd_answers_password_only_for_hidden_prompts() {
+        let prompt = |text: &str, echo| Prompt {
+            prompt: text.into(),
+            echo,
+        };
+        let prompts = [
+            prompt("Password: ", false),
+            prompt("Login name: ", true),
+            prompt("Verification: ", false),
+        ];
+        assert_eq!(kbd_answers(&prompts, "pw"), ["pw", "", "pw"]);
+        assert!(kbd_answers(&[], "pw").is_empty());
+    }
+
+    #[test]
+    fn keyboard_interactive_only_when_offered() {
+        let set = |m: &[MethodKind]| MethodSet::from(m);
+        assert!(offers_keyboard_interactive(&set(&[
+            MethodKind::Password,
+            MethodKind::KeyboardInteractive
+        ])));
+        assert!(offers_keyboard_interactive(&set(&[])));
+        assert!(!offers_keyboard_interactive(&set(&[MethodKind::PublicKey])));
     }
 
     #[test]
