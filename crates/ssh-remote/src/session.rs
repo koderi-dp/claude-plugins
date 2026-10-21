@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse, Prompt};
 use russh::keys::{self, Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
-use russh::{ChannelMsg, MethodKind, MethodSet, Preferred, kex, mac};
+use russh::{ChannelMsg, MethodKind, MethodSet, Preferred, Sig, kex, mac};
 
 use crate::format::{CAPTURE_HALF, Capture, ExecOutcome};
 use crate::known_hosts::{HostKeyStatus, KnownHosts};
@@ -43,6 +43,22 @@ pub struct Session {
     pub key_status: HostKeyStatus,
 }
 
+/// Serialises known-hosts updates, so parallel connects do not lose each other's lines.
+static KNOWN_HOSTS_LOCK: Mutex<()> = Mutex::new(());
+
+/// `check_and_record` under the process-wide known-hosts lock.
+fn record_host_key(
+    known: &KnownHosts,
+    host: &str,
+    port: u16,
+    fingerprint: &str,
+) -> std::io::Result<HostKeyStatus> {
+    let _guard = KNOWN_HOSTS_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    known.check_and_record(host, port, fingerprint)
+}
+
 /// What `check_server_key` saw: the known-hosts outcome, or why it could not be recorded.
 type KeyCheck = Arc<Mutex<Option<Result<HostKeyStatus, String>>>>;
 
@@ -68,10 +84,8 @@ impl client::Handler for Handler {
             }
         }
         .to_string();
-        let status = self
-            .known
-            .check_and_record(&self.host, self.port, &fingerprint)
-            .map_err(|e| {
+        let status =
+            record_host_key(&self.known, &self.host, self.port, &fingerprint).map_err(|e| {
                 format!(
                     "cannot record host key for {}:{}: {e}",
                     self.host, self.port
@@ -232,6 +246,26 @@ fn kbd_answers(prompts: &[Prompt], pw: &str) -> Vec<String> {
         .collect()
 }
 
+/// The signal name without the `SIG` prefix, as SSH sends it.
+fn sig_name(sig: &Sig) -> String {
+    match sig {
+        Sig::ABRT => "ABRT",
+        Sig::ALRM => "ALRM",
+        Sig::FPE => "FPE",
+        Sig::HUP => "HUP",
+        Sig::ILL => "ILL",
+        Sig::INT => "INT",
+        Sig::KILL => "KILL",
+        Sig::PIPE => "PIPE",
+        Sig::QUIT => "QUIT",
+        Sig::SEGV => "SEGV",
+        Sig::TERM => "TERM",
+        Sig::USR1 => "USR1",
+        Sig::Custom(name) => name,
+    }
+    .to_string()
+}
+
 fn reach_error(t: &Target, e: &russh::Error) -> String {
     let why = match e {
         russh::Error::IO(io) => match io.kind() {
@@ -385,13 +419,15 @@ impl Session {
         let mut stdout = Capture::new(CAPTURE_HALF);
         let mut stderr = Capture::new(CAPTURE_HALF);
         let mut exit = None;
-        let outcome = |stdout: Capture, stderr: Capture, exit, timed_out| {
+        let mut signal = None;
+        let outcome = |stdout: Capture, stderr: Capture, exit, signal, timed_out| {
             let (stdout, stdout_cut) = stdout.finish();
             let (stderr, stderr_cut) = stderr.finish();
             ExecOutcome {
                 user: self.user.clone(),
                 host: self.host.clone(),
                 exit,
+                signal,
                 elapsed: started.elapsed(),
                 stdout,
                 stderr,
@@ -406,13 +442,13 @@ impl Session {
         let Ok(opened) =
             tokio::time::timeout_at(deadline, self.handle.channel_open_session()).await
         else {
-            return Ok(outcome(stdout, stderr, exit, expired));
+            return Ok(outcome(stdout, stderr, exit, signal, expired));
         };
         let mut channel = opened.map_err(|e| fail("cannot open a channel", e))?;
         match tokio::time::timeout_at(deadline, channel.exec(true, command)).await {
             Err(_) => {
                 let _ = channel.close().await;
-                return Ok(outcome(stdout, stderr, exit, expired));
+                return Ok(outcome(stdout, stderr, exit, signal, expired));
             }
             Ok(r) => r.map_err(|e| fail("cannot run the command", e))?,
         }
@@ -424,6 +460,9 @@ impl Session {
                     ChannelMsg::Data { data } => stdout.push(&data),
                     ChannelMsg::ExtendedData { data, ext: 1 } => stderr.push(&data),
                     ChannelMsg::ExitStatus { exit_status } => exit = Some(exit_status),
+                    ChannelMsg::ExitSignal { signal_name, .. } => {
+                        signal = Some(sig_name(&signal_name));
+                    }
                     ChannelMsg::Failure => {
                         return Err(format!(
                             "{}@{} refused to run the command",
@@ -446,7 +485,13 @@ impl Session {
         if !finished {
             let _ = channel.close().await;
         }
-        Ok(outcome(stdout, stderr, exit, expired.filter(|_| !finished)))
+        Ok(outcome(
+            stdout,
+            stderr,
+            exit,
+            signal,
+            expired.filter(|_| !finished),
+        ))
     }
 
     /// Opens an SFTP session on a fresh channel.
@@ -581,6 +626,28 @@ mod tests {
         ])));
         assert!(offers_keyboard_interactive(&set(&[])));
         assert!(!offers_keyboard_interactive(&set(&[MethodKind::PublicKey])));
+    }
+
+    #[test]
+    fn parallel_host_key_records_all_land() {
+        let d = tempfile::tempdir().unwrap();
+        let known = KnownHosts::new(d.path().join("known_hosts"));
+        std::thread::scope(|scope| {
+            for i in 0..16 {
+                let known = &known;
+                scope.spawn(move || {
+                    record_host_key(known, &format!("h{i}"), 22, "SHA256:x").unwrap();
+                });
+            }
+        });
+        let text = std::fs::read_to_string(d.path().join("known_hosts")).unwrap();
+        assert_eq!(text.lines().count(), 16, "{text}");
+    }
+
+    #[test]
+    fn signal_names() {
+        assert_eq!(sig_name(&Sig::KILL), "KILL");
+        assert_eq!(sig_name(&Sig::Custom("USR2".into())), "USR2");
     }
 
     #[test]

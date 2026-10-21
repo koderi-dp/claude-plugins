@@ -193,6 +193,18 @@ async fn nonzero_exit_is_ok() {
 
 #[tokio::test]
 #[ignore]
+async fn killed_by_signal() {
+    let s = connect(&key_creds()).await;
+    let out = s
+        .exec("kill -KILL $$", Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(out.signal.as_deref(), Some("KILL"));
+    assert_eq!(out.timed_out, None);
+}
+
+#[tokio::test]
+#[ignore]
 async fn timeout_returns_partial() {
     let s = connect(&key_creds()).await;
     let started = Instant::now();

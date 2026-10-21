@@ -17,6 +17,8 @@ pub struct ExecOutcome {
     pub user: String,
     pub host: String,
     pub exit: Option<u32>,
+    /// The signal that killed the command, without the `SIG` prefix.
+    pub signal: Option<String>,
     pub elapsed: Duration,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -98,10 +100,11 @@ pub fn render_exec(
 
     let mut out = String::new();
     out.push_str(&key_warning(&o.host, &o.key_status));
-    let status = match (o.timed_out, o.exit) {
-        (Some(s), _) => format!("timed out after {s} s"),
-        (None, Some(code)) => format!("exit {code}"),
-        (None, None) => "no exit status".to_string(),
+    let status = match (o.timed_out, &o.signal, o.exit) {
+        (Some(s), _, _) => format!("timed out after {s} s"),
+        (None, Some(sig), _) => format!("killed by SIG{sig}"),
+        (None, None, Some(code)) => format!("exit {code}"),
+        (None, None, None) => "no exit status".to_string(),
     };
     out.push_str(&format!(
         "{}@{} · {status} · {}",
@@ -317,6 +320,7 @@ mod tests {
             user: "root".into(),
             host: "10.0.0.21".into(),
             exit: Some(0),
+            signal: None,
             elapsed: Duration::from_millis(400),
             stdout: b"hello\n".to_vec(),
             stderr: Vec::new(),
@@ -513,6 +517,19 @@ mod tests {
         let first = out.lines().next().unwrap();
         assert_eq!(first, "root@10.0.0.21 · timed out after 60 s · 0.4 s");
         assert!(!out.contains("exit"));
+    }
+
+    #[test]
+    fn signal_header() {
+        let d = tempfile::tempdir().unwrap();
+        let mut o = outcome();
+        o.exit = None;
+        o.signal = Some("KILL".into());
+        let out = render_exec(&o, 200, &[], d.path());
+        assert_eq!(
+            out.lines().next().unwrap(),
+            "root@10.0.0.21 · killed by SIGKILL · 0.4 s"
+        );
     }
 
     #[test]
