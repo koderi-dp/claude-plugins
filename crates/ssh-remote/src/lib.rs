@@ -1,6 +1,9 @@
 pub mod format;
+pub mod hook;
 pub mod known_hosts;
+pub mod params;
 pub mod pool;
 pub mod secret;
+pub mod server;
 pub mod session;
 pub mod transfer;

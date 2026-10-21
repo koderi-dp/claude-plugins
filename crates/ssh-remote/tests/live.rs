@@ -552,3 +552,137 @@ mod download {
         assert!(!local.exists());
     }
 }
+
+/// A minimal MCP stdio client for the built server. LOCALAPPDATA points at a tempdir so the
+/// server's known_hosts stays out of the user's real one.
+struct McpClient {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    next_id: u64,
+    _appdata: tempfile::TempDir,
+}
+
+impl McpClient {
+    fn start() -> McpClient {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let appdata = tempfile::tempdir().unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ssh-remote"))
+            .env("LOCALAPPDATA", appdata.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn server");
+        let stdin = child.stdin.take().unwrap();
+        let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut c = McpClient {
+            child,
+            stdin,
+            stdout,
+            next_id: 1,
+            _appdata: appdata,
+        };
+        c.request(
+            "initialize",
+            serde_json::json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}),
+        );
+        writeln!(
+            c.stdin,
+            "{}",
+            serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+        )
+        .unwrap();
+        c
+    }
+
+    fn request(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        use std::io::{BufRead, Write};
+        let id = self.next_id;
+        self.next_id += 1;
+        writeln!(
+            self.stdin,
+            "{}",
+            serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
+        )
+        .unwrap();
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+
+    /// Calls a tool and returns (is_error, text).
+    fn call(&mut self, name: &str, arguments: serde_json::Value) -> (bool, String) {
+        let r = self.request(
+            "tools/call",
+            serde_json::json!({"name": name, "arguments": arguments}),
+        );
+        let is_error = r["result"]["isError"] == true;
+        let text = r["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no text in response"))
+            .to_string();
+        (is_error, text)
+    }
+}
+
+impl Drop for McpClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+#[test]
+#[ignore]
+fn server_masks_password_and_reuses_session() {
+    let pw_file = test_dir().join("pw.txt");
+    let password = Secret::from_file(&pw_file).unwrap();
+    let mut c = McpClient::start();
+    let base = serde_json::json!({"host": host(), "port": port(), "user": "tester"});
+
+    let mut args = base.clone();
+    args["password_file"] = pw_file.to_str().unwrap().into();
+    args["command"] = "cat /pw; echo; echo done".into();
+    let (is_error, text) = c.call("ssh", args);
+    assert!(!is_error, "{}", password.mask(&text));
+    assert!(!text.contains(password.expose()), "password leaked");
+    assert!(text.contains("***"), "{text}");
+    assert!(
+        text.starts_with(&format!("tester@{} · exit 0 · ", host())),
+        "{text}"
+    );
+
+    // No credentials: the open session is reused.
+    let mut args = base.clone();
+    args["command"] = "exit 3".into();
+    let (is_error, text) = c.call("ssh", args);
+    assert!(!is_error, "{text}");
+    assert!(text.contains("· exit 3 ·"), "{text}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("hostname");
+    std::fs::write(&local, "old").unwrap();
+    let mut args = base.clone();
+    args["remote_path"] = "/etc/hostname".into();
+    args["local_path"] = local.to_str().unwrap().into();
+    let (is_error, text) = c.call("ssh_download", args);
+    assert!(!is_error, "{text}");
+    assert!(text.starts_with("downloaded /etc/hostname → "), "{text}");
+    assert_ne!(std::fs::read_to_string(&local).unwrap(), "old");
+}
+
+#[test]
+#[ignore]
+fn server_reports_connect_failure_as_tool_error() {
+    let mut c = McpClient::start();
+    let (is_error, text) = c.call(
+        "ssh",
+        serde_json::json!({"host": host(), "port": port(), "user": "tester",
+            "password_file": test_dir().join("pw-other.txt").to_str().unwrap(), "command": "true"}),
+    );
+    assert!(is_error, "{text}");
+    let other = Secret::from_file(&test_dir().join("pw-other.txt")).unwrap();
+    assert!(!text.contains(other.expose()), "password leaked");
+    assert!(!text.contains('\n'), "{text}");
+}

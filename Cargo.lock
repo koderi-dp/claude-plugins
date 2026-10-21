@@ -2040,9 +2040,14 @@ dependencies = [
 name = "ssh-remote"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
+ "rmcp",
  "russh",
  "russh-sftp",
+ "schemars",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "zeroize",

@@ -11,10 +11,15 @@ use crate::session::Session;
 /// remote path has no file name (`download` itself refuses such paths).
 pub fn default_local_path(host: &str, remote: &str) -> PathBuf {
     let name = remote.rsplit('/').next().unwrap_or("");
+    host_dir(host).join(safe_component(name, "download"))
+}
+
+/// `%TEMP%\ssh-remote\<host>`, with the host made a safe path component. Downloads and saved
+/// full command output both go here.
+pub(crate) fn host_dir(host: &str) -> PathBuf {
     std::env::temp_dir()
         .join("ssh-remote")
         .join(safe_component(host, "_"))
-        .join(safe_component(name, "download"))
 }
 
 /// Turns arbitrary text into one safe Windows path component: separators, wildcards and control
