@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub enum HostKeyStatus {
     New,
     Match,
-    Changed { old: String },
+    Changed { old: String, new: String },
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +50,10 @@ impl KnownHosts {
                     if fp == fingerprint {
                         return Ok(HostKeyStatus::Match);
                     }
-                    status = HostKeyStatus::Changed { old: fp.to_string() };
+                    status = HostKeyStatus::Changed {
+                        old: fp.to_string(),
+                        new: fingerprint.to_string(),
+                    };
                 }
                 _ => {
                     if !line.trim().is_empty() {
@@ -94,7 +97,7 @@ mod tests {
         kh.check_and_record("h", 22, "A").unwrap();
         assert_eq!(
             kh.check_and_record("h", 22, "B").unwrap(),
-            HostKeyStatus::Changed { old: "A".into() }
+            HostKeyStatus::Changed { old: "A".into(), new: "B".into() }
         );
         assert_eq!(kh.check_and_record("h", 22, "B").unwrap(), HostKeyStatus::Match);
     }
