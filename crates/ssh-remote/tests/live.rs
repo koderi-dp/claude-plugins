@@ -350,6 +350,38 @@ async fn secrets_passed_to_f_mask_output() {
     assert!(masked.contains("***"), "{masked}");
 }
 
+#[tokio::test]
+#[ignore]
+async fn replaced_password_still_masked() {
+    let (dir, pool) = pool(Duration::from_secs(300));
+    let (_, creds) = temp_password_creds(dir.path(), "pw.txt", "pw.txt");
+    let pw = std::fs::read_to_string(test_dir().join("pw.txt")).unwrap();
+    assert_eq!(
+        whoami(&pool, &target(), Some(creds)).await.unwrap(),
+        "tester"
+    );
+    // Same open session, new credentials without a password: the old one still masks.
+    let masked = pool
+        .with_session(&target(), Some(key_creds()), async |s, secrets| {
+            let out = s
+                .exec(&format!("echo {pw}"), Duration::from_secs(10))
+                .await?;
+            Ok(mask_all(secrets, &String::from_utf8_lossy(&out.stdout)))
+        })
+        .await
+        .unwrap();
+    assert!(!masked.contains(pw.trim()), "{masked}");
+    assert_eq!(masked.trim(), "***");
+    // Errors from `f` are masked by the pool too.
+    let err = pool
+        .with_session(&target(), None, async |_s, _secrets| {
+            Err::<(), _>(format!("boom {pw}"))
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err, "boom ***");
+}
+
 fn other_target() -> Target {
     Target {
         host: host(),
@@ -685,4 +717,28 @@ fn server_reports_connect_failure_as_tool_error() {
     let other = Secret::from_file(&test_dir().join("pw-other.txt")).unwrap();
     assert!(!text.contains(other.expose()), "password leaked");
     assert!(!text.contains('\n'), "{text}");
+}
+
+#[test]
+#[ignore]
+fn server_masks_replaced_password() {
+    let pw_file = test_dir().join("pw.txt");
+    let password = Secret::from_file(&pw_file).unwrap();
+    let mut c = McpClient::start();
+    let base = serde_json::json!({"host": host(), "port": port(), "user": "tester"});
+
+    let mut args = base.clone();
+    args["password_file"] = pw_file.to_str().unwrap().into();
+    args["command"] = "true".into();
+    let (is_error, text) = c.call("ssh", args);
+    assert!(!is_error, "{}", password.mask(&text));
+
+    // Second call on the same session passes only a key; the first password stays masked.
+    let mut args = base.clone();
+    args["key_file"] = test_dir().join("id_ed25519").to_str().unwrap().into();
+    args["command"] = "cat /pw; echo".into();
+    let (is_error, text) = c.call("ssh", args);
+    assert!(!is_error, "{}", password.mask(&text));
+    assert!(!text.contains(password.expose()), "password leaked");
+    assert!(text.lines().any(|l| l == "***"), "{text}");
 }

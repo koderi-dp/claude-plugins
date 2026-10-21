@@ -11,13 +11,41 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::known_hosts::{HostKeyStatus, KnownHosts};
-use crate::secret::Secret;
+use crate::secret::{Secret, mask_all};
 use crate::session::{Creds, Session, Target};
 
 struct Entry {
     session: Session,
+    /// The newest credentials; reconnects use these.
     creds: Creds,
+    /// Secrets of credentials replaced by later calls. The session may still be logged in with
+    /// one of them, so they keep masking output until the entry is dropped.
+    retired: Vec<Secret>,
     last_used: Instant,
+}
+
+impl Entry {
+    /// Replaces the credentials, keeping the old secrets for masking.
+    fn replace_creds(&mut self, new: Creds) {
+        let old = std::mem::replace(&mut self.creds, new);
+        self.retired.extend(old.password);
+        self.retired.extend(old.key.and_then(|(_, p)| p));
+    }
+
+    /// Every secret this entry has held.
+    fn secrets(&self) -> Vec<&Secret> {
+        let mut all = creds_secrets(&self.creds);
+        all.extend(self.retired.iter());
+        all
+    }
+}
+
+/// The password and key passphrase in `c`.
+fn creds_secrets(c: &Creds) -> Vec<&Secret> {
+    c.password
+        .iter()
+        .chain(c.key.as_ref().and_then(|(_, p)| p.as_ref()))
+        .collect()
 }
 
 /// One map slot. `None` while the first connect is pending, or after an entry was dropped.
@@ -44,8 +72,10 @@ impl Pool {
     }
 
     /// Runs `f` on the open session for `t`, connecting first when there is none or it has
-    /// closed. `creds`, when given, replace the stored ones. `f` also gets every secret held
-    /// for the entry, so the caller can mask its output; the secrets never leave the pool.
+    /// closed. `creds`, when given, replace the stored ones for reconnects; the replaced secrets
+    /// stay with the entry. `f` gets every secret the entry has held, so the caller can mask its
+    /// output; the secrets never leave the pool. Errors, the pool's own and `f`'s, come back
+    /// masked with that same set.
     pub async fn with_session<T>(
         &self,
         t: &Target,
@@ -55,16 +85,16 @@ impl Pool {
         let k = key(t);
         let (slot, mut guard) = self.lock_entry(&k).await;
 
-        let mut creds = creds;
         if let Some(entry) = guard.as_mut() {
-            if let Some(new) = creds.take() {
-                entry.creds = new;
+            if let Some(new) = creds {
+                entry.replace_creds(new);
             }
             if entry.session.is_closed() {
                 // Reconnect once; on failure the entry and its secrets go.
                 match Session::connect(t, &entry.creds, &self.known).await {
                     Ok(s) => entry.session = s,
                     Err(e) => {
+                        let e = mask_all(&entry.secrets(), &e);
                         *guard = None;
                         self.remove_slot(&k, &slot).await;
                         return Err(e);
@@ -72,7 +102,7 @@ impl Pool {
                 }
             }
         } else {
-            let Some(new) = creds.take() else {
+            let Some(new) = creds else {
                 self.remove_slot(&k, &slot).await;
                 return Err(format!(
                     "no credentials for {}@{}: pass password_file or key_file",
@@ -84,10 +114,12 @@ impl Pool {
                     *guard = Some(Entry {
                         session,
                         creds: new,
+                        retired: Vec::new(),
                         last_used: Instant::now(),
                     })
                 }
                 Err(e) => {
+                    let e = mask_all(&creds_secrets(&new), &e);
                     self.remove_slot(&k, &slot).await;
                     return Err(e);
                 }
@@ -95,13 +127,10 @@ impl Pool {
         }
 
         let entry = guard.as_mut().expect("entry present after connect");
-        let secrets: Vec<&Secret> = entry
-            .creds
-            .password
-            .iter()
-            .chain(entry.creds.key.as_ref().and_then(|(_, p)| p.as_ref()))
-            .collect();
-        let result = f(&entry.session, &secrets).await;
+        let secrets = entry.secrets();
+        let result = f(&entry.session, &secrets)
+            .await
+            .map_err(|e| mask_all(&secrets, &e));
         // The connect-time host-key status is reported once, by the first call that succeeds;
         // later calls on this connection see `Match`. A failed call keeps it, so a changed-key
         // warning is not lost to an error.

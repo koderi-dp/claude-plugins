@@ -148,16 +148,6 @@ impl CredFiles<'_> {
         };
         Ok(Some(Creds { password, key }))
     }
-
-    /// Re-reads the secret files for masking only, skipping any that cannot be read. Used for
-    /// errors raised before the pool hands its secrets to the call (e.g. a failed connect).
-    pub fn mask_secrets(&self) -> Vec<Secret> {
-        [self.password_file, self.key_passphrase_file]
-            .into_iter()
-            .flatten()
-            .filter_map(|p| Secret::from_file(p.as_ref()).ok())
-            .collect()
-    }
 }
 
 #[cfg(test)]

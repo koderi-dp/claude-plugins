@@ -1,7 +1,9 @@
 //! rmcp stdio server exposing the `ssh` and `ssh_download` tools.
 //!
 //! Every failure is a tool error (`isError: true`) with a one-line message. Before any text goes
-//! back to the client it is masked with the secrets known for that call.
+//! back to the client it is masked with the secrets known for that call: the pool hands them to
+//! the call and masks its own errors; errors raised before the pool is reached (parameter checks,
+//! unreadable credential files) never contain secret text.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,7 +16,7 @@ use rmcp::{ErrorData, ServerHandler, ServiceExt, tool, tool_handler, tool_router
 use crate::format::{render_download, render_exec};
 use crate::hook::SESSION_HINT;
 use crate::known_hosts::KnownHosts;
-use crate::params::{CredFiles, DownloadParams, SshParams};
+use crate::params::{DownloadParams, SshParams};
 use crate::pool::Pool;
 use crate::secret::{Secret, mask_all};
 use crate::transfer::{default_local_path, download, host_dir};
@@ -35,11 +37,9 @@ fn ok(secrets: &[&Secret], text: &str) -> CallToolResult {
     CallToolResult::success(vec![ContentBlock::text(mask_all(secrets, text))])
 }
 
-/// A tool error, masked with the secrets this call read from `files` (when it read any).
-fn fail(files: &CredFiles, msg: &str) -> CallToolResult {
-    let held = files.mask_secrets();
-    let secrets: Vec<&Secret> = held.iter().collect();
-    CallToolResult::error(vec![ContentBlock::text(mask_all(&secrets, msg))])
+/// Masks `msg` with `secrets` and wraps it as a tool error.
+fn fail(secrets: &[&Secret], msg: &str) -> CallToolResult {
+    CallToolResult::error(vec![ContentBlock::text(mask_all(secrets, msg))])
 }
 
 #[tool_router]
@@ -64,11 +64,11 @@ impl SshServer {
             .and_then(|t| Ok((t, params.max_lines()?)));
         let (timeout_s, max_lines) = match checked {
             Ok(v) => v,
-            Err(e) => return Ok(fail(&files, &e)),
+            Err(e) => return Ok(fail(&[], &e)),
         };
         let creds = match files.load() {
             Ok(c) => c,
-            Err(e) => return Ok(fail(&files, &e)),
+            Err(e) => return Ok(fail(&[], &e)),
         };
         let target = params.target();
         let full_dir = host_dir(&target.host);
@@ -76,18 +76,14 @@ impl SshServer {
         let result = self
             .pool
             .with_session(&target, creds, async |s, secrets| {
-                let mask = |e: String| mask_all(secrets, &e);
-                let outcome = s
-                    .exec(command, Duration::from_secs(timeout_s))
-                    .await
-                    .map_err(mask)?;
+                let outcome = s.exec(command, Duration::from_secs(timeout_s)).await?;
                 Ok(ok(
                     secrets,
                     &render_exec(&outcome, max_lines, secrets, &full_dir),
                 ))
             })
             .await;
-        Ok(result.unwrap_or_else(|e| fail(&files, &e)))
+        Ok(result.unwrap_or_else(|e| fail(&[], &e)))
     }
 
     #[tool(
@@ -100,7 +96,7 @@ impl SshServer {
         let files = params.cred_files();
         let creds = match files.load() {
             Ok(c) => c,
-            Err(e) => return Ok(fail(&files, &e)),
+            Err(e) => return Ok(fail(&[], &e)),
         };
         let target = params.target();
         let remote = params.remote_path.as_str();
@@ -114,9 +110,7 @@ impl SshServer {
             .pool
             .with_session(&target, creds, async |s, secrets| {
                 let started = Instant::now();
-                let bytes = download(s, remote, &local, DOWNLOAD_CAP)
-                    .await
-                    .map_err(|e| mask_all(secrets, &e))?;
+                let bytes = download(s, remote, &local, DOWNLOAD_CAP).await?;
                 let text = render_download(
                     host,
                     remote,
@@ -128,7 +122,7 @@ impl SshServer {
                 Ok(ok(secrets, &text))
             })
             .await;
-        Ok(result.unwrap_or_else(|e| fail(&files, &e)))
+        Ok(result.unwrap_or_else(|e| fail(&[], &e)))
     }
 }
 
