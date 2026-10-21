@@ -57,7 +57,7 @@ fn safe_component(text: &str, fallback: &str) -> String {
 /// The cap as shown to the user: whole megabytes as `200 MB`, anything else via `size`.
 fn cap_text(cap: u64) -> String {
     const MB: u64 = 1024 * 1024;
-    if cap >= MB && cap % MB == 0 {
+    if cap >= MB && cap.is_multiple_of(MB) {
         format!("{} MB", cap / MB)
     } else {
         size(cap)

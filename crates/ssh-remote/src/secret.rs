@@ -64,11 +64,11 @@ fn decode(bytes: &[u8]) -> Option<Zeroizing<String>> {
             .map(|s| Zeroizing::new(s.to_owned()));
     }
     let utf16 = |rest: &[u8], f: fn([u8; 2]) -> u16| -> Option<Zeroizing<String>> {
-        if rest.len() % 2 != 0 {
+        if !rest.len().is_multiple_of(2) {
             return None;
         }
         let units: Zeroizing<Vec<u16>> =
-            Zeroizing::new(rest.chunks_exact(2).map(|c| f([c[0], c[1]])).collect());
+            Zeroizing::new(rest.as_chunks::<2>().0.iter().map(|c| f(*c)).collect());
         // A UTF-16 unit encodes to at most 3 UTF-8 bytes, so this never reallocates.
         let mut out = Zeroizing::new(String::with_capacity(units.len() * 3));
         for c in char::decode_utf16(units.iter().copied()) {
