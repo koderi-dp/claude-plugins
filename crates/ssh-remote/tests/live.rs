@@ -292,6 +292,53 @@ async fn known_host_recorded_then_changed() {
     }
 }
 
+/// Unpauses the test container when dropped, so a failing test does not leave it paused.
+struct Unpause;
+
+impl Drop for Unpause {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("docker")
+            .args(["unpause", "ssh-remote-test"])
+            .output();
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn dead_link_times_out_then_closes() {
+    let s = connect(&key_creds()).await;
+    let out = tokio::task::spawn_blocking(|| {
+        std::process::Command::new("docker")
+            .args(["pause", "ssh-remote-test"])
+            .output()
+            .expect("run docker pause")
+    })
+    .await
+    .unwrap();
+    assert!(out.status.success(), "docker pause failed");
+    let _unpause = Unpause;
+
+    // The channel open never gets an answer; the call's timeout covers it.
+    let started = Instant::now();
+    let out = s.exec("echo hi", Duration::from_secs(2)).await.unwrap();
+    assert_eq!(out.timed_out, Some(2));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
+
+    // Unanswered keepalives (3 x 15 s) close the session.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while !s.is_closed() {
+        assert!(
+            Instant::now() < deadline,
+            "session never noticed the dead link"
+        );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
 // ---- Pool ----
 
 fn pool(idle: Duration) -> (tempfile::TempDir, Pool) {
@@ -542,7 +589,9 @@ mod download {
         put(&s, "/tmp/f.txt", "ssh").await;
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("f.txt");
-        let n = download(&s, "/tmp/f.txt", &local, 1000).await.unwrap();
+        let n = download(&s, "/tmp/f.txt", &local, 1000, Duration::from_secs(60))
+            .await
+            .unwrap();
         assert_eq!(n, 3);
         assert_eq!(std::fs::read(&local).unwrap(), b"ssh");
     }
@@ -554,7 +603,9 @@ mod download {
         put(&s, "/tmp/f.txt", "ssh").await;
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("a").join("b").join("f.txt");
-        download(&s, "/tmp/f.txt", &local, 1000).await.unwrap();
+        download(&s, "/tmp/f.txt", &local, 1000, Duration::from_secs(60))
+            .await
+            .unwrap();
         assert_eq!(std::fs::read(&local).unwrap(), b"ssh");
     }
 
@@ -565,10 +616,37 @@ mod download {
         put(&s, "/tmp/big.txt", "12345678901").await;
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("big.txt");
-        let e = download(&s, "/tmp/big.txt", &local, 10).await.unwrap_err();
+        let e = download(&s, "/tmp/big.txt", &local, 10, Duration::from_secs(60))
+            .await
+            .unwrap_err();
         assert!(e.contains("limit is"), "{e}");
         assert!(e.contains("/tmp/big.txt"), "{e}");
         assert!(!local.exists());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn download_times_out() {
+        let s = connect(&key_creds()).await;
+        // Opening a FIFO with no writer blocks the SFTP server.
+        let out = s
+            .exec(
+                "rm -f /tmp/fifo && mkfifo /tmp/fifo",
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.exit, Some(0));
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("fifo");
+        let started = Instant::now();
+        let e = download(&s, "/tmp/fifo", &local, 1000, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(e, "download of /tmp/fifo timed out after 2 s");
+        assert!(!local.exists());
+        assert!(!dir.path().join("fifo.part").exists());
     }
 
     #[tokio::test]
@@ -577,9 +655,15 @@ mod download {
         let s = connect(&password_creds()).await;
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("x");
-        let e = download(&s, "/tmp/does-not-exist.txt", &local, 1000)
-            .await
-            .unwrap_err();
+        let e = download(
+            &s,
+            "/tmp/does-not-exist.txt",
+            &local,
+            1000,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap_err();
         assert!(e.contains("/tmp/does-not-exist.txt"), "{e}");
         assert!(!local.exists());
     }

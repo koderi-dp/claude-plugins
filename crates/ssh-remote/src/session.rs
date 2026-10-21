@@ -14,6 +14,10 @@ use crate::known_hosts::{HostKeyStatus, KnownHosts};
 use crate::secret::Secret;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Keepalives notice a silently dead link: after `KEEPALIVE_MAX` unanswered ones the session
+/// closes, so the pool reconnects on the next call.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const KEEPALIVE_MAX: usize = 3;
 
 /// Credentials for one user. The key is a path plus an optional passphrase. Each `Secret`
 /// remembers its file, so errors can name it.
@@ -97,6 +101,8 @@ fn config() -> client::Config {
         .extend([mac::HMAC_SHA1_ETM, mac::HMAC_SHA1]);
     client::Config {
         preferred,
+        keepalive_interval: Some(KEEPALIVE_INTERVAL),
+        keepalive_max: KEEPALIVE_MAX,
         ..Default::default()
     }
 }
@@ -309,25 +315,43 @@ impl Session {
         })
     }
 
-    /// Runs `command`, collecting stdout, stderr and the exit status. On timeout the channel is
+    /// Runs `command`, collecting stdout, stderr and the exit status. `timeout` covers opening
+    /// the channel, starting the command and reading its output. On timeout the channel is
     /// closed and the partial output returned with `timed_out` set; the session stays usable.
     pub async fn exec(&self, command: &str, timeout: Duration) -> Result<ExecOutcome, String> {
         let started = Instant::now();
+        let deadline = tokio::time::Instant::now() + timeout;
         let fail =
             |what: &str, e: russh::Error| format!("{what} on {}@{}: {e}", self.user, self.host);
-        let mut channel = self
-            .handle
-            .channel_open_session()
-            .await
-            .map_err(|e| fail("cannot open a channel", e))?;
-        channel
-            .exec(true, command)
-            .await
-            .map_err(|e| fail("cannot run the command", e))?;
-
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit = None;
+        let outcome = |stdout, stderr, exit, timed_out| ExecOutcome {
+            user: self.user.clone(),
+            host: self.host.clone(),
+            exit,
+            elapsed: started.elapsed(),
+            stdout,
+            stderr,
+            timed_out,
+            key_status: self.key_status.clone(),
+        };
+        let expired = Some(timeout.as_secs());
+
+        let Ok(opened) =
+            tokio::time::timeout_at(deadline, self.handle.channel_open_session()).await
+        else {
+            return Ok(outcome(stdout, stderr, exit, expired));
+        };
+        let mut channel = opened.map_err(|e| fail("cannot open a channel", e))?;
+        match tokio::time::timeout_at(deadline, channel.exec(true, command)).await {
+            Err(_) => {
+                let _ = channel.close().await;
+                return Ok(outcome(stdout, stderr, exit, expired));
+            }
+            Ok(r) => r.map_err(|e| fail("cannot run the command", e))?,
+        }
+
         let read = async {
             // The exit status usually arrives after Eof, so read until Close.
             while let Some(msg) = channel.wait().await {
@@ -347,27 +371,17 @@ impl Session {
             }
             Ok(())
         };
-        let timed_out = match tokio::time::timeout(timeout, read).await {
+        let finished = match tokio::time::timeout_at(deadline, read).await {
             Ok(r) => {
                 r?;
-                None
+                true
             }
-            Err(_) => Some(timeout.as_secs()),
+            Err(_) => false,
         };
-        if timed_out.is_some() {
+        if !finished {
             let _ = channel.close().await;
         }
-
-        Ok(ExecOutcome {
-            user: self.user.clone(),
-            host: self.host.clone(),
-            exit,
-            elapsed: started.elapsed(),
-            stdout,
-            stderr,
-            timed_out,
-            key_status: self.key_status.clone(),
-        })
+        Ok(outcome(stdout, stderr, exit, expired.filter(|_| !finished)))
     }
 
     /// Opens an SFTP session on a fresh channel.
@@ -503,6 +517,8 @@ mod tests {
                 .any(|n| n.as_ref() == "diffie-hellman-group14-sha1")
         );
         assert!(p.mac.iter().any(|n| n.as_ref() == "hmac-sha1"));
+        assert_eq!(c.keepalive_interval, Some(Duration::from_secs(15)));
+        assert_eq!(c.keepalive_max, 3);
         assert_eq!(
             p.mac.first().map(|n| n.as_ref()),
             Preferred::DEFAULT.mac.first().map(|n| n.as_ref())

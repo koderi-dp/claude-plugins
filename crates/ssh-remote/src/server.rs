@@ -25,6 +25,8 @@ use crate::transfer::{default_local_path, download, host_dir};
 pub const IDLE: Duration = Duration::from_secs(5 * 60);
 /// Largest file `ssh_download` fetches.
 pub const DOWNLOAD_CAP: u64 = 200 * 1024 * 1024;
+/// Longest `ssh_download` may take, connect excluded.
+pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Clone)]
 pub struct SshServer {
@@ -87,7 +89,7 @@ impl SshServer {
     }
 
     #[tool(
-        description = "Download a file from a remote host over SSH (SFTP), up to 200 MB. Saves to local_path, overwriting an existing file there, or by default to %TEMP%\\ssh-remote\\<host>\\<file name>. Pass credentials as file paths (password_file or key_file); the plugin reads them, so never read or print those files."
+        description = "Download a file from a remote host over SSH (SFTP), up to 200 MB, giving up after 600 s. Saves to local_path, overwriting an existing file there, or by default to %TEMP%\\ssh-remote\\<host>\\<file name>. Pass credentials as file paths (password_file or key_file); the plugin reads them, so never read or print those files."
     )]
     async fn ssh_download(
         &self,
@@ -110,7 +112,7 @@ impl SshServer {
             .pool
             .with_session(&target, creds, async |s, secrets| {
                 let started = Instant::now();
-                let bytes = download(s, remote, &local, DOWNLOAD_CAP).await?;
+                let bytes = download(s, remote, &local, DOWNLOAD_CAP, DOWNLOAD_TIMEOUT).await?;
                 let text = render_download(
                     host,
                     remote,

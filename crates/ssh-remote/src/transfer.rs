@@ -1,6 +1,7 @@
 //! SFTP download with a size cap.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
 
@@ -70,15 +71,41 @@ fn cap_text(cap: u64) -> String {
 }
 
 /// Downloads `remote` to `local` (creating parent directories), refusing files over `cap` bytes.
-/// Data goes to a `.part` file next to `local` and is renamed into place on success.
-pub async fn download(s: &Session, remote: &str, local: &Path, cap: u64) -> Result<u64, String> {
+/// Data goes to a `.part` file next to `local` and is renamed into place on success. `timeout`
+/// covers the whole transfer; on timeout the `.part` file is removed.
+pub async fn download(
+    s: &Session,
+    remote: &str,
+    local: &Path,
+    cap: u64,
+    timeout: Duration,
+) -> Result<u64, String> {
     if remote.is_empty() || remote.ends_with('/') {
         return Err(format!("remote path {remote} has no file name"));
     }
-    let sftp = s.sftp().await?;
-    let result = fetch(&sftp, remote, local, cap).await;
-    let _ = sftp.close().await;
-    result
+    let run = async {
+        let sftp = s.sftp().await?;
+        let result = fetch(&sftp, remote, local, cap).await;
+        let _ = sftp.close().await;
+        result
+    };
+    match tokio::time::timeout(timeout, run).await {
+        Ok(r) => r,
+        Err(_) => {
+            let _ = tokio::fs::remove_file(part_path(local)).await;
+            Err(format!(
+                "download of {remote} timed out after {} s",
+                timeout.as_secs()
+            ))
+        }
+    }
+}
+
+/// The temporary file a download writes before it is renamed to `local`.
+fn part_path(local: &Path) -> PathBuf {
+    let mut name = local.file_name().unwrap_or_default().to_os_string();
+    name.push(".part");
+    local.with_file_name(name)
 }
 
 async fn fetch(
@@ -116,9 +143,7 @@ async fn fetch(
             .await
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
-    let mut part_name = local.file_name().unwrap_or_default().to_os_string();
-    part_name.push(".part");
-    let part = local.with_file_name(part_name);
+    let part = part_path(local);
 
     let copied = copy_capped(file, &part, cap).await;
     match copied {
