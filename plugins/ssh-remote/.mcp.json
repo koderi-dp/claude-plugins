@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "ssh-remote": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/ssh-remote.exe"
+    }
+  }
+}

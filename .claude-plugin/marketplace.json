@@ -16,6 +16,11 @@
       "name": "code-outline",
       "source": "./plugins/code-outline",
       "description": "Symbol outlines and single-symbol reads via tree-sitter (Rust, TS/JS, Python, C#)."
+    },
+    {
+      "name": "ssh-remote",
+      "source": "./plugins/ssh-remote",
+      "description": "Run commands and download files over SSH, with credentials read from files Claude never sees."
     }
   ]
 }
