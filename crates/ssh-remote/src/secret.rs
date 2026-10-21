@@ -52,8 +52,14 @@ fn decode(bytes: &[u8]) -> Option<Zeroizing<String>> {
         if rest.len() % 2 != 0 {
             return None;
         }
-        let units: Vec<u16> = rest.chunks_exact(2).map(|c| f([c[0], c[1]])).collect();
-        String::from_utf16(&units).ok().map(Zeroizing::new)
+        let units: Zeroizing<Vec<u16>> =
+            Zeroizing::new(rest.chunks_exact(2).map(|c| f([c[0], c[1]])).collect());
+        // A UTF-16 unit encodes to at most 3 UTF-8 bytes, so this never reallocates.
+        let mut out = Zeroizing::new(String::with_capacity(units.len() * 3));
+        for c in char::decode_utf16(units.iter().copied()) {
+            out.push(c.ok()?);
+        }
+        Some(out)
     };
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
         return utf16(rest, u16::from_le_bytes);
@@ -117,6 +123,17 @@ mod tests {
         }
         let (_d, p) = write(&b);
         assert_eq!(Secret::from_file(&p).unwrap().expose(), "pw");
+    }
+
+    #[test]
+    fn utf16le_non_ascii_round_trips() {
+        let pw = "p\u{e4}ssw\u{f6}rd\u{20ac}";
+        let mut b = vec![0xFF, 0xFE];
+        for u in format!("{pw}\r\n").encode_utf16() {
+            b.extend_from_slice(&u.to_le_bytes());
+        }
+        let (_d, p) = write(&b);
+        assert_eq!(Secret::from_file(&p).unwrap().expose(), pw);
     }
 
     #[test]
