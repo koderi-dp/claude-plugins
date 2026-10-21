@@ -826,3 +826,23 @@ fn server_masks_replaced_password() {
     assert!(!text.contains(password.expose()), "password leaked");
     assert!(text.lines().any(|l| l == "***"), "{text}");
 }
+
+#[test]
+#[ignore]
+fn server_trims_one_long_line() {
+    let mut c = McpClient::start();
+    let args = serde_json::json!({"host": host(), "port": port(), "user": "tester",
+        "key_file": test_dir().join("id_ed25519").to_str().unwrap(),
+        "command": "head -c 1000000 /dev/zero | tr '\\000' a; echo"});
+    let (is_error, text) = c.call("ssh", args);
+    assert!(!is_error, "{text}");
+    assert!(text.len() < 110_000, "{}", text.len());
+    assert!(text.contains("characters omitted"), "no char trim marker");
+    let path_line = text
+        .lines()
+        .find(|l| l.starts_with("full output: "))
+        .expect("no full output line");
+    let path = PathBuf::from(path_line.trim_start_matches("full output: "));
+    assert_eq!(std::fs::read(&path).unwrap().len(), 1_000_001);
+    let _ = std::fs::remove_file(&path);
+}

@@ -30,8 +30,8 @@ pub struct SshParams {
     pub key_passphrase_file: Option<String>,
     /// Seconds to wait for the command, 1-600. Default 60.
     pub timeout_s: Option<u64>,
-    /// Output lines to show per stream (first and last half), at least 1. Default 200. The full
-    /// output is saved to a file when trimmed.
+    /// Output lines to show per stream (first and last half), at least 1. Default 200. Each
+    /// stream is also cut to 100,000 characters. The full output is saved to a file when trimmed.
     pub max_lines: Option<usize>,
 }
 

@@ -1,11 +1,17 @@
 //! Renders command and download results: header, trimming, masking, full-output file.
 
+use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::known_hosts::HostKeyStatus;
 use crate::secret::{Secret, mask_all};
+
+/// Bytes kept at each end of a stream; a stream is captured up to twice this.
+pub const CAPTURE_HALF: usize = 32 * 1024 * 1024;
+/// Characters shown per stream after line trimming.
+pub const MAX_CHARS: usize = 100_000;
 
 pub struct ExecOutcome {
     pub user: String,
@@ -14,8 +20,68 @@ pub struct ExecOutcome {
     pub elapsed: Duration,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+    /// Where `stdout` lost its middle to the capture cap, if it did.
+    pub stdout_cut: Option<Cut>,
+    pub stderr_cut: Option<Cut>,
     pub timed_out: Option<u64>,
     pub key_status: HostKeyStatus,
+}
+
+/// A gap in captured bytes: `dropped` bytes were discarded at offset `at`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cut {
+    pub at: usize,
+    pub dropped: u64,
+}
+
+/// Captures a stream, keeping the first `half` bytes and a ring buffer of the last `half`.
+pub struct Capture {
+    half: usize,
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    dropped: u64,
+}
+
+impl Capture {
+    pub fn new(half: usize) -> Capture {
+        Capture {
+            half,
+            head: Vec::new(),
+            tail: VecDeque::new(),
+            dropped: 0,
+        }
+    }
+
+    pub fn push(&mut self, mut data: &[u8]) {
+        if self.head.len() < self.half {
+            let n = (self.half - self.head.len()).min(data.len());
+            self.head.extend_from_slice(&data[..n]);
+            data = &data[n..];
+        }
+        if data.len() > self.half {
+            // Everything before the last `half` bytes of `data` goes, old tail included.
+            let skip = data.len() - self.half;
+            self.dropped += (self.tail.len() + skip) as u64;
+            self.tail.clear();
+            data = &data[skip..];
+        }
+        self.tail.extend(data);
+        let excess = self.tail.len().saturating_sub(self.half);
+        self.tail.drain(..excess);
+        self.dropped += excess as u64;
+    }
+
+    /// The captured bytes and where the middle was dropped, if it was.
+    pub fn finish(self) -> (Vec<u8>, Option<Cut>) {
+        let at = self.head.len();
+        let mut bytes = self.head;
+        bytes.extend(self.tail);
+        let cut = (self.dropped > 0).then_some(Cut {
+            at,
+            dropped: self.dropped,
+        });
+        (bytes, cut)
+    }
 }
 
 pub fn render_exec(
@@ -24,10 +90,11 @@ pub fn render_exec(
     secrets: &[&Secret],
     full_dir: &Path,
 ) -> String {
-    let stdout = mask_all(secrets, &String::from_utf8_lossy(&o.stdout));
-    let stderr = mask_all(secrets, &String::from_utf8_lossy(&o.stderr));
-    let (shown_out, trimmed_out) = trim_lines(&stdout, max_lines);
-    let (shown_err, trimmed_err) = trim_lines(&stderr, max_lines);
+    // Masking runs on the whole captured text, before any trimming.
+    let stdout = captured_text(&o.stdout, o.stdout_cut, secrets);
+    let stderr = captured_text(&o.stderr, o.stderr_cut, secrets);
+    let (shown_out, trimmed_out) = trim(&stdout, max_lines);
+    let (shown_err, trimmed_err) = trim(&stderr, max_lines);
 
     let mut out = String::new();
     out.push_str(&key_warning(&o.host, &o.key_status));
@@ -130,6 +197,66 @@ pub(crate) fn size(bytes: u64) -> String {
     }
 }
 
+/// Decodes and masks captured bytes. Around a capture cut, a secret may have been split, so a
+/// partial secret ending the head or starting the tail is masked as well.
+fn captured_text(bytes: &[u8], cut: Option<Cut>, secrets: &[&Secret]) -> String {
+    let Some(cut) = cut else {
+        return mask_all(secrets, &String::from_utf8_lossy(bytes));
+    };
+    let mut head = bytes[..cut.at].to_vec();
+    let mut tail = bytes[cut.at..].to_vec();
+    for s in secrets {
+        let p = s.expose().as_bytes();
+        if let Some(k) = (1..p.len()).rev().find(|&k| head.ends_with(&p[..k])) {
+            head.truncate(head.len() - k);
+            head.extend_from_slice(b"***");
+        }
+        if let Some(k) = (1..p.len())
+            .rev()
+            .find(|&k| tail.starts_with(&p[p.len() - k..]))
+        {
+            tail.splice(..k, *b"***");
+        }
+    }
+    let mut out = mask_all(secrets, &String::from_utf8_lossy(&head));
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&format!("… {} bytes dropped …\n", cut.dropped));
+    out.push_str(&mask_all(secrets, &String::from_utf8_lossy(&tail)));
+    out
+}
+
+/// Line trimming, then character trimming. Returns the text and whether it was cut.
+fn trim(text: &str, max_lines: usize) -> (String, bool) {
+    let (lines, by_lines) = trim_lines(text, max_lines);
+    let (shown, by_chars) = trim_chars(&lines, MAX_CHARS);
+    (shown, by_lines || by_chars)
+}
+
+/// Keeps the first `max / 2` and last `max - max / 2` characters when there are more than
+/// `max`, cutting on char boundaries. Returns the text and whether it was cut.
+fn trim_chars(text: &str, max: usize) -> (String, bool) {
+    let total = text.chars().count();
+    if total <= max {
+        return (text.to_string(), false);
+    }
+    let head = max / 2;
+    let tail = max - head;
+    let byte_at = |n: usize| text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
+    let head_end = byte_at(head);
+    let tail_start = byte_at(total - tail);
+    let omitted = total - head - tail;
+    (
+        format!(
+            "{}\n… {omitted} characters omitted …\n{}",
+            &text[..head_end],
+            &text[tail_start..]
+        ),
+        true,
+    )
+}
+
 /// Keeps the first `max_lines / 2` and last `max_lines - max_lines / 2` lines
 /// when there are more than `max_lines`. Returns the text and whether it was cut.
 fn trim_lines(text: &str, max_lines: usize) -> (String, bool) {
@@ -193,9 +320,101 @@ mod tests {
             elapsed: Duration::from_millis(400),
             stdout: b"hello\n".to_vec(),
             stderr: Vec::new(),
+            stdout_cut: None,
+            stderr_cut: None,
             timed_out: None,
             key_status: HostKeyStatus::Match,
         }
+    }
+
+    fn capture(half: usize, chunks: &[&[u8]]) -> (Vec<u8>, Option<Cut>) {
+        let mut c = Capture::new(half);
+        for chunk in chunks {
+            c.push(chunk);
+        }
+        c.finish()
+    }
+
+    #[test]
+    fn capture_under_cap_keeps_everything() {
+        assert_eq!(
+            capture(4, &[b"abc", b"defgh"]),
+            (b"abcdefgh".to_vec(), None)
+        );
+    }
+
+    #[test]
+    fn capture_keeps_head_and_tail_and_counts_dropped() {
+        let (bytes, cut) = capture(4, &[b"ab", b"cdef", b"ghij", b"k"]);
+        assert_eq!(bytes, b"abcdhijk");
+        assert_eq!(cut, Some(Cut { at: 4, dropped: 3 }));
+        // A chunk larger than the tail replaces it whole.
+        let (bytes, cut) = capture(4, &[b"abcdef", b"0123456789"]);
+        assert_eq!(bytes, b"abcd6789");
+        assert_eq!(cut, Some(Cut { at: 4, dropped: 8 }));
+    }
+
+    #[test]
+    fn capture_cap_bounds_memory() {
+        let mut c = Capture::new(1024);
+        let chunk = vec![b'x'; 300];
+        for _ in 0..1000 {
+            c.push(&chunk);
+        }
+        let (bytes, cut) = c.finish();
+        assert_eq!(bytes.len(), 2048);
+        assert_eq!(cut.unwrap().dropped, 300_000 - 2048);
+    }
+
+    #[test]
+    fn dropped_bytes_marker_and_split_secret_masked() {
+        let (_sd, s) = secret("hunter2");
+        let d = tempfile::tempdir().unwrap();
+        let mut o = outcome();
+        // The head ends with the start of the secret, the tail starts with its end.
+        let (bytes, cut) = capture(8, &[b"abcdhunt", b"XXXXXXXX", b"er2 tail"]);
+        assert_eq!(bytes, b"abcdhunter2 tail");
+        o.stdout = bytes;
+        o.stdout_cut = cut;
+        let out = render_exec(&o, 200, &[&s], d.path());
+        assert!(
+            out.contains("abcd***\n… 8 bytes dropped …\n*** tail"),
+            "{out}"
+        );
+        assert!(!out.contains("hunt"), "{out}");
+        assert!(!out.contains("er2"), "{out}");
+    }
+
+    #[test]
+    fn long_single_line_trimmed_by_chars() {
+        let d = tempfile::tempdir().unwrap();
+        let mut o = outcome();
+        o.stdout = vec![b'a'; 1_000_000];
+        o.stdout.extend_from_slice(b"\n");
+        let out = render_exec(&o, 200, &[], d.path());
+        assert!(out.contains("… 900001 characters omitted …"));
+        assert!(out.len() < MAX_CHARS + 1000, "{}", out.len());
+        let path_line = out
+            .lines()
+            .find(|l| l.starts_with("full output: "))
+            .unwrap();
+        let path = PathBuf::from(path_line.trim_start_matches("full output: "));
+        assert_eq!(std::fs::read(&path).unwrap().len(), 1_000_001);
+    }
+
+    #[test]
+    fn char_trim_respects_char_boundaries_and_masks_first() {
+        let (_sd, s) = secret("hunter2");
+        let d = tempfile::tempdir().unwrap();
+        let mut o = outcome();
+        // The secret sits across the head/tail cut; it is masked before the cut.
+        let mut text = "\u{e9}".repeat(MAX_CHARS / 2 - 3);
+        text.push_str("hunter2");
+        text.push_str(&"\u{fc}".repeat(MAX_CHARS));
+        o.stdout = text.into_bytes();
+        let out = render_exec(&o, 200, &[&s], d.path());
+        assert!(!out.contains("hun"), "secret prefix survived");
+        assert!(out.contains("characters omitted"));
     }
 
     fn numbered(n: usize) -> Vec<u8> {

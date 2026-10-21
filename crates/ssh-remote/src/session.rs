@@ -9,7 +9,7 @@ use russh::client::{self, AuthResult};
 use russh::keys::{self, Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{ChannelMsg, Preferred, kex, mac};
 
-use crate::format::ExecOutcome;
+use crate::format::{CAPTURE_HALF, Capture, ExecOutcome};
 use crate::known_hosts::{HostKeyStatus, KnownHosts};
 use crate::secret::Secret;
 
@@ -323,18 +323,24 @@ impl Session {
         let deadline = tokio::time::Instant::now() + timeout;
         let fail =
             |what: &str, e: russh::Error| format!("{what} on {}@{}: {e}", self.user, self.host);
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
+        let mut stdout = Capture::new(CAPTURE_HALF);
+        let mut stderr = Capture::new(CAPTURE_HALF);
         let mut exit = None;
-        let outcome = |stdout, stderr, exit, timed_out| ExecOutcome {
-            user: self.user.clone(),
-            host: self.host.clone(),
-            exit,
-            elapsed: started.elapsed(),
-            stdout,
-            stderr,
-            timed_out,
-            key_status: self.key_status.clone(),
+        let outcome = |stdout: Capture, stderr: Capture, exit, timed_out| {
+            let (stdout, stdout_cut) = stdout.finish();
+            let (stderr, stderr_cut) = stderr.finish();
+            ExecOutcome {
+                user: self.user.clone(),
+                host: self.host.clone(),
+                exit,
+                elapsed: started.elapsed(),
+                stdout,
+                stderr,
+                stdout_cut,
+                stderr_cut,
+                timed_out,
+                key_status: self.key_status.clone(),
+            }
         };
         let expired = Some(timeout.as_secs());
 
@@ -356,8 +362,8 @@ impl Session {
             // The exit status usually arrives after Eof, so read until Close.
             while let Some(msg) = channel.wait().await {
                 match msg {
-                    ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-                    ChannelMsg::ExtendedData { data, ext: 1 } => stderr.extend_from_slice(&data),
+                    ChannelMsg::Data { data } => stdout.push(&data),
+                    ChannelMsg::ExtendedData { data, ext: 1 } => stderr.push(&data),
                     ChannelMsg::ExitStatus { exit_status } => exit = Some(exit_status),
                     ChannelMsg::Failure => {
                         return Err(format!(
