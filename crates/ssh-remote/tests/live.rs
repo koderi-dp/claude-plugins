@@ -455,3 +455,33 @@ async fn reconnects_closed_session_once() {
     // the call then reconnects with the stored credentials.
     assert_eq!(whoami(&pool, &target(), None).await.unwrap(), "tester");
 }
+
+#[tokio::test]
+#[ignore]
+async fn changed_host_key_survives_failed_first_call() {
+    let (dir, known) = known();
+    std::fs::write(
+        dir.path().join("known_hosts"),
+        format!("{}:{} SHA256:stale-fingerprint\n", host(), port()),
+    )
+    .unwrap();
+    let pool = Pool::new(known, Duration::from_secs(300));
+    let err = pool
+        .with_session(&target(), Some(key_creds()), async |_s, _secrets| {
+            Err::<(), _>("channel failed".to_string())
+        })
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err, "channel failed");
+    let status = async || {
+        pool.with_session(&target(), None, async |s, _secrets| Ok(s.key_status.clone()))
+            .await
+            .unwrap()
+    };
+    match status().await {
+        HostKeyStatus::Changed { old, .. } => assert_eq!(old, "SHA256:stale-fingerprint"),
+        other => panic!("expected Changed after a failed first call, got {other:?}"),
+    }
+    assert_eq!(status().await, HostKeyStatus::Match);
+}

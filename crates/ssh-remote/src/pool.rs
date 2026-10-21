@@ -102,9 +102,12 @@ impl Pool {
             .chain(entry.creds.key.as_ref().and_then(|(_, p)| p.as_ref()))
             .collect();
         let result = f(&entry.session, &secrets).await;
-        // The connect-time host-key status is reported once; later calls on this connection
-        // see `Match`.
-        entry.session.key_status = HostKeyStatus::Match;
+        // The connect-time host-key status is reported once, by the first call that succeeds;
+        // later calls on this connection see `Match`. A failed call keeps it, so a changed-key
+        // warning is not lost to an error.
+        if result.is_ok() {
+            entry.session.key_status = HostKeyStatus::Match;
+        }
         entry.last_used = Instant::now();
         result
     }
