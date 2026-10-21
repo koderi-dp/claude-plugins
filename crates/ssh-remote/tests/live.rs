@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use ssh_remote::known_hosts::{HostKeyStatus, KnownHosts};
-use ssh_remote::secret::Secret;
+use ssh_remote::pool::Pool;
+use ssh_remote::secret::{Secret, mask_all};
 use ssh_remote::session::{Creds, Session, Target};
 
 fn test_dir() -> PathBuf {
@@ -289,4 +290,168 @@ async fn known_host_recorded_then_changed() {
         }
         other => panic!("expected Changed, got {other:?}"),
     }
+}
+
+// ---- Pool ----
+
+fn pool(idle: Duration) -> (tempfile::TempDir, Pool) {
+    let (dir, known) = known();
+    (dir, Pool::new(known, idle))
+}
+
+/// Copies the test password into a temp file the test may delete.
+fn temp_password_creds(dir: &std::path::Path, name: &str, from: &str) -> (PathBuf, Creds) {
+    let path = dir.join(name);
+    std::fs::copy(test_dir().join(from), &path).unwrap();
+    let creds = Creds {
+        password: Some(Secret::from_file(&path).unwrap()),
+        key: None,
+    };
+    (path, creds)
+}
+
+async fn whoami(pool: &Pool, t: &Target, creds: Option<Creds>) -> Result<String, String> {
+    pool.with_session(t, creds, async |s, _secrets| {
+        let out = s.exec("whoami", Duration::from_secs(10)).await?;
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn reuses_session_without_password_file() {
+    let (dir, pool) = pool(Duration::from_secs(300));
+    let (pw_path, creds) = temp_password_creds(dir.path(), "pw.txt", "pw.txt");
+    assert_eq!(
+        whoami(&pool, &target(), Some(creds)).await.unwrap(),
+        "tester"
+    );
+    std::fs::remove_file(&pw_path).unwrap();
+    assert_eq!(whoami(&pool, &target(), None).await.unwrap(), "tester");
+}
+
+#[tokio::test]
+#[ignore]
+async fn secrets_passed_to_f_mask_output() {
+    let (_dir, pool) = pool(Duration::from_secs(300));
+    let pw = std::fs::read_to_string(test_dir().join("pw.txt")).unwrap();
+    let masked = pool
+        .with_session(&target(), Some(password_creds()), async |s, secrets| {
+            assert_eq!(secrets.len(), 1);
+            let out = s
+                .exec(&format!("echo {pw}"), Duration::from_secs(10))
+                .await?;
+            Ok(mask_all(secrets, &String::from_utf8_lossy(&out.stdout)))
+        })
+        .await
+        .unwrap();
+    assert!(!masked.contains(pw.trim()), "{masked}");
+    assert!(masked.contains("***"), "{masked}");
+}
+
+fn other_target() -> Target {
+    Target {
+        host: host(),
+        port: 2223,
+        user: "other".into(),
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn different_users_are_separate_entries() {
+    let (dir, pool) = pool(Duration::from_secs(300));
+    let (_, tester) = temp_password_creds(dir.path(), "pw.txt", "pw.txt");
+    let (_, other) = temp_password_creds(dir.path(), "pw-other.txt", "pw-other.txt");
+    assert_ne!(
+        std::fs::read(test_dir().join("pw.txt")).unwrap(),
+        std::fs::read(test_dir().join("pw-other.txt")).unwrap()
+    );
+    let err = whoami(&pool, &other_target(), None).await.err().unwrap();
+    assert!(err.starts_with("no credentials for other@"), "{err}");
+    assert_eq!(
+        whoami(&pool, &target(), Some(tester)).await.unwrap(),
+        "tester"
+    );
+    let err = whoami(&pool, &other_target(), None).await.err().unwrap();
+    assert!(err.starts_with("no credentials for other@"), "{err}");
+    assert_eq!(
+        whoami(&pool, &other_target(), Some(other)).await.unwrap(),
+        "other"
+    );
+    assert_eq!(whoami(&pool, &target(), None).await.unwrap(), "tester");
+    assert_eq!(whoami(&pool, &other_target(), None).await.unwrap(), "other");
+}
+
+#[tokio::test]
+#[ignore]
+async fn idle_expiry() {
+    let (_dir, pool) = pool(Duration::from_secs(1));
+    assert_eq!(
+        whoami(&pool, &target(), Some(password_creds()))
+            .await
+            .unwrap(),
+        "tester"
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let err = whoami(&pool, &target(), None).await.err().unwrap();
+    assert!(err.starts_with("no credentials for tester@"), "{err}");
+}
+
+#[tokio::test]
+#[ignore]
+async fn changed_host_key_reported_once_per_connection() {
+    let (dir, known) = known();
+    // A stale fingerprint for the test server makes the first connect see a changed key.
+    std::fs::write(
+        dir.path().join("known_hosts"),
+        format!("{}:{} SHA256:stale-fingerprint\n", host(), port()),
+    )
+    .unwrap();
+    let pool = Pool::new(known, Duration::from_secs(300));
+    let status = async |creds: Option<Creds>| {
+        pool.with_session(&target(), creds, async |s, _secrets| {
+            Ok(s.exec("true", Duration::from_secs(10)).await?.key_status)
+        })
+        .await
+        .unwrap()
+    };
+    match status(Some(key_creds())).await {
+        HostKeyStatus::Changed { old, .. } => assert_eq!(old, "SHA256:stale-fingerprint"),
+        other => panic!("expected Changed, got {other:?}"),
+    }
+    assert_eq!(status(None).await, HostKeyStatus::Match);
+}
+
+#[tokio::test]
+#[ignore]
+async fn reconnects_closed_session_once() {
+    let (_dir, pool) = pool(Duration::from_secs(300));
+    assert_eq!(
+        whoami(&pool, &target(), Some(key_creds())).await.unwrap(),
+        "tester"
+    );
+    // Restarting the container kills the connection but keeps host keys and credentials. The
+    // commands run off the runtime thread so russh's session task can see the disconnect.
+    tokio::task::spawn_blocking(|| {
+        let out = std::process::Command::new("docker")
+            .args(["restart", "ssh-remote-test"])
+            .output()
+            .expect("run docker restart");
+        assert!(out.status.success(), "docker restart failed");
+        let justfile = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../justfile");
+        let out = std::process::Command::new("just")
+            .arg("--justfile")
+            .arg(&justfile)
+            .arg("ssh-test-server")
+            .output()
+            .expect("run just ssh-test-server");
+        assert!(out.status.success(), "just ssh-test-server failed");
+    })
+    .await
+    .unwrap();
+    // The restart and banner wait take seconds, long enough for the client to see the drop;
+    // the call then reconnects with the stored credentials.
+    assert_eq!(whoami(&pool, &target(), None).await.unwrap(), "tester");
 }

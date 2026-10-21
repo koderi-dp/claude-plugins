@@ -22,7 +22,7 @@ test-live:
     cargo test -p everything-find --test live -- --ignored
     cargo test -p ssh-remote --test live -- --ignored --test-threads=1
 
-# Start the OpenSSH test container for ssh-remote's live tests (keys and password in target/ssh-test)
+# Start the OpenSSH test containers for ssh-remote's live tests: tester on 2222, other on 2223 (secrets in target/ssh-test)
 [script('pwsh', '-NoLogo', '-NoProfile')]
 ssh-test-server:
     $ErrorActionPreference = 'Stop'
@@ -56,40 +56,49 @@ ssh-test-server:
         $generated = $true
     }
     Copy-Item "$plain.pub", "$enc.pub" $pub -Force
-    $state = docker container inspect -f '{{{{.State.Running}}' ssh-remote-test 2>$null
-    $exists = $LASTEXITCODE -eq 0
-    if ($exists -and $generated) {
-        Write-Host 'test credentials were regenerated; recreating ssh-remote-test'
-        docker rm -f -v ssh-remote-test | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'docker rm failed' }
-        $exists = $false
+    # Creates (or recreates when $regen) and starts one container, then waits for its banner.
+    function Start-TestServer($name, $port, $user, $pwFile, $regen) {
+        $state = docker container inspect -f '{{{{.State.Running}}' $name 2>$null
+        $exists = $LASTEXITCODE -eq 0
+        if ($exists -and $regen) {
+            Write-Host "test credentials were regenerated; recreating $name"
+            docker rm -f -v $name | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "docker rm $name failed" }
+            $exists = $false
+        }
+        if (-not $exists) {
+            docker run -d --name $name -p "${port}:2222" `
+                -e USER_NAME=$user -e PASSWORD_ACCESS=true `
+                -e USER_PASSWORD_FILE=/pw -v "${pwFile}:/pw:ro" `
+                -e PUBLIC_KEY_DIR=/keys -v "${pub}:/keys:ro" `
+                lscr.io/linuxserver/openssh-server:latest | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "docker run $name failed" }
+        } elseif ($state -ne 'true') {
+            docker start $name | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "docker start $name failed" }
+        }
+        # Docker's port proxy accepts TCP before sshd is up, so wait for the SSH banner.
+        $deadline = (Get-Date).AddSeconds(60)
+        while ($true) {
+            try {
+                $tcp = [System.Net.Sockets.TcpClient]::new()
+                $tcp.Connect('127.0.0.1', $port)
+                $tcp.ReceiveTimeout = 2000
+                $line = [System.IO.StreamReader]::new($tcp.GetStream()).ReadLine()
+                $tcp.Dispose()
+                if ($line -like 'SSH-2.0-*') { break }
+            } catch { }
+            if ((Get-Date) -gt $deadline) { throw "ssh test server did not answer on 127.0.0.1:$port within 60 s" }
+            Start-Sleep -Milliseconds 500
+        }
+        Write-Host "ssh test server ready on 127.0.0.1:$port (user $user)"
     }
-    if (-not $exists) {
-        docker run -d --name ssh-remote-test -p 2222:2222 `
-            -e USER_NAME=tester -e PASSWORD_ACCESS=true `
-            -e USER_PASSWORD_FILE=/pw -v "${pw}:/pw:ro" `
-            -e PUBLIC_KEY_DIR=/keys -v "${pub}:/keys:ro" `
-            lscr.io/linuxserver/openssh-server:latest | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'docker run failed' }
-    } elseif ($state -ne 'true') {
-        docker start ssh-remote-test | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'docker start failed' }
-    }
-    # Docker's port proxy accepts TCP before sshd is up, so wait for the SSH banner.
-    $deadline = (Get-Date).AddSeconds(60)
-    while ($true) {
-        try {
-            $tcp = [System.Net.Sockets.TcpClient]::new()
-            $tcp.Connect('127.0.0.1', 2222)
-            $tcp.ReceiveTimeout = 2000
-            $line = [System.IO.StreamReader]::new($tcp.GetStream()).ReadLine()
-            $tcp.Dispose()
-            if ($line -like 'SSH-2.0-*') { break }
-        } catch { }
-        if ((Get-Date) -gt $deadline) { throw 'ssh test server did not answer on 127.0.0.1:2222 within 60 s' }
-        Start-Sleep -Milliseconds 500
-    }
-    Write-Host 'ssh test server ready on 127.0.0.1:2222 (user tester)'
+    Start-TestServer 'ssh-remote-test' 2222 'tester' $pw $generated
+    # A second user with its own password, for the pool's separate-entries test.
+    $pwOther = Join-Path $dir 'pw-other.txt'
+    $otherGenerated = $generated
+    if (-not (Test-Path $pwOther)) { Set-Content $pwOther ([guid]::NewGuid().ToString('N')) -NoNewline; $otherGenerated = $true }
+    Start-TestServer 'ssh-remote-test-other' 2223 'other' $pwOther $otherGenerated
 
 # Remove and recreate the ssh-remote test container; it gets new host keys
 [script('pwsh', '-NoLogo', '-NoProfile')]
