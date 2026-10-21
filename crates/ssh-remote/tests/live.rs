@@ -475,13 +475,80 @@ async fn changed_host_key_survives_failed_first_call() {
         .unwrap();
     assert_eq!(err, "channel failed");
     let status = async || {
-        pool.with_session(&target(), None, async |s, _secrets| Ok(s.key_status.clone()))
-            .await
-            .unwrap()
+        pool.with_session(&target(), None, async |s, _secrets| {
+            Ok(s.key_status.clone())
+        })
+        .await
+        .unwrap()
     };
     match status().await {
         HostKeyStatus::Changed { old, .. } => assert_eq!(old, "SHA256:stale-fingerprint"),
         other => panic!("expected Changed after a failed first call, got {other:?}"),
     }
     assert_eq!(status().await, HostKeyStatus::Match);
+}
+
+mod download {
+    use super::*;
+    use ssh_remote::transfer::download;
+
+    async fn put(s: &Session, remote: &str, content: &str) {
+        let out = s
+            .exec(
+                &format!("printf %s '{content}' > {remote}"),
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.exit, Some(0));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn downloads_file() {
+        let s = connect(&key_creds()).await;
+        put(&s, "/tmp/f.txt", "ssh").await;
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("f.txt");
+        let n = download(&s, "/tmp/f.txt", &local, 1000).await.unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(std::fs::read(&local).unwrap(), b"ssh");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn creates_parent_dirs() {
+        let s = connect(&key_creds()).await;
+        put(&s, "/tmp/f.txt", "ssh").await;
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("a").join("b").join("f.txt");
+        download(&s, "/tmp/f.txt", &local, 1000).await.unwrap();
+        assert_eq!(std::fs::read(&local).unwrap(), b"ssh");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn refuses_over_cap() {
+        let s = connect(&key_creds()).await;
+        put(&s, "/tmp/big.txt", "12345678901").await;
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("big.txt");
+        let e = download(&s, "/tmp/big.txt", &local, 10).await.unwrap_err();
+        assert!(e.contains("limit is"), "{e}");
+        assert!(e.contains("/tmp/big.txt"), "{e}");
+        assert!(!local.exists());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn missing_remote_file() {
+        let s = connect(&password_creds()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("x");
+        let e = download(&s, "/tmp/does-not-exist.txt", &local, 1000)
+            .await
+            .unwrap_err();
+        assert!(e.contains("/tmp/does-not-exist.txt"), "{e}");
+        assert!(!local.exists());
+    }
 }

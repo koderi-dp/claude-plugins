@@ -87,8 +87,14 @@ mod tests {
     #[test]
     fn first_seen_is_new_then_match() {
         let (_d, kh) = store();
-        assert_eq!(kh.check_and_record("h", 22, "SHA256:A").unwrap(), HostKeyStatus::New);
-        assert_eq!(kh.check_and_record("h", 22, "SHA256:A").unwrap(), HostKeyStatus::Match);
+        assert_eq!(
+            kh.check_and_record("h", 22, "SHA256:A").unwrap(),
+            HostKeyStatus::New
+        );
+        assert_eq!(
+            kh.check_and_record("h", 22, "SHA256:A").unwrap(),
+            HostKeyStatus::Match
+        );
     }
 
     #[test]
@@ -97,18 +103,36 @@ mod tests {
         kh.check_and_record("h", 22, "A").unwrap();
         assert_eq!(
             kh.check_and_record("h", 22, "B").unwrap(),
-            HostKeyStatus::Changed { old: "A".into(), new: "B".into() }
+            HostKeyStatus::Changed {
+                old: "A".into(),
+                new: "B".into()
+            }
         );
-        assert_eq!(kh.check_and_record("h", 22, "B").unwrap(), HostKeyStatus::Match);
+        assert_eq!(
+            kh.check_and_record("h", 22, "B").unwrap(),
+            HostKeyStatus::Match
+        );
     }
 
     #[test]
     fn ports_are_separate() {
         let (_d, kh) = store();
-        assert_eq!(kh.check_and_record("h", 22, "A").unwrap(), HostKeyStatus::New);
-        assert_eq!(kh.check_and_record("h", 2222, "B").unwrap(), HostKeyStatus::New);
-        assert_eq!(kh.check_and_record("h", 22, "A").unwrap(), HostKeyStatus::Match);
-        assert_eq!(kh.check_and_record("h", 2222, "B").unwrap(), HostKeyStatus::Match);
+        assert_eq!(
+            kh.check_and_record("h", 22, "A").unwrap(),
+            HostKeyStatus::New
+        );
+        assert_eq!(
+            kh.check_and_record("h", 2222, "B").unwrap(),
+            HostKeyStatus::New
+        );
+        assert_eq!(
+            kh.check_and_record("h", 22, "A").unwrap(),
+            HostKeyStatus::Match
+        );
+        assert_eq!(
+            kh.check_and_record("h", 2222, "B").unwrap(),
+            HostKeyStatus::Match
+        );
     }
 
     #[test]
@@ -118,9 +142,18 @@ mod tests {
         kh.check_and_record("b", 22, "B").unwrap();
         kh.check_and_record("c", 22, "C").unwrap();
         kh.check_and_record("b", 22, "B2").unwrap();
-        assert_eq!(kh.check_and_record("a", 22, "A").unwrap(), HostKeyStatus::Match);
-        assert_eq!(kh.check_and_record("b", 22, "B2").unwrap(), HostKeyStatus::Match);
-        assert_eq!(kh.check_and_record("c", 22, "C").unwrap(), HostKeyStatus::Match);
+        assert_eq!(
+            kh.check_and_record("a", 22, "A").unwrap(),
+            HostKeyStatus::Match
+        );
+        assert_eq!(
+            kh.check_and_record("b", 22, "B2").unwrap(),
+            HostKeyStatus::Match
+        );
+        assert_eq!(
+            kh.check_and_record("c", 22, "C").unwrap(),
+            HostKeyStatus::Match
+        );
     }
 
     #[test]

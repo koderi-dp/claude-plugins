@@ -370,6 +370,25 @@ impl Session {
         })
     }
 
+    /// Opens an SFTP session on a fresh channel.
+    pub async fn sftp(&self) -> Result<russh_sftp::client::SftpSession, String> {
+        let fail = |what: &str, e: &dyn std::fmt::Display| {
+            format!("{what} on {}@{}: {e}", self.user, self.host)
+        };
+        let channel = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|e| fail("cannot open a channel", &e))?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| fail("the server refused the sftp subsystem", &e))?;
+        russh_sftp::client::SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| fail("cannot start sftp", &e))
+    }
+
     pub fn is_closed(&self) -> bool {
         self.handle.is_closed()
     }

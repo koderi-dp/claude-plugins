@@ -44,8 +44,10 @@ pub fn render_exec(
     ));
     push_section(&mut out, &shown_out);
     if !stderr.is_empty() {
-        out.push_str("
---- stderr ---");
+        out.push_str(
+            "
+--- stderr ---",
+        );
         push_section(&mut out, &shown_err);
     }
     if trimmed_out || trimmed_err {
@@ -54,15 +56,22 @@ pub fn render_exec(
             if !full.is_empty() && !full.ends_with('\n') {
                 full.push('\n');
             }
-            full.push_str("--- stderr ---
-");
+            full.push_str(
+                "--- stderr ---
+",
+            );
             full.push_str(&stderr);
         }
         match write_full(full_dir, &full) {
-            Ok(path) => out.push_str(&format!("
-full output: {}", path.display())),
-            Err(e) => out.push_str(&format!("
-full output: not saved ({e})")),
+            Ok(path) => out.push_str(&format!(
+                "
+full output: {}",
+                path.display()
+            )),
+            Err(e) => out.push_str(&format!(
+                "
+full output: not saved ({e})"
+            )),
         }
     }
     out
@@ -89,8 +98,10 @@ pub fn render_download(
 fn key_warning(host: &str, status: &HostKeyStatus) -> String {
     match status {
         HostKeyStatus::Changed { old, new } => {
-            format!("warning: host key for {host} changed ({old} → {new}), accepted
-")
+            format!(
+                "warning: host key for {host} changed ({old} → {new}), accepted
+"
+            )
         }
         _ => String::new(),
     }
@@ -107,7 +118,7 @@ fn secs(d: Duration) -> String {
     format!("{:.1} s", d.as_secs_f64())
 }
 
-fn size(bytes: u64) -> String {
+pub(crate) fn size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     let b = bytes as f64;
     if b < KB {
@@ -132,8 +143,13 @@ fn trim_lines(text: &str, max_lines: usize) -> (String, bool) {
     let mut parts: Vec<String> = lines[..head].iter().map(|l| l.to_string()).collect();
     parts.push(format!("… {omitted} lines omitted …"));
     parts.extend(lines[lines.len() - tail..].iter().map(|l| l.to_string()));
-    (parts.join("
-"), true)
+    (
+        parts.join(
+            "
+",
+        ),
+        true,
+    )
 }
 
 /// Writes `content` to a new `<YYYYMMDD-HHMMSS>[-n].log` in `dir`, never overwriting.
@@ -147,7 +163,11 @@ fn write_full(dir: &Path, content: &str) -> std::io::Result<PathBuf> {
             format!("{stamp}-{n}.log")
         };
         let path = dir.join(name);
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
             Ok(mut f) => {
                 f.write_all(content.as_bytes())?;
                 return Ok(path);
@@ -179,7 +199,10 @@ mod tests {
     }
 
     fn numbered(n: usize) -> Vec<u8> {
-        (1..=n).map(|i| format!("{i}\n")).collect::<String>().into_bytes()
+        (1..=n)
+            .map(|i| format!("{i}\n"))
+            .collect::<String>()
+            .into_bytes()
     }
 
     fn secret(text: &str) -> (tempfile::TempDir, Secret) {
@@ -228,13 +251,19 @@ mod tests {
         o.stdout = numbered(1000);
         let out = render_exec(&o, 200, &[], &full);
         let lines: Vec<&str> = out.lines().collect();
-        let i = lines.iter().position(|l| *l == "… 800 lines omitted …").unwrap();
+        let i = lines
+            .iter()
+            .position(|l| *l == "… 800 lines omitted …")
+            .unwrap();
         assert_eq!(lines[i - 1], "100");
         assert_eq!(lines[i - 100], "1");
         assert_eq!(lines[i + 1], "901");
         assert_eq!(lines[i + 100], "1000");
         assert!(!lines.contains(&"500"));
-        let path_line = lines.iter().find(|l| l.starts_with("full output: ")).unwrap();
+        let path_line = lines
+            .iter()
+            .find(|l| l.starts_with("full output: "))
+            .unwrap();
         let path = PathBuf::from(path_line.trim_start_matches("full output: "));
         assert!(path.starts_with(&full));
         assert_eq!(path.extension().unwrap(), "log");
@@ -271,14 +300,21 @@ mod tests {
     fn changed_key_warning_first_line() {
         let d = tempfile::tempdir().unwrap();
         let mut o = outcome();
-        o.key_status =
-            HostKeyStatus::Changed { old: "SHA256:old".into(), new: "SHA256:new".into() };
+        o.key_status = HostKeyStatus::Changed {
+            old: "SHA256:old".into(),
+            new: "SHA256:new".into(),
+        };
         let out = render_exec(&o, 200, &[], d.path());
         assert_eq!(
             out.lines().next().unwrap(),
             "warning: host key for 10.0.0.21 changed (SHA256:old → SHA256:new), accepted"
         );
-        assert!(out.lines().nth(1).unwrap().starts_with("root@10.0.0.21 · exit 0"));
+        assert!(
+            out.lines()
+                .nth(1)
+                .unwrap()
+                .starts_with("root@10.0.0.21 · exit 0")
+        );
     }
 
     #[test]
@@ -346,12 +382,18 @@ mod tests {
             Duration::from_millis(800),
             &HostKeyStatus::Match,
         );
-        assert_eq!(out, r"downloaded /var/log/syslog → C:\x\syslog (2.4 MB, 0.8 s)");
+        assert_eq!(
+            out,
+            r"downloaded /var/log/syslog → C:\x\syslog (2.4 MB, 0.8 s)"
+        );
     }
 
     #[test]
     fn download_changed_key_warning_first_line() {
-        let st = HostKeyStatus::Changed { old: "SHA256:old".into(), new: "SHA256:new".into() };
+        let st = HostKeyStatus::Changed {
+            old: "SHA256:old".into(),
+            new: "SHA256:new".into(),
+        };
         let out = render_download("h", "/f", Path::new("g"), 1, Duration::from_millis(0), &st);
         assert_eq!(
             out,
@@ -363,9 +405,23 @@ downloaded /f → g (1 B, 0.0 s)"
     #[test]
     fn download_small_and_kb_sizes() {
         let st = HostKeyStatus::New;
-        let out = render_download("h", "/f", Path::new("g"), 512, Duration::from_millis(0), &st);
+        let out = render_download(
+            "h",
+            "/f",
+            Path::new("g"),
+            512,
+            Duration::from_millis(0),
+            &st,
+        );
         assert_eq!(out, "downloaded /f → g (512 B, 0.0 s)");
-        let out = render_download("h", "/f", Path::new("g"), 1536, Duration::from_millis(0), &st);
+        let out = render_download(
+            "h",
+            "/f",
+            Path::new("g"),
+            1536,
+            Duration::from_millis(0),
+            &st,
+        );
         assert_eq!(out, "downloaded /f → g (1.5 KB, 0.0 s)");
     }
 }

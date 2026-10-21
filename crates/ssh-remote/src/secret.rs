@@ -23,7 +23,8 @@ impl Secret {
                 "{shown}: file is larger than 4 KB, expected a file holding only the password"
             ));
         }
-        let mut text = decode(&bytes).ok_or_else(|| format!("{shown}: is not UTF-8 or UTF-16 text"))?;
+        let mut text =
+            decode(&bytes).ok_or_else(|| format!("{shown}: is not UTF-8 or UTF-16 text"))?;
         if text.ends_with("\r\n") {
             let n = text.len() - 2;
             text.truncate(n);
@@ -34,7 +35,10 @@ impl Secret {
         if text.is_empty() {
             return Err(format!("{shown}: is empty"));
         }
-        Ok(Secret { text, source: path.to_path_buf() })
+        Ok(Secret {
+            text,
+            source: path.to_path_buf(),
+        })
     }
 
     /// Returns the secret text. Used only by the SSH auth code.
@@ -55,7 +59,9 @@ impl Secret {
 
 fn decode(bytes: &[u8]) -> Option<Zeroizing<String>> {
     if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        return std::str::from_utf8(rest).ok().map(|s| Zeroizing::new(s.to_owned()));
+        return std::str::from_utf8(rest)
+            .ok()
+            .map(|s| Zeroizing::new(s.to_owned()));
     }
     let utf16 = |rest: &[u8], f: fn([u8; 2]) -> u16| -> Option<Zeroizing<String>> {
         if rest.len() % 2 != 0 {
@@ -76,7 +82,9 @@ fn decode(bytes: &[u8]) -> Option<Zeroizing<String>> {
     if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         return utf16(rest, u16::from_be_bytes);
     }
-    std::str::from_utf8(bytes).ok().map(|s| Zeroizing::new(s.to_owned()))
+    std::str::from_utf8(bytes)
+        .ok()
+        .map(|s| Zeroizing::new(s.to_owned()))
 }
 
 /// Masks several secrets, longest first so a secret containing another is hidden whole.
@@ -155,14 +163,20 @@ mod tests {
     fn refuses_empty() {
         let (_d, p) = write(b"");
         let e = Secret::from_file(&p).unwrap_err();
-        assert!(e.contains(&p.display().to_string()) && e.contains("is empty"), "{e}");
+        assert!(
+            e.contains(&p.display().to_string()) && e.contains("is empty"),
+            "{e}"
+        );
     }
 
     #[test]
     fn refuses_over_4kb() {
         let (_d, p) = write(&vec![b'a'; 5000]);
         let e = Secret::from_file(&p).unwrap_err();
-        assert!(e.contains("expected a file holding only the password"), "{e}");
+        assert!(
+            e.contains("expected a file holding only the password"),
+            "{e}"
+        );
     }
 
     #[test]
