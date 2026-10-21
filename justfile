@@ -17,9 +17,12 @@ build:
 test:
     cargo test --workspace
 
-# Tests against a running Everything instance and the ssh-remote test server (just ssh-test-server)
-test-live:
+# Tests against the ssh-remote test server (just ssh-test-server), then a running Everything instance
+test-live: test-live-ssh
     cargo test -p everything-find --test live -- --ignored
+
+# ssh-remote's live tests alone, against the test server (just ssh-test-server)
+test-live-ssh:
     cargo test -p ssh-remote --test live -- --ignored --test-threads=1
 
 # Start the OpenSSH test containers for ssh-remote's live tests: tester on 2222, other on 2223 (secrets in target/ssh-test)

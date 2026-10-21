@@ -54,7 +54,7 @@ impl SshServer {
     }
 
     #[tool(
-        description = "Run a command on a remote host over SSH. Pass credentials as file paths (password_file or key_file); the plugin reads them, so never read or print those files."
+        description = "Run a command on a remote host over SSH. Pass credentials as file paths (password_file or key_file); the plugin reads them, so never read or print those files. Calls to the same user@host run one at a time: a call waits for the previous one, and the wait does not count against timeout_s."
     )]
     async fn ssh(
         &self,
