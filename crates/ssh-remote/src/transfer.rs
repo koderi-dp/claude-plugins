@@ -10,15 +10,48 @@ use crate::session::Session;
 /// `%TEMP%\ssh-remote\<host>\<last component of remote>`; falls back to `download` when the
 /// remote path has no file name (`download` itself refuses such paths).
 pub fn default_local_path(host: &str, remote: &str) -> PathBuf {
-    let name = remote
-        .rsplit('/')
-        .next()
-        .filter(|n| !n.is_empty())
-        .unwrap_or("download");
+    let name = remote.rsplit('/').next().unwrap_or("");
     std::env::temp_dir()
         .join("ssh-remote")
-        .join(host)
-        .join(name)
+        .join(safe_component(host, "_"))
+        .join(safe_component(name, "download"))
+}
+
+/// Turns arbitrary text into one safe Windows path component: separators, wildcards and control
+/// characters become `_`, trailing dots and spaces go, `.`/`..`/empty become `fallback`, and
+/// reserved device names get a `_` prefix.
+fn safe_component(text: &str, fallback: &str) -> String {
+    let cleaned: String = text
+        .chars()
+        .map(|c| {
+            if c.is_control() || r#"\/:*?"<>|"#.contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_end_matches(['.', ' ']);
+    if trimmed.is_empty() {
+        return fallback.to_string();
+    }
+    let stem = trimmed
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_ascii_uppercase();
+    let reserved = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.len() == 4
+        && stem.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        format!("_{trimmed}")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// The cap as shown to the user: whole megabytes as `200 MB`, anything else via `size`.
@@ -128,5 +161,46 @@ mod tests {
     fn default_path_shape() {
         let p = default_local_path("10.0.0.21", "/var/log/syslog");
         assert!(p.ends_with(Path::new("ssh-remote").join("10.0.0.21").join("syslog")));
+    }
+
+    fn base(host: &str) -> PathBuf {
+        std::env::temp_dir().join("ssh-remote").join(host)
+    }
+
+    #[test]
+    fn default_path_sanitises_windows_specials() {
+        for (remote, name) in [
+            (r"/tmp/C:\x\evil*", "C__x_evil_"),
+            (r"/tmp/..\..\x", ".._.._x"),
+            ("/tmp/a?b|c", "a_b_c"),
+            ("/tmp/name. .", "name"),
+            ("/tmp/..", "download"),
+            ("/tmp/", "download"),
+        ] {
+            let p = default_local_path("h", remote);
+            assert_eq!(p.parent().unwrap(), base("h"), "{remote}");
+            assert_eq!(p.file_name().unwrap().to_str().unwrap(), name, "{remote}");
+        }
+    }
+
+    #[test]
+    fn default_path_reserved_name() {
+        let p = default_local_path("h", "/tmp/CON");
+        assert_eq!(p, base("h").join("_CON"));
+        assert_eq!(
+            default_local_path("h", "/tmp/nul.txt"),
+            base("h").join("_nul.txt")
+        );
+        assert_eq!(
+            default_local_path("h", "/tmp/com1"),
+            base("h").join("_com1")
+        );
+    }
+
+    #[test]
+    fn default_path_ipv6_host() {
+        let p = default_local_path("fe80::1", "/tmp/f");
+        assert_eq!(p, base("fe80__1").join("f"));
+        assert_eq!(p.parent().unwrap(), base("fe80__1"));
     }
 }
