@@ -16,6 +16,8 @@ path = "src/main.rs"
 [dependencies]
 zeroize = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa", "flate2"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 
 [dev-dependencies]
 tempfile = "3"

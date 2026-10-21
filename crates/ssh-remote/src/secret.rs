@@ -1,11 +1,15 @@
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
 const MAX_BYTES: usize = 4096;
 
-/// A password read from a file. Never printed; zeroized on drop.
-pub struct Secret(Zeroizing<String>);
+/// A password read from a file. Never printed; zeroized on drop. Remembers the file it came from,
+/// so error messages can name it.
+pub struct Secret {
+    text: Zeroizing<String>,
+    source: PathBuf,
+}
 
 impl Secret {
     pub fn from_file(path: &Path) -> Result<Secret, String> {
@@ -30,12 +34,17 @@ impl Secret {
         if text.is_empty() {
             return Err(format!("{shown}: is empty"));
         }
-        Ok(Secret(text))
+        Ok(Secret { text, source: path.to_path_buf() })
     }
 
     /// Returns the secret text. Used only by the SSH auth code.
     pub fn expose(&self) -> &str {
-        &self.0
+        &self.text
+    }
+
+    /// The file the secret was read from.
+    pub fn source(&self) -> &Path {
+        &self.source
     }
 
     /// Replaces every occurrence of the secret in `text` with `***`.
@@ -107,6 +116,12 @@ mod tests {
         assert_eq!(Secret::from_file(&p).unwrap().expose(), "pw");
         let (_d, p) = write(b"pw\n\n");
         assert_eq!(Secret::from_file(&p).unwrap().expose(), "pw\n");
+    }
+
+    #[test]
+    fn remembers_source_path() {
+        let (_d, p) = write(b"pw");
+        assert_eq!(Secret::from_file(&p).unwrap().source(), p.as_path());
     }
 
     #[test]

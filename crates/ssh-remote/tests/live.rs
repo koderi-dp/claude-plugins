@@ -1,0 +1,248 @@
+//! Live tests against the OpenSSH test container. Start it with `just ssh-test-server`, then run
+//! `cargo test -p ssh-remote --test live -- --ignored --test-threads=1`.
+//!
+//! Every test uses its own known_hosts file in a tempdir, so the order does not matter, even for
+//! the test that recreates the container (new host keys, same credentials).
+
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use ssh_remote::known_hosts::{HostKeyStatus, KnownHosts};
+use ssh_remote::secret::Secret;
+use ssh_remote::session::{Creds, Session, Target};
+
+fn test_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/ssh-test")
+}
+
+fn host() -> String {
+    std::env::var("SSH_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".into())
+}
+
+fn port() -> u16 {
+    std::env::var("SSH_TEST_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(2222)
+}
+
+fn target() -> Target {
+    Target {
+        host: host(),
+        port: port(),
+        user: "tester".into(),
+    }
+}
+
+fn known() -> (tempfile::TempDir, KnownHosts) {
+    let dir = tempfile::tempdir().unwrap();
+    let known = KnownHosts::new(dir.path().join("known_hosts"));
+    (dir, known)
+}
+
+fn password_creds() -> Creds {
+    Creds {
+        password: Some(Secret::from_file(&test_dir().join("pw.txt")).unwrap()),
+        key: None,
+    }
+}
+
+fn key_creds() -> Creds {
+    Creds {
+        password: None,
+        key: Some((test_dir().join("id_ed25519"), None)),
+    }
+}
+
+async fn connect(creds: &Creds) -> Session {
+    let (_dir, known) = known();
+    Session::connect(&target(), creds, &known).await.unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn password_auth_runs_command() {
+    let s = connect(&password_creds()).await;
+    let out = s.exec("echo hi", Duration::from_secs(10)).await.unwrap();
+    assert_eq!(out.exit, Some(0));
+    assert_eq!(out.stdout, b"hi\n");
+    assert_eq!(out.user, "tester");
+    assert_eq!(out.host, host());
+    assert_eq!(out.key_status, HostKeyStatus::New);
+}
+
+#[tokio::test]
+#[ignore]
+async fn key_auth_runs_command() {
+    let s = connect(&key_creds()).await;
+    let out = s
+        .exec("echo hi; echo err >&2", Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(out.exit, Some(0));
+    assert_eq!(out.stdout, b"hi\n");
+    assert_eq!(out.stderr, b"err\n");
+}
+
+#[tokio::test]
+#[ignore]
+async fn encrypted_key_needs_passphrase() {
+    let key = test_dir().join("id_enc");
+    let (_dir, known) = known();
+    let without = Creds {
+        password: None,
+        key: Some((key.clone(), None)),
+    };
+    let err = Session::connect(&target(), &without, &known)
+        .await
+        .err()
+        .expect("must fail");
+    assert!(
+        err.contains("is encrypted: pass key_passphrase_file"),
+        "{err}"
+    );
+    assert!(err.contains(&key.display().to_string()), "{err}");
+
+    let pass = Secret::from_file(&test_dir().join("id_enc.pass")).unwrap();
+    let with = Creds {
+        password: None,
+        key: Some((key, Some(pass))),
+    };
+    let s = Session::connect(&target(), &with, &known).await.unwrap();
+    let out = s.exec("echo hi", Duration::from_secs(10)).await.unwrap();
+    assert_eq!(out.exit, Some(0));
+    assert_eq!(out.stdout, b"hi\n");
+}
+
+#[tokio::test]
+#[ignore]
+async fn wrong_password_message() {
+    let (dir, known) = known();
+    let pw_path = dir.path().join("wrong.txt");
+    std::fs::write(&pw_path, "definitely-not-the-password-7f3a").unwrap();
+    let creds = Creds {
+        password: Some(Secret::from_file(&pw_path).unwrap()),
+        key: None,
+    };
+    let err = Session::connect(&target(), &creds, &known)
+        .await
+        .err()
+        .expect("must fail");
+    assert_eq!(
+        err,
+        format!(
+            "auth failed for tester@{}:{} (password from {})",
+            host(),
+            port(),
+            pw_path.display()
+        )
+    );
+    assert!(!err.contains("definitely-not-the-password-7f3a"));
+}
+
+#[tokio::test]
+#[ignore]
+async fn nonzero_exit_is_ok() {
+    let s = connect(&key_creds()).await;
+    let out = s.exec("exit 3", Duration::from_secs(10)).await.unwrap();
+    assert_eq!(out.exit, Some(3));
+    assert_eq!(out.timed_out, None);
+}
+
+#[tokio::test]
+#[ignore]
+async fn timeout_returns_partial() {
+    let s = connect(&key_creds()).await;
+    let started = Instant::now();
+    let out = s
+        .exec("echo start; sleep 30", Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(out.timed_out, Some(2));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("start"));
+}
+
+#[tokio::test]
+#[ignore]
+async fn session_usable_after_timeout() {
+    let s = connect(&key_creds()).await;
+    let out = s
+        .exec("echo start; sleep 30", Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(out.timed_out, Some(2));
+    assert!(!s.is_closed());
+    let out = s.exec("echo ok", Duration::from_secs(10)).await.unwrap();
+    assert_eq!(out.exit, Some(0));
+    assert_eq!(out.stdout, b"ok\n");
+}
+
+#[tokio::test]
+#[ignore]
+async fn unreachable_host() {
+    let (_dir, known) = known();
+    let t = Target {
+        host: host(),
+        port: 2299,
+        user: "tester".into(),
+    };
+    let started = Instant::now();
+    let err = Session::connect(&t, &key_creds(), &known)
+        .await
+        .err()
+        .expect("must fail");
+    assert!(
+        started.elapsed() < Duration::from_secs(11),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert!(
+        err.starts_with(&format!("cannot reach {}:2299", host())),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn known_host_recorded_then_changed() {
+    let (_dir, known) = known();
+    let creds = key_creds();
+
+    let s = Session::connect(&target(), &creds, &known).await.unwrap();
+    let first = s.exec("true", Duration::from_secs(10)).await.unwrap();
+    assert_eq!(first.key_status, HostKeyStatus::New);
+    drop(s);
+
+    let s = Session::connect(&target(), &creds, &known).await.unwrap();
+    let second = s.exec("true", Duration::from_secs(10)).await.unwrap();
+    assert_eq!(second.key_status, HostKeyStatus::Match);
+    drop(s);
+
+    let justfile = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../justfile");
+    let status = std::process::Command::new("just")
+        .arg("--justfile")
+        .arg(&justfile)
+        .arg("ssh-test-server-reset")
+        .status()
+        .expect("run just ssh-test-server-reset");
+    assert!(
+        status.success(),
+        "just ssh-test-server-reset failed: {status}"
+    );
+
+    let s = Session::connect(&target(), &creds, &known).await.unwrap();
+    let third = s.exec("true", Duration::from_secs(10)).await.unwrap();
+    match third.key_status {
+        HostKeyStatus::Changed { old, new } => {
+            assert!(old.starts_with("SHA256:"), "{old}");
+            assert!(new.starts_with("SHA256:"), "{new}");
+            assert_ne!(old, new);
+        }
+        other => panic!("expected Changed, got {other:?}"),
+    }
+}

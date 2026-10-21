@@ -17,9 +17,69 @@ build:
 test:
     cargo test --workspace
 
-# Tests against a running Everything instance
+# Tests against a running Everything instance and the ssh-remote test server (just ssh-test-server)
 test-live:
     cargo test -p everything-find --test live -- --ignored
+    cargo test -p ssh-remote --test live -- --ignored --test-threads=1
+
+# Start the OpenSSH test container for ssh-remote's live tests (keys and password in target/ssh-test)
+[script('pwsh', '-NoLogo', '-NoProfile')]
+ssh-test-server:
+    $ErrorActionPreference = 'Stop'
+    $dir = Join-Path '{{justfile_directory()}}' 'target\ssh-test'
+    $pub = Join-Path $dir 'pub'
+    New-Item -ItemType Directory -Force $pub | Out-Null
+    $pw = Join-Path $dir 'pw.txt'
+    $pass = Join-Path $dir 'id_enc.pass'
+    # Test-only secrets, generated once so reruns keep working with existing files.
+    if (-not (Test-Path $pw)) { Set-Content $pw ([guid]::NewGuid().ToString('N')) -NoNewline }
+    if (-not (Test-Path $pass)) { Set-Content $pass ([guid]::NewGuid().ToString('N')) -NoNewline }
+    $plain = Join-Path $dir 'id_ed25519'
+    $enc = Join-Path $dir 'id_enc'
+    if (-not (Test-Path $plain)) {
+        ssh-keygen -q -t ed25519 -N '' -C ssh-remote-test -f $plain
+        if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed for id_ed25519' }
+    }
+    if (-not (Test-Path $enc)) {
+        ssh-keygen -q -t ed25519 -N (Get-Content $pass -Raw) -C ssh-remote-test-enc -f $enc
+        if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed for id_enc' }
+    }
+    Copy-Item "$plain.pub", "$enc.pub" $pub -Force
+    $state = docker container inspect -f '{{{{.State.Running}}' ssh-remote-test 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        docker run -d --name ssh-remote-test -p 2222:2222 `
+            -e USER_NAME=tester -e PASSWORD_ACCESS=true `
+            -e USER_PASSWORD_FILE=/pw -v "${pw}:/pw:ro" `
+            -e PUBLIC_KEY_DIR=/keys -v "${pub}:/keys:ro" `
+            lscr.io/linuxserver/openssh-server:latest | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'docker run failed' }
+    } elseif ($state -ne 'true') {
+        docker start ssh-remote-test | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'docker start failed' }
+    }
+    # Docker's port proxy accepts TCP before sshd is up, so wait for the SSH banner.
+    $deadline = (Get-Date).AddSeconds(60)
+    while ($true) {
+        try {
+            $tcp = [System.Net.Sockets.TcpClient]::new()
+            $tcp.Connect('127.0.0.1', 2222)
+            $tcp.ReceiveTimeout = 2000
+            $line = [System.IO.StreamReader]::new($tcp.GetStream()).ReadLine()
+            $tcp.Dispose()
+            if ($line -like 'SSH-2.0-*') { break }
+        } catch { }
+        if ((Get-Date) -gt $deadline) { throw 'ssh test server did not answer on 127.0.0.1:2222 within 60 s' }
+        Start-Sleep -Milliseconds 500
+    }
+    Write-Host 'ssh test server ready on 127.0.0.1:2222 (user tester)'
+
+# Remove and recreate the ssh-remote test container; it gets new host keys
+[script('pwsh', '-NoLogo', '-NoProfile')]
+ssh-test-server-reset:
+    $ErrorActionPreference = 'Stop'
+    docker rm -f -v ssh-remote-test 2>$null | Out-Null
+    just --justfile (Join-Path '{{justfile_directory()}}' 'justfile') ssh-test-server
+    if ($LASTEXITCODE -ne 0) { throw 'ssh-test-server failed' }
 
 # Benchmark everything-find against Glob (one paid headless Claude session per repo). Repos default to this one.
 bench *repos:
