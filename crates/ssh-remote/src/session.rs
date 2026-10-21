@@ -101,33 +101,81 @@ fn config() -> client::Config {
     }
 }
 
-fn auth_failed(t: &Target, key: Option<&Path>, password: Option<&Path>) -> String {
-    let parts = match (key, password) {
-        (Some(k), Some(p)) => {
-            format!("tried key {}, password from {}", k.display(), p.display())
-        }
-        (Some(k), None) => format!("tried key {}", k.display()),
-        (None, Some(p)) => format!("password from {}", p.display()),
+/// What happened to the key, for the auth-failure message.
+enum KeyUse<'a> {
+    Tried(&'a Path),
+    /// The key file could not be loaded; the reason in its short form.
+    Unusable(&'a Path, String),
+}
+
+fn auth_failed(t: &Target, key: Option<&KeyUse>, password: Option<&Path>) -> String {
+    let key_part = key.map(|k| match k {
+        KeyUse::Tried(p) => format!("tried key {}", p.display()),
+        KeyUse::Unusable(p, why) => format!("key {} not usable: {why}", p.display()),
+    });
+    let pw_part = password.map(|p| format!("password from {}", p.display()));
+    let sep = match key {
+        Some(KeyUse::Unusable(..)) => "; ",
+        _ => ", ",
+    };
+    let parts = match (key_part, pw_part) {
+        (Some(k), Some(p)) => format!("{k}{sep}{p}"),
+        (Some(k), None) => k,
+        (None, Some(p)) => p,
         (None, None) => "no credentials".to_string(),
     };
     format!("auth failed for {}@{}:{} ({parts})", t.user, t.host, t.port)
 }
 
-fn key_load_error(path: &Path, passphrase: Option<&Secret>, e: keys::Error) -> String {
-    let shown = path.display();
-    match (e, passphrase) {
-        (keys::Error::KeyIsEncrypted, None) => {
-            format!("key {shown} is encrypted: pass key_passphrase_file")
+/// Why a key file could not be loaded. Never holds secret text.
+#[derive(Debug, PartialEq, Eq)]
+enum KeyProblem {
+    Encrypted,
+    NotFound,
+    Unreadable(std::io::ErrorKind),
+    BadPassphrase(PathBuf),
+    Invalid(String),
+}
+
+impl KeyProblem {
+    fn new(passphrase: Option<&Secret>, e: keys::Error) -> KeyProblem {
+        match (e, passphrase) {
+            (keys::Error::KeyIsEncrypted, None) => KeyProblem::Encrypted,
+            (keys::Error::IO(e), _) if e.kind() == std::io::ErrorKind::NotFound => {
+                KeyProblem::NotFound
+            }
+            (keys::Error::IO(e), _) => KeyProblem::Unreadable(e.kind()),
+            (_, Some(p)) => KeyProblem::BadPassphrase(p.source().to_path_buf()),
+            (e, None) => KeyProblem::Invalid(e.to_string()),
         }
-        (keys::Error::IO(e), _) if e.kind() == std::io::ErrorKind::NotFound => {
-            format!("key {shown}: not found")
+    }
+
+    /// The error when the key was the only credential.
+    fn message(&self, path: &Path) -> String {
+        let shown = path.display();
+        match self {
+            KeyProblem::Encrypted => format!("key {shown} is encrypted: pass key_passphrase_file"),
+            KeyProblem::NotFound => format!("key {shown}: not found"),
+            KeyProblem::Unreadable(kind) => format!("key {shown}: cannot read ({kind})"),
+            KeyProblem::BadPassphrase(p) => format!(
+                "key {shown}: cannot load with the passphrase from {} (wrong passphrase or unsupported key)",
+                p.display()
+            ),
+            KeyProblem::Invalid(e) => format!("key {shown}: cannot load ({e})"),
         }
-        (keys::Error::IO(e), _) => format!("key {shown}: cannot read ({})", e.kind()),
-        (_, Some(p)) => format!(
-            "key {shown}: cannot load with the passphrase from {} (wrong passphrase or unsupported key)",
-            p.source().display()
-        ),
-        (e, None) => format!("key {shown}: cannot load ({e})"),
+    }
+
+    /// The reason inside a combined auth-failure message.
+    fn short(&self) -> String {
+        match self {
+            KeyProblem::Encrypted => "is encrypted, pass key_passphrase_file".to_string(),
+            KeyProblem::NotFound => "not found".to_string(),
+            KeyProblem::Unreadable(kind) => format!("cannot read ({kind})"),
+            KeyProblem::BadPassphrase(p) => {
+                format!("cannot load with the passphrase from {}", p.display())
+            }
+            KeyProblem::Invalid(e) => format!("cannot load ({e})"),
+        }
     }
 }
 
@@ -151,16 +199,23 @@ impl Session {
                 t.user, t.host
             ));
         }
-        // Load the key before touching the network: a bad key file is the caller's to fix.
-        let key = match &creds.key {
-            Some((path, passphrase)) => {
-                let pass = passphrase.as_ref();
-                let k = keys::load_secret_key(path, pass.map(Secret::expose))
-                    .map_err(|e| key_load_error(path, pass, e))?;
-                Some((path.as_path(), k))
+        // Load the key before touching the network. A key that cannot be loaded is an error
+        // only when there is no password to fall back to.
+        let mut key = None;
+        let mut key_problem = None;
+        if let Some((path, passphrase)) = &creds.key {
+            let pass = passphrase.as_ref();
+            match keys::load_secret_key(path, pass.map(Secret::expose)) {
+                Ok(k) => key = Some((path.as_path(), k)),
+                Err(e) => {
+                    let problem = KeyProblem::new(pass, e);
+                    if creds.password.is_none() {
+                        return Err(problem.message(path));
+                    }
+                    key_problem = Some((path.as_path(), problem));
+                }
             }
-            None => None,
-        };
+        }
 
         let seen: KeyCheck = Arc::default();
         let handler = Handler {
@@ -222,9 +277,14 @@ impl Session {
             {
                 return Ok(());
             }
+            let key_use = match (&key, &key_problem) {
+                (Some((p, _)), _) => Some(KeyUse::Tried(p)),
+                (None, Some((p, why))) => Some(KeyUse::Unusable(p, why.short())),
+                (None, None) => None,
+            };
             Err(auth_failed(
                 t,
-                key.as_ref().map(|(p, _)| *p),
+                key_use.as_ref(),
                 creds.password.as_ref().map(Secret::source),
             ))
         };
@@ -331,12 +391,13 @@ mod tests {
     fn auth_failed_names_every_file_tried() {
         let k = Path::new(r"C:\keys\id_ed25519");
         let p = Path::new(r"C:\temp\pw.txt");
+        let tried = KeyUse::Tried(k);
         assert_eq!(
-            auth_failed(&t(), Some(k), Some(p)),
+            auth_failed(&t(), Some(&tried), Some(p)),
             r"auth failed for root@10.0.0.21:22 (tried key C:\keys\id_ed25519, password from C:\temp\pw.txt)"
         );
         assert_eq!(
-            auth_failed(&t(), Some(k), None),
+            auth_failed(&t(), Some(&tried), None),
             r"auth failed for root@10.0.0.21:22 (tried key C:\keys\id_ed25519)"
         );
         assert_eq!(
@@ -346,8 +407,31 @@ mod tests {
     }
 
     #[test]
+    fn auth_failed_names_unusable_key_and_password_file() {
+        let k = Path::new(r"C:\keys\id_enc");
+        let p = Path::new(r"C:\temp\pw.txt");
+        let unusable = KeyUse::Unusable(k, KeyProblem::Encrypted.short());
+        assert_eq!(
+            auth_failed(&t(), Some(&unusable), Some(p)),
+            r"auth failed for root@10.0.0.21:22 (key C:\keys\id_enc not usable: is encrypted, pass key_passphrase_file; password from C:\temp\pw.txt)"
+        );
+
+        // A wrong passphrase names the passphrase file, never its contents.
+        let d = tempfile::tempdir().unwrap();
+        let pf = d.path().join("pass.txt");
+        std::fs::write(&pf, "hunter2-passphrase").unwrap();
+        let pass = Secret::from_file(&pf).unwrap();
+        let why = KeyProblem::new(Some(&pass), keys::Error::CouldNotReadKey).short();
+        let msg = auth_failed(&t(), Some(&KeyUse::Unusable(k, why)), Some(p));
+        assert!(msg.contains(&pf.display().to_string()), "{msg}");
+        assert!(msg.contains(r"C:\temp\pw.txt"), "{msg}");
+        assert!(!msg.contains("hunter2"), "{msg}");
+    }
+
+    #[test]
     fn encrypted_key_without_passphrase_message() {
-        let msg = key_load_error(Path::new(r"C:\k\id_rsa"), None, keys::Error::KeyIsEncrypted);
+        let msg =
+            KeyProblem::new(None, keys::Error::KeyIsEncrypted).message(Path::new(r"C:\k\id_rsa"));
         assert_eq!(
             msg,
             r"key C:\k\id_rsa is encrypted: pass key_passphrase_file"
@@ -358,7 +442,7 @@ mod tests {
     fn missing_key_file_message() {
         let e = keys::Error::IO(std::io::Error::from(std::io::ErrorKind::NotFound));
         assert_eq!(
-            key_load_error(Path::new(r"C:\k\nope"), None, e),
+            KeyProblem::new(None, e).message(Path::new(r"C:\k\nope")),
             r"key C:\k\nope: not found"
         );
     }
@@ -369,11 +453,8 @@ mod tests {
         let pf = d.path().join("pass.txt");
         std::fs::write(&pf, "hunter2-passphrase").unwrap();
         let pass = Secret::from_file(&pf).unwrap();
-        let msg = key_load_error(
-            Path::new(r"C:\k\id"),
-            Some(&pass),
-            keys::Error::CouldNotReadKey,
-        );
+        let msg = KeyProblem::new(Some(&pass), keys::Error::CouldNotReadKey)
+            .message(Path::new(r"C:\k\id"));
         assert!(msg.contains(&pf.display().to_string()), "{msg}");
         assert!(!msg.contains("hunter2"), "{msg}");
     }

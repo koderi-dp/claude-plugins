@@ -116,6 +116,47 @@ async fn encrypted_key_needs_passphrase() {
 
 #[tokio::test]
 #[ignore]
+async fn unusable_key_falls_back_to_password() {
+    let (_ok_dir, ok_known) = known();
+    let creds = Creds {
+        password: Some(Secret::from_file(&test_dir().join("pw.txt")).unwrap()),
+        key: Some((test_dir().join("id_enc"), None)),
+    };
+    let s = Session::connect(&target(), &creds, &ok_known)
+        .await
+        .unwrap();
+    let out = s.exec("echo hi", Duration::from_secs(10)).await.unwrap();
+    assert_eq!(out.exit, Some(0));
+    assert_eq!(out.stdout, b"hi\n");
+
+    // Unusable key and a rejected password: the error names both files.
+    let (dir, known) = known();
+    let pw_path = dir.path().join("wrong.txt");
+    std::fs::write(&pw_path, "definitely-not-the-password-7f3a").unwrap();
+    let key = test_dir().join("id_enc");
+    let creds = Creds {
+        password: Some(Secret::from_file(&pw_path).unwrap()),
+        key: Some((key.clone(), None)),
+    };
+    let err = Session::connect(&target(), &creds, &known)
+        .await
+        .err()
+        .expect("must fail");
+    assert_eq!(
+        err,
+        format!(
+            "auth failed for tester@{}:{} (key {} not usable: is encrypted, pass key_passphrase_file; password from {})",
+            host(),
+            port(),
+            key.display(),
+            pw_path.display()
+        )
+    );
+    assert!(!err.contains("definitely-not-the-password-7f3a"));
+}
+
+#[tokio::test]
+#[ignore]
 async fn wrong_password_message() {
     let (dir, known) = known();
     let pw_path = dir.path().join("wrong.txt");
@@ -224,15 +265,18 @@ async fn known_host_recorded_then_changed() {
     drop(s);
 
     let justfile = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../justfile");
-    let status = std::process::Command::new("just")
+    let out = std::process::Command::new("just")
         .arg("--justfile")
         .arg(&justfile)
         .arg("ssh-test-server-reset")
-        .status()
+        .output()
         .expect("run just ssh-test-server-reset");
     assert!(
-        status.success(),
-        "just ssh-test-server-reset failed: {status}"
+        out.status.success(),
+        "just ssh-test-server-reset failed: {}\nstdout:\n{}\nstderr:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
 
     let s = Session::connect(&target(), &creds, &known).await.unwrap();

@@ -31,22 +31,40 @@ ssh-test-server:
     New-Item -ItemType Directory -Force $pub | Out-Null
     $pw = Join-Path $dir 'pw.txt'
     $pass = Join-Path $dir 'id_enc.pass'
-    # Test-only secrets, generated once so reruns keep working with existing files.
-    if (-not (Test-Path $pw)) { Set-Content $pw ([guid]::NewGuid().ToString('N')) -NoNewline }
-    if (-not (Test-Path $pass)) { Set-Content $pass ([guid]::NewGuid().ToString('N')) -NoNewline }
+    # Test-only secrets, generated once so reruns keep working with existing files. When any
+    # is (re)generated, an existing container holds stale credentials and is recreated below.
+    $generated = $false
+    if (-not (Test-Path $pw)) { Set-Content $pw ([guid]::NewGuid().ToString('N')) -NoNewline; $generated = $true }
     $plain = Join-Path $dir 'id_ed25519'
     $enc = Join-Path $dir 'id_enc'
+    if (-not (Test-Path $pass)) {
+        Set-Content $pass ([guid]::NewGuid().ToString('N')) -NoNewline
+        # A new passphrase needs a new encrypted key.
+        Remove-Item $enc, "$enc.pub" -ErrorAction SilentlyContinue
+        $generated = $true
+    }
     if (-not (Test-Path $plain)) {
+        Remove-Item "$plain.pub" -ErrorAction SilentlyContinue
         ssh-keygen -q -t ed25519 -N '' -C ssh-remote-test -f $plain
         if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed for id_ed25519' }
+        $generated = $true
     }
     if (-not (Test-Path $enc)) {
+        Remove-Item "$enc.pub" -ErrorAction SilentlyContinue
         ssh-keygen -q -t ed25519 -N (Get-Content $pass -Raw) -C ssh-remote-test-enc -f $enc
         if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed for id_enc' }
+        $generated = $true
     }
     Copy-Item "$plain.pub", "$enc.pub" $pub -Force
     $state = docker container inspect -f '{{{{.State.Running}}' ssh-remote-test 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    $exists = $LASTEXITCODE -eq 0
+    if ($exists -and $generated) {
+        Write-Host 'test credentials were regenerated; recreating ssh-remote-test'
+        docker rm -f -v ssh-remote-test | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'docker rm failed' }
+        $exists = $false
+    }
+    if (-not $exists) {
         docker run -d --name ssh-remote-test -p 2222:2222 `
             -e USER_NAME=tester -e PASSWORD_ACCESS=true `
             -e USER_PASSWORD_FILE=/pw -v "${pw}:/pw:ro" `
