@@ -1,4 +1,4 @@
-import type { Phase, Progress, Task } from '../types'
+import type { Phase, Progress, Step, StepKind, Task } from '../types'
 
 export const PHASES: readonly { id: Phase; label: string; weight: number }[] = [
   { id: 'spec', label: 'Spec', weight: 5 },
@@ -23,6 +23,12 @@ export function emptyProgress(): Progress {
     buildStartedAt: null,
     gate: null,
     gateCommand: null,
+    gateStartedAt: null,
+    gateEndedAt: null,
+    gateDetail: null,
+    reviewModel: null,
+    reviewStartedAt: null,
+    reviewEndedAt: null,
     finishedBy: null,
     activity: '',
     updatedAt: 0,
@@ -42,23 +48,24 @@ export function advance(current: Phase | null, next: Phase): Phase {
 
 const TASK_HEADING = /^#{2,3}\s+Task\s+(\d+)\s*[:.\-–]?\s*(.*)$/gm
 
-/** Tasks, feature name and gate command from a shipright plan (also reads older `### Task N:` plans). */
-export function parsePlan(text: string): {
-  feature: string | null
-  gate: string | null
-  tasks: { n: number; title: string }[]
-} {
+export type PlanTask = { n: number; title: string; check: string | null }
+
+/** Tasks (with each one's `Done:` check), feature name and gate command from a shipright plan (also reads older `### Task N:` plans). */
+export function parsePlan(text: string): { feature: string | null; gate: string | null; tasks: PlanTask[] } {
   const title = /^#\s+(.+?)\s*$/m.exec(text)?.[1] ?? null
   const feature = title ? title.replace(/\s+(implementation\s+)?plan$/i, '').trim() || null : null
   const gate = /^Gate:\s*`([^`]+)`/m.exec(text)?.[1]?.trim() || null
+  const headings = [...text.matchAll(TASK_HEADING)]
   const seen = new Set<number>()
-  const tasks: { n: number; title: string }[] = []
-  for (const m of text.matchAll(TASK_HEADING)) {
+  const tasks: PlanTask[] = []
+  headings.forEach((m, i) => {
     const n = Number(m[1])
-    if (seen.has(n)) continue
+    if (seen.has(n)) return
     seen.add(n)
-    tasks.push({ n, title: (m[2] ?? '').trim() || `Task ${n}` })
-  }
+    const block = text.slice(m.index ?? 0, headings[i + 1]?.index ?? text.length)
+    const check = /^Done:\s*`([^`]+)`/m.exec(block)?.[1]?.trim() || null
+    tasks.push({ n, title: (m[2] ?? '').trim() || `Task ${n}`, check })
+  })
   return { feature, gate, tasks }
 }
 
@@ -87,24 +94,91 @@ export function parseLedger(text: string): Set<number> {
  * Rebuilds the task list from the plan and the ledger, keeping when each task finished.
  * With `building`, the first unfinished task is the active one.
  */
-export function mergeTasks(
-  previous: Task[],
-  plan: { n: number; title: string }[],
-  done: Set<number>,
-  now: number,
-  building: boolean,
-): Task[] {
+export function mergeTasks(previous: Task[], plan: PlanTask[], done: Set<number>, now: number, building: boolean): Task[] {
   const before = new Map(previous.map(t => [t.n, t]))
   let activeSet = false
-  return plan.map(({ n, title }) => {
+  return plan.map(({ n, title, check }) => {
     const old = before.get(n)
-    if (done.has(n)) return { n, title, status: 'done', doneAt: old?.doneAt ?? now }
+    const base = { n, title, check }
+    if (done.has(n)) {
+      // A finished task shows as one line: its steps go, its total stays.
+      return { ...base, status: 'done', startedAt: old?.startedAt ?? null, doneAt: old?.doneAt ?? now, steps: [] }
+    }
     if (building && !activeSet) {
       activeSet = true
-      return { n, title, status: old?.status === 'review' ? 'review' : 'active', doneAt: null }
+      return {
+        ...base,
+        status: old?.status === 'review' ? 'review' : 'active',
+        startedAt: old?.startedAt ?? now,
+        doneAt: null,
+        steps: old?.steps ?? [],
+      }
     }
-    return { n, title, status: 'pending', doneAt: null }
+    return { ...base, status: 'pending', startedAt: null, doneAt: null, steps: [] }
   })
+}
+
+/** The plan's tasks as `mergeTasks` takes them, from the pane's current list. */
+export function planOf(tasks: Task[]): PlanTask[] {
+  return tasks.map(({ n, title, check }) => ({ n, title, check }))
+}
+
+function closeSteps(steps: Step[], now: number): Step[] {
+  return steps.map(s => (s.endedAt === null ? { ...s, endedAt: now } : s))
+}
+
+export function activeTask(p: Progress): Task | undefined {
+  return p.tasks.find(t => t.status === 'active' || t.status === 'review')
+}
+
+/**
+ * Starts a step on the active task, ending the one that was running. Writing more code while code is
+ * already being written is the same step; code written after a check or a review is a fix.
+ */
+export function startStep(p: Progress, kind: StepKind, label: string | null, now: number): Progress {
+  const task = activeTask(p)
+  if (!task) return p
+  const last = task.steps[task.steps.length - 1]
+  if (kind === 'code' && last?.kind === 'code' && last.endedAt === null) return p
+  const name = label ?? (kind === 'code' ? (task.steps.length === 0 ? 'code and tests' : 'fix') : kind)
+  const step: Step = { kind, label: name, startedAt: now, endedAt: null, result: null, detail: null }
+  const status = kind === 'review' ? 'review' : 'active'
+  return {
+    ...p,
+    tasks: p.tasks.map(t => (t === task ? { ...t, status, steps: [...closeSteps(t.steps, now), step] } : t)),
+  }
+}
+
+/** Ends the active task's running step of this kind, with its result. */
+export function endStep(p: Progress, kind: StepKind, now: number, result: 'pass' | 'fail' | null, detail: string | null): Progress {
+  const task = activeTask(p)
+  if (!task) return p
+  const at = task.steps.map(s => s.kind === kind && s.endedAt === null).lastIndexOf(true)
+  if (at < 0) return p
+  const steps = task.steps.map((s, i) => (i === at ? { ...s, endedAt: now, result, detail } : s))
+  return { ...p, tasks: p.tasks.map(t => (t === task ? { ...t, steps } : t)) }
+}
+
+/** `passed/total` from a test runner's output (node --test, bun test, jest/vitest), or null when not recognised. */
+export function testCounts(output: string): string | null {
+  const nodeTests = /^\D{0,3}tests\s+(\d+)\s*$/m.exec(output)
+  const nodePass = /^\D{0,3}pass\s+(\d+)\s*$/m.exec(output)
+  if (nodeTests && nodePass) return `${nodePass[1]}/${nodeTests[1]}`
+  const bunPass = /^\s*(\d+)\s+pass\s*$/m.exec(output)
+  const bunFail = /^\s*(\d+)\s+fail\s*$/m.exec(output)
+  if (bunPass && bunFail) return `${bunPass[1]}/${Number(bunPass[1]) + Number(bunFail[1])}`
+  const jest = /Tests:\s+(?:\d+\s+failed,\s+)?(?:\d+\s+skipped,\s+)?(\d+)\s+passed,\s+(\d+)\s+total/.exec(output)
+  if (jest) return `${jest[1]}/${jest[2]}`
+  return null
+}
+
+/** A short duration: `45s`, `4m 12s`, `1h 05m`. */
+export function formatDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
 }
 
 export function percent(p: Progress): number {
@@ -162,8 +236,9 @@ export type Signal =
   | { kind: 'pr' }
   | { kind: 'merge'; command: string }
   | { kind: 'models' }
-  | { kind: 'taskReview' }
-  | { kind: 'finalReview' }
+  | { kind: 'check'; command: string }
+  | { kind: 'taskReview'; model: string | null }
+  | { kind: 'finalReview'; model: string | null }
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 
@@ -201,8 +276,9 @@ export function classify(input: { tool: string; [key: string]: unknown }): Signa
   }
   if (tool === 'Agent' || tool === 'Task') {
     const type = String(input.subagent_type ?? '')
-    if (type.endsWith('task-reviewer')) return { kind: 'taskReview' }
-    if (type.endsWith('final-reviewer')) return { kind: 'finalReview' }
+    const model = [input.model, input.effort].filter(v => typeof v === 'string' && v).join(' ') || null
+    if (type.endsWith('task-reviewer')) return { kind: 'taskReview', model }
+    if (type.endsWith('final-reviewer')) return { kind: 'finalReview', model }
     return null
   }
   if (tool === 'AskUserQuestion') {
@@ -228,7 +304,8 @@ export function activityFor(p: Progress): string {
       return `On ${p.branch ?? 'the feature branch'}`
     case 'build':
       if (!active) return `${done} of ${p.tasks.length} tasks done`
-      return `Task ${active.n} of ${p.tasks.length}: ${active.status === 'review' ? 'in review' : 'building'}`
+      if (active.status === 'review') return `Task ${active.n} of ${p.tasks.length}: in review`
+      return `Task ${active.n} of ${p.tasks.length}: ${active.steps.some(s => s.kind === 'check' && s.endedAt === null) ? 'running its check' : 'building'}`
     case 'gate':
       return p.gate === 'fail' ? 'Release gate failed, fixing' : p.gate === 'pass' ? 'Release gate passed' : 'Running the release gate'
     case 'review':

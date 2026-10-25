@@ -4,12 +4,15 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Progress } from '../types'
 import {
   PHASES,
+  activeTask,
   activityFor,
   advance,
   bar,
   classify,
   emptyProgress,
+  endStep,
   etaMs,
+  formatDuration,
   formatMinutes,
   insideRoot,
   mergeTasks,
@@ -17,7 +20,10 @@ import {
   parsePlan,
   percent,
   phaseIndex,
+  planOf,
   runsGate,
+  startStep,
+  testCounts,
   type Signal,
 } from './progress'
 
@@ -56,22 +62,21 @@ async function openPane($: Api) {
   void $.ui.open({ id: PANE, title: TITLE })
 }
 
-/** State changes that show the moment a call starts: a review or the gate is running. */
-function before(p: Progress, sig: Signal): Progress {
+/** State changes that show the moment a call starts: a check, a review or the gate is running. */
+function before(p: Progress, sig: Signal, now: number): Progress {
   switch (sig.kind) {
     case 'taskReview':
-      return {
-        ...p,
-        phase: advance(p.phase, 'build'),
-        tasks: p.tasks.map(t => (t.status === 'active' ? { ...t, status: 'review' } : t)),
-      }
+      // A background reviewer returns at once; its step runs until the session's next step.
+      return startStep({ ...p, phase: advance(p.phase, 'build') }, 'review', sig.model ? `review ${sig.model}` : 'review', now)
+    case 'check':
+      return startStep(p, 'check', 'check', now)
     case 'gate':
       // The gate runs once every task is in. Before that (the planning dry run, a full test run mid-build) it is not the gate.
       if (phaseIndex(p.phase) < phaseIndex('build')) return p
       if (p.tasks.length > 0 && !p.tasks.every(t => t.status === 'done')) return p
-      return { ...p, phase: advance(p.phase, 'gate'), gate: 'running' }
+      return { ...p, phase: advance(p.phase, 'gate'), gate: 'running', gateStartedAt: now, gateEndedAt: null, gateDetail: null }
     case 'finalReview':
-      return { ...p, phase: advance(p.phase, 'review') }
+      return { ...p, phase: advance(p.phase, 'review'), reviewModel: sig.model, reviewStartedAt: now, reviewEndedAt: null }
     case 'models':
       return { ...p, phase: advance(p.phase, 'models') }
     case 'pr':
@@ -81,10 +86,20 @@ function before(p: Progress, sig: Signal): Progress {
   }
 }
 
+/** The final review ends when the session starts acting on it: its first fix, ledger entry, merge or pull request. */
+function endReview(p: Progress, now: number): Progress {
+  return p.phase === 'review' && p.reviewStartedAt !== null && p.reviewEndedAt === null ? { ...p, reviewEndedAt: now } : p
+}
+
 /** State changes once a call has finished, reading the plan or ledger where they changed. */
-async function after($: Api, p: Progress, sig: Signal, ok: boolean, now: number): Promise<Progress> {
+async function after($: Api, prev: Progress, sig: Signal, ok: boolean, output: string, now: number): Promise<Progress> {
+  const p = sig.kind === 'code' || sig.kind === 'ledger' || sig.kind === 'commit' || sig.kind === 'merge' || sig.kind === 'pr'
+    ? endReview(prev, now)
+    : prev
   const building = phaseIndex(p.phase) >= phaseIndex('build')
   switch (sig.kind) {
+    case 'check':
+      return endStep(p, 'check', now, ok ? 'pass' : 'fail', testCounts(output))
     case 'spec':
       return {
         ...p,
@@ -113,7 +128,7 @@ async function after($: Api, p: Progress, sig: Signal, ok: boolean, now: number)
       const root = sig.kind === 'ledger' && sig.root ? sig.root : p.root
       const done = await ledgerDone($, root)
       if (done.size === 0 && !building) return p
-      const plan = p.tasks.map(t => ({ n: t.n, title: t.title }))
+      const plan = planOf(p.tasks)
       return {
         ...p,
         phase: advance(p.phase, 'build'),
@@ -122,25 +137,24 @@ async function after($: Api, p: Progress, sig: Signal, ok: boolean, now: number)
       }
     }
     case 'code': {
-      if (p.tasks.length === 0 || building || phaseIndex(p.phase) < phaseIndex('plan')) return p
-      // Notes, memory files and anything else outside the run's repo are not the build starting.
+      if (p.tasks.length === 0 || phaseIndex(p.phase) < phaseIndex('plan')) return p
+      // Notes, memory files and anything else outside the run's repo are not the build.
       if (!insideRoot(sig.path, p.root)) return p
+      if (building) return p.phase === 'build' ? startStep(p, 'code', null, now) : p
       const done = await ledgerDone($, p.root)
-      const plan = p.tasks.map(t => ({ n: t.n, title: t.title }))
-      return {
+      const started = {
         ...p,
-        phase: 'build',
+        phase: 'build' as const,
         buildStartedAt: p.buildStartedAt ?? now,
-        tasks: mergeTasks(p.tasks, plan, done, now, true),
+        tasks: mergeTasks(p.tasks, planOf(p.tasks), done, now, true),
       }
+      return startStep(started, 'code', null, now)
     }
     case 'branch':
       return { ...p, branch: sig.name, phase: p.phase ? advance(p.phase, 'branch') : p.phase }
     case 'gate':
-      if (phaseIndex(p.phase) < phaseIndex('gate')) return p
-      return { ...p, gate: ok ? 'pass' : 'fail' }
-    case 'taskReview':
-      return { ...p, tasks: p.tasks.map(t => (t.status === 'review' ? { ...t, status: 'active' } : t)) }
+      if (phaseIndex(p.phase) < phaseIndex('gate') || p.gate !== 'running') return p
+      return { ...p, gate: ok ? 'pass' : 'fail', gateEndedAt: now, gateDetail: testCounts(output) }
     case 'pr':
       return ok ? { ...p, phase: 'done', finishedBy: 'pr' } : p
     case 'merge':
@@ -215,23 +229,25 @@ export const register: Register = on => {
     } catch {
       sig = null
     }
-    if (!sig) {
-      try {
-        const input = e as unknown as { tool: string; command?: unknown }
-        if (input.tool === 'Bash' || input.tool === 'PowerShell') {
-          const current = await read($, progress)
-          if (runsGate(String(input.command ?? ''), current.gateCommand)) sig = { kind: 'gate' }
-        }
-      } catch {
-        sig = null
+    try {
+      const input = e as unknown as { tool: string; command?: unknown }
+      if ((input.tool === 'Bash' || input.tool === 'PowerShell') && (!sig || sig.kind === 'gate')) {
+        const command = String(input.command ?? '')
+        const current = await read($, progress)
+        const task = activeTask(current)
+        // The active task's own Done check comes first: the last task's check is often the gate command itself.
+        if (task && runsGate(command, task.check)) sig = { kind: 'check', command: task.check ?? command }
+        else if (!sig && runsGate(command, current.gateCommand)) sig = { kind: 'gate' }
       }
+    } catch {
+      /* fall back to what classify found */
     }
     if (!sig) return next(e)
     const signal = sig
 
     try {
       const now = await $.clock.now()
-      await update($, progress, p => finish(before(p, signal), now))
+      await update($, progress, p => finish(before(p, signal, now), now))
     } catch {
       /* progress is a view; never let it break a tool call */
     }
@@ -240,6 +256,7 @@ export const register: Register = on => {
 
     try {
       const ok = ran.deny === undefined && ran.isError !== true
+      const output = typeof ran.text === 'string' ? ran.text : ''
       const now = await $.clock.now()
       const current = await read($, progress)
       if (current.phase === null && signal.kind === 'ledger' && signal.root) {
@@ -252,7 +269,7 @@ export const register: Register = on => {
         return ran
       }
       if (current.phase === null && signal.kind !== 'spec' && signal.kind !== 'plan') return ran
-      const updated = finish(await after($, current, signal, ok, now), now)
+      const updated = finish(await after($, current, signal, ok, output, now), now)
       await update($, progress, () => updated)
       if (updated.phase !== null) await openPane($)
     } catch {
@@ -289,10 +306,26 @@ export const register: Register = on => {
     const at = phaseIndex(p.phase)
 
     const activeIdx = p.tasks.findIndex(t => t.status === 'active' || t.status === 'review')
-    const room = Math.max(3, rows - 20)
+    const activeSteps = activeIdx < 0 ? 0 : (p.tasks[activeIdx]?.steps.length ?? 0)
+    const room = Math.max(3, rows - 20 - activeSteps)
     const start = p.tasks.length <= room ? 0 : Math.max(0, Math.min(p.tasks.length - room, (activeIdx < 0 ? done : activeIdx) - 2))
     const shown = p.tasks.slice(start, start + room)
-    const clip = (s: string) => (s.length > cols - 2 ? `${s.slice(0, cols - 3)}…` : s)
+    const clip = (s: string, width = cols - 2) => (s.length > width ? `${s.slice(0, Math.max(1, width - 1))}…` : s)
+    const span = (from: number | null, to: number | null) => (from === null ? '' : formatDuration((to ?? now) - from))
+
+    /** A line with its text on the left and a dim duration or count on the right; the left side gives way first. */
+    const row = (left: string, right: string, color?: string, dim?: boolean, key?: string) => (
+      <Box key={key} flexDirection="row" justifyContent="space-between" gap={1}>
+        <Text color={color} dimColor={dim}>{clip(left, cols - 3 - right.length)}</Text>
+        {right ? <Text dimColor>{right}</Text> : null}
+      </Box>
+    )
+
+    const phaseRight = (id: string) => {
+      if (id === 'gate' && p.gateStartedAt !== null) return [span(p.gateStartedAt, p.gateEndedAt), p.gateDetail].filter(Boolean).join('  ')
+      if (id === 'review' && p.reviewStartedAt !== null) return [p.reviewModel, span(p.reviewStartedAt, p.reviewEndedAt)].filter(Boolean).join('  ')
+      return ''
+    }
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -310,10 +343,13 @@ export const register: Register = on => {
             const isDone = i < at || p.phase === 'done'
             const isNow = i === at && p.phase !== 'done'
             const note = ph.id === 'build' && p.tasks.length > 0 ? `  ${done}/${p.tasks.length}` : ''
-            return (
-              <Text color={isDone ? 'success' : isNow ? 'claude' : undefined} dimColor={!isDone && !isNow}>
-                {`${isDone ? '✓' : isNow ? '▶' : '○'} ${ph.label}${note}`}
-              </Text>
+            const failed = ph.id === 'gate' && p.gate === 'fail'
+            return row(
+              `${isDone ? '✓' : isNow ? '▶' : '○'} ${ph.label}${note}`,
+              phaseRight(ph.id),
+              failed && isNow ? 'error' : isDone ? 'success' : isNow ? 'claude' : undefined,
+              !isDone && !isNow,
+              ph.id,
             )
           })}
         </Box>
@@ -321,16 +357,28 @@ export const register: Register = on => {
           <Box flexDirection="column">
             <Text weight="semibold">{`Tasks ${done}/${p.tasks.length}`}</Text>
             {start > 0 ? <Text dimColor>{`  ${start} earlier done`}</Text> : null}
-            {shown.map(t => (
-              <Text
-                color={t.status === 'done' ? 'success' : t.status === 'pending' ? undefined : 'claude'}
-                dimColor={t.status === 'pending'}
-              >
-                {clip(
-                  `${t.status === 'done' ? '✓' : t.status === 'review' ? '◆' : t.status === 'active' ? '▶' : '○'} ${t.n}. ${t.title}${t.status === 'review' ? ' (review)' : ''}`,
-                )}
-              </Text>
-            ))}
+            {shown.map(t => {
+              const working = t.status === 'active' || t.status === 'review'
+              const line = row(
+                `${t.status === 'done' ? '✓' : t.status === 'review' ? '◆' : working ? '▶' : '○'} ${t.n}. ${t.title}${t.status === 'review' ? ' (review)' : ''}`,
+                t.status === 'pending' ? '' : span(t.startedAt, t.doneAt),
+                t.status === 'done' ? 'success' : t.status === 'pending' ? undefined : 'claude',
+                t.status === 'pending',
+                `task-${t.n}`,
+              )
+              if (!working || t.steps.length === 0) return line
+              return (
+                <Box key={`task-${t.n}-group`} flexDirection="column">
+                  {line}
+                  {t.steps.map((s, i) => {
+                    const mark = s.endedAt === null ? '▶' : s.result === 'fail' ? '✗' : '✓'
+                    const right = [s.endedAt === null ? null : s.detail, span(s.startedAt, s.endedAt)].filter(Boolean).join('  ')
+                    const color = s.endedAt === null ? 'claude' : s.result === 'fail' ? 'error' : undefined
+                    return row(`    ${mark} ${s.label}`, right, color, s.endedAt !== null && s.result !== 'fail', `step-${t.n}-${i}`)
+                  })}
+                </Box>
+              )
+            })}
             {start + room < p.tasks.length ? <Text dimColor>{`  ${p.tasks.length - start - room} more`}</Text> : null}
           </Box>
         ) : null}
