@@ -9,6 +9,7 @@ Claude Code plugins for faster, quieter sessions. This repository is a plugin ma
 | [code-outline](plugins/code-outline) | Symbol outlines and single-symbol reads via tree-sitter for Rust, TypeScript, JavaScript, Python and C# | Windows |
 | [ssh-remote](plugins/ssh-remote) | Runs commands and downloads files over SSH, with credentials read from files Claude never sees | Windows |
 | [shipright](plugins/shipright) | Builds a feature in one session: spec, lean plan, branch, task-by-task build with reviews on models you pick, and a live progress pane | Any |
+| [fable-team](plugins/fable-team) | Research (Sonnet), builder (Opus) and reviewer (Opus) subagents plus the routing rule that keeps the lead session in charge | Any |
 
 ## Install
 

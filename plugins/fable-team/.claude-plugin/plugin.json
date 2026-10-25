@@ -1,0 +1,6 @@
+{
+  "name": "fable-team",
+  "version": "0.1.0",
+  "description": "Give Fable a team: research (Sonnet), builder (Opus) and reviewer (Opus) subagents plus the routing rule that keeps the lead session in charge.",
+  "author": { "name": "Danijel Peric" }
+}

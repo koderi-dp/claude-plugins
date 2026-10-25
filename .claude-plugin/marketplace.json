@@ -27,6 +27,11 @@
       "name": "shipright",
       "source": "./plugins/shipright",
       "description": "Build a feature in one session: spec, lean plan, branch, task-by-task build with reviews on models you pick, and a live progress pane."
+    },
+    {
+      "name": "fable-team",
+      "source": "./plugins/fable-team",
+      "description": "Give Fable a team: research (Sonnet), builder (Opus) and reviewer (Opus) subagents plus the routing rule that keeps the lead session in charge."
     }
   ]
 }
