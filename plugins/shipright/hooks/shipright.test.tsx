@@ -54,6 +54,8 @@ test('classifies the tool calls a run makes and ignores the rest', async () => {
   expect(classify({ tool: 'Bash', command: 'gh pr create --fill' })).toEqual({ kind: 'pr' })
   expect(classify({ tool: 'Agent', subagent_type: 'shipright:task-reviewer' })).toEqual({ kind: 'taskReview' })
   expect(classify({ tool: 'Agent', subagent_type: 'Explore' })).toBe(null)
+  expect(classify({ tool: 'AskUserQuestion', questions: [{ question: 'Which model should do the final review?' }] })).toEqual({ kind: 'models' })
+  expect(classify({ tool: 'AskUserQuestion', questions: [{ question: 'Keep going?' }] })).toBe(null)
   expect(classify({ tool: 'Bash', command: 'ls -la' })).toBe(null)
   expect(classify({ tool: 'Read', file_path: `${ROOT}/a.ts` })).toBe(null)
 })
@@ -97,6 +99,11 @@ test('the pane follows a run from plan to pull request without the session telli
 
   await $.tool.call({ tool: 'Write', file_path: PLAN_PATH, content: PLAN })
   expect(await text('desktop', /Plan ready/)).toBe('Plan ready, 3 tasks, waiting for your review')
+
+  // Checking the gate script while planning is not the gate; the pane stays on the plan.
+  await $.tool.call({ tool: 'Bash', command: 'grep check:release package.json' })
+  expect(await text('desktop', /Plan ready/)).toBe('Plan ready, 3 tasks, waiting for your review')
+  expect(await text('desktop', /Release gate/)).toBe('○ Release gate')
 
   await $.tool.call({ tool: 'Bash', command: 'git switch -c feature/probe' })
   now = 2_000

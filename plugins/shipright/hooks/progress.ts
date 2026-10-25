@@ -185,7 +185,7 @@ export function classify(input: { tool: string; [key: string]: unknown }): Signa
   if (tool === 'AskUserQuestion') {
     const questions = Array.isArray(input.questions) ? input.questions : []
     const asked = questions.map(q => String((q as { question?: unknown })?.question ?? '')).join(' ')
-    return /code writing/i.test(asked) ? { kind: 'models' } : null
+    return /code writing|final review|task review/i.test(asked) ? { kind: 'models' } : null
   }
   return null
 }

@@ -57,15 +57,14 @@ Show the user the plan path and go to Phase 1b. Do not offer subagent-driven exe
 
 ## Phase 1b: Choose models and effort
 
+The code is written by this session, on whatever model and effort it runs on. A session cannot switch its own model or effort (tools such as `set_session_model` act only on other sessions) and cannot read its own effort reliably, so do not call those tools, do not claim what the current settings are, and do not ask which model should write the code. Say it in one line before the question: "This session writes the code on its current model; switch it in the model menu first if you want another one."
+
 Count the plan's tasks. Then ask one `AskUserQuestion` call with these questions, each offering four `<model> <effort>` presets and letting Other take any pair such as `opus low`:
 
-1. **Code writing** (this session). Presets: `Fable high` (recommended), `Opus high`, `Opus medium`, `Sonnet medium`.
-2. **Task review**, only when the plan has three or more tasks. Presets: `Sonnet low` (recommended), `Haiku low`, `Opus medium`, `Fable medium`.
-3. **Final review**. Presets: `Fable high` (recommended), `Opus high`, `Fable max`, `Opus max`.
+1. **Task review**, only when the plan has three or more tasks. Presets: `Sonnet low` (recommended), `Haiku low`, `Opus medium`, `Fable medium`.
+2. **Final review**. Presets: `Fable high` (recommended), `Opus high`, `Fable max`, `Opus max`.
 
-With one or two tasks, skip question 2 and the per-task review, and say so in one line; the final review covers it. The answers hold for the whole run.
-
-Apply the code-writing choice before Phase 2. A session cannot change its own model or effort: tools such as `set_session_model` and `set_session_effort` act only on other sessions and refuse the current one, so do not call them. If this session already runs on the chosen model and effort, say so in one line and continue. Otherwise ask the user to switch it themselves (the model menu in the desktop app, `/model` in the CLI) and wait for their confirmation. Review choices go to the agents as the Agent tool's `model` and `effort` overrides.
+With one or two tasks, skip question 1 and the per-task review, and say so in one line; the final review covers it. The answers hold for the whole run and go to the agents as the Agent tool's `model` and `effort` overrides.
 
 ## Phase 2: Branch
 

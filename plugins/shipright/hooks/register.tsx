@@ -64,6 +64,8 @@ function before(p: Progress, sig: Signal): Progress {
         tasks: p.tasks.map(t => (t.status === 'active' ? { ...t, status: 'review' } : t)),
       }
     case 'gate':
+      // A command that mentions the gate before the build (checking package.json while planning) is not the gate.
+      if (phaseIndex(p.phase) < phaseIndex('build')) return p
       return { ...p, phase: advance(p.phase, 'gate'), gate: 'running' }
     case 'finalReview':
       return { ...p, phase: advance(p.phase, 'review') }
@@ -129,6 +131,7 @@ async function after($: Api, p: Progress, sig: Signal, ok: boolean, now: number)
     case 'branch':
       return { ...p, branch: sig.name, phase: p.phase ? advance(p.phase, 'branch') : p.phase }
     case 'gate':
+      if (phaseIndex(p.phase) < phaseIndex('gate')) return p
       return { ...p, gate: ok ? 'pass' : 'fail' }
     case 'taskReview':
       return { ...p, tasks: p.tasks.map(t => (t.status === 'review' ? { ...t, status: 'active' } : t)) }
