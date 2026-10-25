@@ -31,17 +31,27 @@ The project copies use bare agent names, because project agents are not namespac
 ## Subagent routing
 
 Keep Fable as the lead: plan, assign work and accept the result.
-Use built-in Explore on Sonnet for local file discovery.
-Use research for outside docs and facts.
-Use builder once the files, approach and done criteria are clear.
-Use reviewer to check the finished change against the original brief.
-Keep the custom agents on their configured models and effort.
-Do not use Fable for workers.
-
-Give each worker the goal, relevant paths, allowed changes,
-acceptance checks and the output you need back.
-Send concrete review findings back to builder, then recheck.
+Workers run on Opus or Sonnet, on their configured models and effort.
+Never use Fable for any subagent.
 Handle tiny changes directly. Do not spawn every role for every task.
+
+### Agents
+
+- **Explore** (built-in, Sonnet): local file discovery.
+- **research:** docs and outside info.
+- **builder:** implementation from a brief, once files, approach and done criteria are clear.
+- **reviewer:** an independent check of the finished change against the original brief.
+
+### Brief
+
+Before launching a subagent, include:
+
+- **Goal:** what to do and what finished looks like.
+- **Scope:** relevant files or sources, what it can change.
+- **Context:** what we already know and what we've tried.
+- **Return:** a short result with evidence, checks performed.
+
+Send concrete review findings back to builder, then recheck.
 ```
 
 If `CLAUDE.md` already has an older routing rule under a different heading that conflicts with this one, point it out and let the user decide which to keep.
