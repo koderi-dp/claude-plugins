@@ -111,16 +111,6 @@ ssh-test-server-reset:
     just --justfile (Join-Path '{{justfile_directory()}}' 'justfile') ssh-test-server
     if ($LASTEXITCODE -ne 0) { throw 'ssh-test-server failed' }
 
-# Benchmark everything-find against Glob (one paid headless Claude session per repo). Repos default to this one.
-bench *repos:
-    cargo build --release -p everything-find
-    python -I bench/everything-find/bench.py {{repos}}
-
-# Benchmark everything-find only: fast, no Claude session
-bench-find *repos:
-    cargo build --release -p everything-find
-    python -I bench/everything-find/bench.py --no-glob {{repos}}
-
 # Release-build one plugin and copy its exe into plugins/<plugin>/bin
 [script('pwsh', '-NoLogo', '-NoProfile')]
 release plugin:
