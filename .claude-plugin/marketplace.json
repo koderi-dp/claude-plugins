@@ -21,6 +21,11 @@
       "name": "ssh-remote",
       "source": "./plugins/ssh-remote",
       "description": "Run commands and download files over SSH, with credentials read from files Claude never sees."
+    },
+    {
+      "name": "shipright",
+      "source": "./plugins/shipright",
+      "description": "Build a feature in one session: spec, lean plan, branch, task-by-task build with reviews on models you pick, and a live progress pane."
     }
   ]
 }
