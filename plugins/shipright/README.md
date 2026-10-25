@@ -3,9 +3,9 @@
 Ship it right: build a feature in one Claude Code session, from design to pull request, fast.
 
 - **Spec and lean plan.** The agreed design goes to `.shipright/specs/`. The plan in `.shipright/plans/` holds decisions only: files, exact signatures, test assertions, the one judgment call per task. No code is written twice.
-- **Your models.** The session you start it in writes the code on its current model. After the plan, you pick model and effort once for the per-task review and the final review.
-- **Task by task on a feature branch.** Test and code, a fast review by a read-only agent (skipped when the plan has two tasks or fewer), then a local commit with a short entry in `.shipright/ledger.md` that the next task reads instead of rescanning the branch.
-- **One full review before the pull request.** The release gate runs, a final reviewer checks the whole branch from the plan header, the ledger and the diff, and only then is the branch pushed and the pull request opened.
+- **Your models.** The session you start it in writes the code on its current model. After the plan, you pick model and effort once for the per-task review and the final review, or choose Auto and the session picks them from the spec's risk and the plan's size.
+- **Task by task on a feature branch.** Test and code, a fast review by a read-only agent (skipped when the plan has two tasks or fewer, or when you turn it off), then a local commit with a short entry in `.shipright/ledger.md` that the next task reads instead of rescanning the branch.
+- **One full review before the pull request.** The release gate runs, a final reviewer checks the whole branch from the plan header, the ledger and the diff, and only then is the branch pushed and the pull request opened. A repo with no remote is merged locally instead, if you choose.
 - **Live progress pane.** A pane shows the phase, a progress bar, the task list, time elapsed and time left. Plugin hooks keep it current by watching the session's own tool calls, so the session spends nothing on it.
 
 ## Install
@@ -36,8 +36,7 @@ Open the progress pane any time with `/shipright-progress`. It also opens by its
 
 | Part | Name |
 | --- | --- |
-| Slash command | `/shipright` |
-| Skill | `shipright` |
+| Skill (also `/shipright`) | `shipright` |
 | Per-task reviewer | `shipright:task-reviewer` |
 | Final reviewer | `shipright:final-reviewer` |
 | Progress pane | `/shipright-progress` |

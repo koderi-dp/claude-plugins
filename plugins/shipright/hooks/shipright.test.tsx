@@ -31,6 +31,7 @@ const PANE = {
 test('reads tasks from lean and older plans, and finished tasks from the ledger', async () => {
   expect(parsePlan(PLAN)).toEqual({
     feature: 'Probe mode',
+    gate: null,
     tasks: [
       { n: 1, title: 'Agent capabilities' },
       { n: 2, title: 'Metrics collector' },
@@ -98,6 +99,51 @@ test('a run already under way is picked up from its ledger when the pane missed 
   await ui.unmount()
 })
 
+test('a run with a plain gate command and no remote reaches the gate and finishes on a local merge', async ($, on) => {
+  const plan = PLAN.replace('Goal: x', 'Goal: x\nGate: `node --test`')
+  let ledger = ''
+  on('clock.now', () => ({ value: 1_000 }))
+  on('fs.exists', () => ({ value: false }))
+  on('fs.read', (_, e) => {
+    const path = e.path.replace(/\\/g, '/')
+    if (path === PLAN_PATH) return { value: plan }
+    if (path === LEDGER_PATH) return { value: ledger }
+    throw new Error('ENOENT')
+  })
+  on('command.register', () => ({ value: { command: 'shipright-progress' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  const text = async (pattern: RegExp) => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const found = await ui.find({ type: 'Text', text: pattern })
+    await ui.unmount()
+    return found?.text
+  }
+
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Write', file_path: PLAN_PATH, content: plan })
+  await $.tool.call({ tool: 'Bash', command: 'git switch -c feature/probe' })
+  await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/a.mjs`, content: 'x' })
+  // A full test run mid-build, or a narrow check, is not the gate.
+  await $.tool.call({ tool: 'Bash', command: 'cd C:/repo && node --test' })
+  await $.tool.call({ tool: 'Bash', command: 'node --test test/a.test.mjs' })
+  expect(await text(/^Task 1 of 3/)).toBe('Task 1 of 3: building')
+
+  ledger = '## Task 1 A\n## Task 2 B\n## Task 3 C\n'
+  await $.tool.call({ tool: 'Edit', file_path: LEDGER_PATH, old_string: '', new_string: ledger })
+  await $.tool.call({ tool: 'Bash', command: 'cd C:/repo && node --test' })
+  expect(await text(/Release gate passed/)).toBe('Release gate passed')
+
+  await $.tool.call({ tool: 'Agent', subagent_type: 'shipright:final-reviewer', prompt: 'p', description: 'd' })
+  // Merging something else does not end the run; merging the feature branch does.
+  await $.tool.call({ tool: 'Bash', command: 'git merge origin/main' })
+  expect(await text(/Final review/)).toBe('Final review of the whole branch')
+  await $.tool.call({ tool: 'Bash', command: 'git switch main && git merge --no-ff feature/probe -m "Merge"' })
+  expect(await text(/Merged locally/)).toBe('Merged locally')
+  expect(await text(/%$/)).toMatch(/100%$/)
+})
+
 test('the pane follows a run from plan to pull request without the session telling it', async ($, on) => {
   let now = 1_000
   let ledger = ''
@@ -125,11 +171,14 @@ test('the pane follows a run from plan to pull request without the session telli
   expect(await text('desktop', /No shipright run/)).toBe('No shipright run in this session yet.')
 
   await $.tool.call({ tool: 'Write', file_path: PLAN_PATH, content: PLAN })
-  expect(await text('desktop', /Plan ready/)).toBe('Plan ready, 3 tasks, waiting for your review')
+  expect(await text('desktop', /Plan ready/)).toBe('Plan ready, 3 tasks')
 
   // Checking the gate script while planning is not the gate; the pane stays on the plan.
   await $.tool.call({ tool: 'Bash', command: 'grep check:release package.json' })
-  expect(await text('desktop', /Plan ready/)).toBe('Plan ready, 3 tasks, waiting for your review')
+  expect(await text('desktop', /Plan ready/)).toBe('Plan ready, 3 tasks')
+  // Nor is a note written outside the repo the build starting.
+  await $.tool.call({ tool: 'Write', file_path: 'C:/Users/me/notes.md', content: 'x' })
+  expect(await text('desktop', /Plan ready/)).toBe('Plan ready, 3 tasks')
   expect(await text('desktop', /Release gate/)).toBe('○ Release gate')
 
   await $.tool.call({ tool: 'Bash', command: 'git switch -c feature/probe' })

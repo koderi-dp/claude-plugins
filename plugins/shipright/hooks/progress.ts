@@ -22,6 +22,8 @@ export function emptyProgress(): Progress {
     startedAt: null,
     buildStartedAt: null,
     gate: null,
+    gateCommand: null,
+    finishedBy: null,
     activity: '',
     updatedAt: 0,
   }
@@ -40,10 +42,15 @@ export function advance(current: Phase | null, next: Phase): Phase {
 
 const TASK_HEADING = /^#{2,3}\s+Task\s+(\d+)\s*[:.\-–]?\s*(.*)$/gm
 
-/** Tasks and feature name from a shipright plan (also reads older `### Task N:` plans). */
-export function parsePlan(text: string): { feature: string | null; tasks: { n: number; title: string }[] } {
+/** Tasks, feature name and gate command from a shipright plan (also reads older `### Task N:` plans). */
+export function parsePlan(text: string): {
+  feature: string | null
+  gate: string | null
+  tasks: { n: number; title: string }[]
+} {
   const title = /^#\s+(.+?)\s*$/m.exec(text)?.[1] ?? null
   const feature = title ? title.replace(/\s+(implementation\s+)?plan$/i, '').trim() || null : null
+  const gate = /^Gate:\s*`([^`]+)`/m.exec(text)?.[1]?.trim() || null
   const seen = new Set<number>()
   const tasks: { n: number; title: string }[] = []
   for (const m of text.matchAll(TASK_HEADING)) {
@@ -52,7 +59,21 @@ export function parsePlan(text: string): { feature: string | null; tasks: { n: n
     seen.add(n)
     tasks.push({ n, title: (m[2] ?? '').trim() || `Task ${n}` })
   }
-  return { feature, tasks }
+  return { feature, gate, tasks }
+}
+
+/** Whether a shell command runs the plan's gate: one of its `&&`, `;` or `|` parts is exactly that command. */
+export function runsGate(command: string, gate: string | null): boolean {
+  if (!gate) return false
+  const want = gate.replace(/\s+/g, ' ').trim()
+  return command.split(/&&|\|\||;|\|/).some(part => part.replace(/\s+/g, ' ').trim() === want)
+}
+
+/** Whether a written file belongs to the run's repo (case-insensitive, as on Windows). */
+export function insideRoot(path: string, root: string | null): boolean {
+  if (!root) return false
+  const norm = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  return norm(path).startsWith(`${norm(root)}/`)
 }
 
 /** Task numbers the ledger records as committed. */
@@ -139,6 +160,7 @@ export type Signal =
   | { kind: 'gate' }
   | { kind: 'push' }
   | { kind: 'pr' }
+  | { kind: 'merge'; command: string }
   | { kind: 'models' }
   | { kind: 'taskReview' }
   | { kind: 'finalReview' }
@@ -174,6 +196,7 @@ export function classify(input: { tool: string; [key: string]: unknown }): Signa
     if (/\.shipright[\\/]ledger\.md/.test(cmd)) return { kind: 'ledger', root: null }
     if (/git\s+commit\b/.test(cmd)) return { kind: 'commit' }
     if (/git\s+push\b/.test(cmd)) return { kind: 'push' }
+    if (/git\s+merge\b/.test(cmd)) return { kind: 'merge', command: cmd }
     return null
   }
   if (tool === 'Agent' || tool === 'Task') {
@@ -185,7 +208,7 @@ export function classify(input: { tool: string; [key: string]: unknown }): Signa
   if (tool === 'AskUserQuestion') {
     const questions = Array.isArray(input.questions) ? input.questions : []
     const asked = questions.map(q => String((q as { question?: unknown })?.question ?? '')).join(' ')
-    return /code writing|final review|task review/i.test(asked) ? { kind: 'models' } : null
+    return /final review|task review/i.test(asked) ? { kind: 'models' } : null
   }
   return null
 }
@@ -198,9 +221,7 @@ export function activityFor(p: Progress): string {
     case 'spec':
       return 'Writing the spec'
     case 'plan':
-      return p.tasks.length
-        ? `Plan ready, ${p.tasks.length} task${p.tasks.length === 1 ? '' : 's'}, waiting for your review`
-        : 'Writing the plan'
+      return p.tasks.length ? `Plan ready, ${p.tasks.length} task${p.tasks.length === 1 ? '' : 's'}` : 'Writing the plan'
     case 'models':
       return 'Waiting for your model choices'
     case 'branch':
@@ -215,7 +236,7 @@ export function activityFor(p: Progress): string {
     case 'pr':
       return 'Opening the pull request'
     case 'done':
-      return 'Pull request opened'
+      return p.finishedBy === 'merge' ? 'Merged locally' : 'Pull request opened'
     default:
       return ''
   }

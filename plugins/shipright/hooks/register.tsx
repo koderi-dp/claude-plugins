@@ -11,11 +11,13 @@ import {
   emptyProgress,
   etaMs,
   formatMinutes,
+  insideRoot,
   mergeTasks,
   parseLedger,
   parsePlan,
   percent,
   phaseIndex,
+  runsGate,
   type Signal,
 } from './progress'
 
@@ -64,8 +66,9 @@ function before(p: Progress, sig: Signal): Progress {
         tasks: p.tasks.map(t => (t.status === 'active' ? { ...t, status: 'review' } : t)),
       }
     case 'gate':
-      // A command that mentions the gate before the build (checking package.json while planning) is not the gate.
+      // The gate runs once every task is in. Before that (the planning dry run, a full test run mid-build) it is not the gate.
       if (phaseIndex(p.phase) < phaseIndex('build')) return p
+      if (p.tasks.length > 0 && !p.tasks.every(t => t.status === 'done')) return p
       return { ...p, phase: advance(p.phase, 'gate'), gate: 'running' }
     case 'finalReview':
       return { ...p, phase: advance(p.phase, 'review') }
@@ -98,6 +101,7 @@ async function after($: Api, p: Progress, sig: Signal, ok: boolean, now: number)
         root: sig.root,
         planPath: sig.path,
         feature: plan.feature ?? p.feature,
+        gateCommand: plan.gate ?? p.gateCommand,
         phase: advance(p.phase, 'plan'),
         startedAt: p.startedAt ?? now,
         tasks: mergeTasks(p.tasks, plan.tasks, done, now, building),
@@ -119,6 +123,8 @@ async function after($: Api, p: Progress, sig: Signal, ok: boolean, now: number)
     }
     case 'code': {
       if (p.tasks.length === 0 || building || phaseIndex(p.phase) < phaseIndex('plan')) return p
+      // Notes, memory files and anything else outside the run's repo are not the build starting.
+      if (!insideRoot(sig.path, p.root)) return p
       const done = await ledgerDone($, p.root)
       const plan = p.tasks.map(t => ({ n: t.n, title: t.title }))
       return {
@@ -136,7 +142,12 @@ async function after($: Api, p: Progress, sig: Signal, ok: boolean, now: number)
     case 'taskReview':
       return { ...p, tasks: p.tasks.map(t => (t.status === 'review' ? { ...t, status: 'active' } : t)) }
     case 'pr':
-      return ok ? { ...p, phase: 'done' } : p
+      return ok ? { ...p, phase: 'done', finishedBy: 'pr' } : p
+    case 'merge':
+      // Keeping a repo with no remote local: merging the feature branch into its base ends the run.
+      if (!ok || !p.branch || !sig.command.includes(p.branch)) return p
+      if (phaseIndex(p.phase) < phaseIndex('review')) return p
+      return { ...p, phase: 'done', finishedBy: 'merge' }
     default:
       return p
   }
@@ -164,6 +175,7 @@ async function restore($: Api, cwd: string): Promise<Progress | null> {
     root: cwd,
     planPath,
     feature: plan.feature,
+    gateCommand: plan.gate,
     phase: done.size > 0 ? 'build' : 'plan',
     startedAt: now,
     buildStartedAt: done.size > 0 ? now : null,
@@ -202,6 +214,17 @@ export const register: Register = on => {
       sig = classify(e as unknown as { tool: string; [key: string]: unknown })
     } catch {
       sig = null
+    }
+    if (!sig) {
+      try {
+        const input = e as unknown as { tool: string; command?: unknown }
+        if (input.tool === 'Bash' || input.tool === 'PowerShell') {
+          const current = await read($, progress)
+          if (runsGate(String(input.command ?? ''), current.gateCommand)) sig = { kind: 'gate' }
+        }
+      } catch {
+        sig = null
+      }
     }
     if (!sig) return next(e)
     const signal = sig

@@ -14,6 +14,8 @@ export type Progress = {
   startedAt: number | null
   buildStartedAt: number | null
   gate: 'running' | 'pass' | 'fail' | null
+  gateCommand: string | null
+  finishedBy: 'pr' | 'merge' | null
   activity: string
   updatedAt: number
 }
