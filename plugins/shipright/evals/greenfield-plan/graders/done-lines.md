@@ -1,8 +1,8 @@
 ---
 type: regex
 target: { source: file, path: ".shipright/plans/2026-01-01-word-counter.md" }
-pattern: '^Done:\s*`[^`]+`'
+pattern: '(?:^Done:[ \t]*`[^`]+`[^\n]*$[\s\S]*?){2}'
 flags: m
-match: "count:2"
+match: contains
 ---
-Every task (at least two) ends with a Done line naming its narrow check command.
+At least two tasks end with a Done line naming a narrow check command.
