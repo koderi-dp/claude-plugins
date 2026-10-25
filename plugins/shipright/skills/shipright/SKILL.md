@@ -47,11 +47,12 @@ Done: `<narrow check command>` passes
 
 What goes in verbatim, because it is a decision: error messages, env variable names, SQL migrations, protocol frame shapes, file paths. What stays out, because the build writes it: test bodies, function bodies, imports, anything the signature and the assertions already determine. A task block is usually under 20 lines.
 
-Before showing the plan, check three things and fix the plan:
+Before showing the plan, check four things and fix the plan:
 
 1. Every name a task uses from another task appears in an earlier task's Produces line.
 2. Every Review focus line names a task whose Tests cover it.
 3. Every assumption about the repo is true: read the test helpers, script names, fixtures and config the plan relies on.
+4. The gate command works as written. Run it once now. If the repo has no tests yet, put a throwaway passing test where the plan puts tests, run the gate, check it found and ran that test, then delete it. A per-file narrow check passing later does not prove the gate's discovery.
 
 Show the user the plan path and go to Phase 1b. Do not offer subagent-driven execution; the method is the phases below.
 
@@ -70,6 +71,8 @@ With one or two tasks, skip question 1 and the per-task review, and say so in on
 
 If the current branch is already the feature branch for this work, stay on it. Otherwise create `feature/<slug>` from the current branch. Never work on the default branch. Commit the spec, the plan and an empty `.shipright/ledger.md` together.
 
+In a new project with no repo or no commits yet, `git init` if needed and make one empty commit on the default branch first (`git commit --allow-empty -m "Initial empty commit"`), so the final review has a base to diff against.
+
 ## Phase 3: Build, one task at a time
 
 Keep the pinned task list current: one entry per plan task, then gate, final review, pull request.
@@ -80,17 +83,19 @@ For each task:
 2. **Green.** Fix until the narrow check passes. Fix the implementation for a real bug; never weaken an assertion.
 3. **Review.** With the per-task review on, launch `shipright:task-reviewer` with the chosen `model` and `effort`, and paste into its prompt: the task block from the plan, the Constraints section, the ledger lines of earlier tasks this one depends on, and the output of `git diff` for this task's files (use `git diff --cached` after staging new files). Fix every confirmed finding and rerun the narrow check. With it off, read the diff once yourself for a secret reaching a log, a forbidden path, a name that drifted from Produces, and a file outside the task.
 4. **Prove packaging.** If the task changes what a build or image depends on (a Dockerfile COPY, a dockerignore, a lockfile), run the real build once.
-5. **Commit and record, in one message.** Append the task's entry to `.shipright/ledger.md`, stage it with the task's files, commit with one or two sentences about why. Commit locally; never push here.
+5. **Commit and record, in one message.** Append the task's entry to `.shipright/ledger.md`, stage it with the task's files, commit with one or two sentences about why. Commit locally; never push here. When a deviation changes a Constraint, a Done command or a later task's block, update the plan in the same commit, so the plan the final reviewer reads is still true.
 6. **Next.** Advance the pinned task list and start the next task in the same message where it can.
 
 Ledger entry, three lines at most, only what a later task or a reviewer would otherwise have to dig for:
 
 ```
-## Task N <title> - <short sha>
+## Task N <title>
 Produced: <names, files, env vars actually created, if different from or beyond the plan>
 Deviated: <what changed from the plan and why, or none>
 Next needs: <anything a later task must know, or omit>
 ```
+
+No commit hash: a commit cannot contain its own hash, and the entry travels in the task's commit, so `git log -- .shipright/ledger.md` finds it. Never amend or add a follow-up commit to record one.
 
 If the conversation was summarized mid-build, read the plan's next task block and the ledger, nothing else, then continue.
 
@@ -109,6 +114,8 @@ Act on each finding: fix and commit with a ledger line, or say in the report why
 ## Phase 6: Pull request
 
 Push the branch and open the pull request: the goal in one paragraph, the decisions worth a reviewer's attention, what was verified and how, what could not be verified and why, which models reviewed it, and links to the spec, plan and ledger under `.shipright/`. Bind the PR so CI is watched. Report to the user: branch, PR link, what passed, what is left.
+
+If the repo has no remote, do not create one unasked: that publishes the code. Report what passed and ask whether to create a remote and open the PR, or to keep it local and merge the branch into the base with `git merge --no-ff`. Do what they pick.
 
 ## Rules
 

@@ -39,6 +39,8 @@ test('reads tasks from lean and older plans, and finished tasks from the ledger'
   })
   expect(parsePlan('# Old Implementation Plan\n### Task 7: Thing\n').tasks).toEqual([{ n: 7, title: 'Thing' }])
   expect([...parseLedger('## Task 1 caps - abc123\nProduced: x\n## Task 3 docker - def\n')]).toEqual([1, 3])
+  // Ledgers from 0.1.4 on carry no commit hash.
+  expect([...parseLedger('## Task 1 Pure todo state\nDeviated: none\n## Task 2 Storage\n')]).toEqual([1, 2])
 })
 
 test('classifies the tool calls a run makes and ignores the rest', async () => {
