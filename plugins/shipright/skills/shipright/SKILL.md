@@ -31,7 +31,7 @@ When they say go, write `.shipright/specs/YYYY-MM-DD-<feature>-design.md`: why, 
 
 ## Phase 1: Lean plan
 
-**Existing codebase.** Before planning, learn the code the feature touches. Launch one to three `Explore` agents in one message, each on a different aspect ("features similar to X and how they are wired", "the module this touches, its entry points and tests", "test helpers, fixtures and conventions"), each asked to return the 5 to 10 files that matter, with one line on each. Read those files in one batch. A new project skips this.
+**Existing codebase.** Before planning, learn the code the feature touches. A small project (about ten source files or fewer) you read whole, in one batch. For anything larger, launch one to three `Explore` agents in one message, each on a different aspect ("features similar to X and how they are wired", "the module this touches, its entry points and tests", "test helpers, fixtures and conventions"), each asked to return the 5 to 10 files that matter, with one line on each, then read those files in one batch. Either way, the plan's Code map names only files you have read or will create. A new project skips this.
 
 Then write `.shipright/plans/YYYY-MM-DD-<feature>.md` in this format and nothing more:
 

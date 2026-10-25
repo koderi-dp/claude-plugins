@@ -1,6 +1,6 @@
 ---
 type: tool_order
-before: { tool: Agent, input_match: '"subagent_type"\s*:\s*"Explore"' }
+before: { tool: Read, input_match: 'notes-cli[\\/]+src[\\/]+' }
 after: { tool: Write, input_match: '\.shipright[\\/]+plans[\\/]+' }
 ---
-An Explore agent ran before the plan was written.
+The project's source was read before the plan was written. (On a project this small the skill reads the files directly; on a larger one Explore agents name them first and the session then reads them, so this holds either way.)
