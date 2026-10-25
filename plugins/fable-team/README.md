@@ -12,6 +12,8 @@ Local file discovery uses the built-in Explore agent, which needs no file.
 
 The `routing` skill holds the rule the lead follows: plan, brief, delegate, review, accept. It loads when a task is more than a tiny edit, or on demand with `/fable-team:routing`.
 
+`/fable-team:init` sets a project up the way the guide describes, so it works without the plugin: it copies the three agent files into the project's `.claude/agents/` and adds the `## Subagent routing` section to its `CLAUDE.md`, creating the file if needed. It never overwrites a differing file or section unless you ask for `--force`. Start a fresh session afterwards, and disable the plugin for that project if you do not want the agents listed twice.
+
 The agent files follow the "Give Fable a team" field guide (FounderOS, September 2026).
 
 ## Install
@@ -49,7 +51,7 @@ Delegate the change to builder, then give reviewer the brief, the change set
 and the same command. If either reports a blocker, bring it back to me.
 ```
 
-Optional: add this to the project's `CLAUDE.md` so every session routes the same way without loading the skill first.
+Optional: add this to the project's `CLAUDE.md` so every session routes the same way without loading the skill first. (`/fable-team:init` writes the same section with bare agent names, for the project-local setup.)
 
 ```markdown
 ## Subagent routing

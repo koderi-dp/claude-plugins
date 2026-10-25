@@ -1,6 +1,6 @@
 {
   "name": "fable-team",
-  "version": "0.1.0",
-  "description": "Give Fable a team: research (Sonnet), builder (Opus) and reviewer (Opus) subagents plus the routing rule that keeps the lead session in charge.",
+  "version": "0.2.0",
+  "description": "Give Fable a team: research (Sonnet), builder (Opus) and reviewer (Opus) subagents plus the routing rule that keeps the lead session in charge. /fable-team:init copies them into a project so it works without the plugin.",
   "author": { "name": "Danijel Peric" }
 }
