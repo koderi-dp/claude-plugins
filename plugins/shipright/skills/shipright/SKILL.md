@@ -65,7 +65,7 @@ Count the plan's tasks. Then ask one `AskUserQuestion` call with these questions
 
 With one or two tasks, skip question 2 and the per-task review, and say so in one line; the final review covers it. The answers hold for the whole run.
 
-Apply the code-writing choice before Phase 2: call `set_session_model` and `set_session_effort` if they exist (load them through ToolSearch if deferred); otherwise ask the user to switch with `/model` and wait for their confirmation. Review choices go to the agents as the Agent tool's `model` and `effort` overrides.
+Apply the code-writing choice before Phase 2. A session cannot change its own model or effort: tools such as `set_session_model` and `set_session_effort` act only on other sessions and refuse the current one, so do not call them. If this session already runs on the chosen model and effort, say so in one line and continue. Otherwise ask the user to switch it themselves (the model menu in the desktop app, `/model` in the CLI) and wait for their confirmation. Review choices go to the agents as the Agent tool's `model` and `effort` overrides.
 
 ## Phase 2: Branch
 
