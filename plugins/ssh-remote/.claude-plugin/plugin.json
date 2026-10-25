@@ -1,5 +1,6 @@
 {
   "name": "ssh-remote",
   "version": "0.1.0",
-  "description": "Run commands and download files over SSH, with credentials read from files Claude never sees."
+  "description": "Run commands and download files over SSH, with credentials read from files Claude never sees.",
+  "author": { "name": "Danijel Peric" }
 }

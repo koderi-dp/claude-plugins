@@ -27,6 +27,23 @@ A session-start note tells Claude the tool exists. A post hook shrinks large
 successful output from known noisy commands (dotnet, cargo, npm, docker logs and
 similar) that Claude did not pipe.
 
+## Install
+
+At the prompt of a terminal session:
+
+```
+/plugin install output-trim --marketplace koderi-dp/claude-plugins
+```
+
+From a shell:
+
+```bash
+claude plugin install output-trim --marketplace koderi-dp/claude-plugins
+```
+
+In the desktop app, where `/plugin` does not run: click + next to the prompt box, then
+Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
+
 ## Setup: allow rule
 
 Add this rule once so Claude is not prompted on every call:

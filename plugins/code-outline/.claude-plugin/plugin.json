@@ -1,5 +1,6 @@
 {
   "name": "code-outline",
   "version": "0.1.2",
-  "description": "Symbol outlines and single-symbol reads via tree-sitter (Rust, TS/JS, Python, C#)."
+  "description": "Symbol outlines and single-symbol reads via tree-sitter (Rust, TS/JS, Python, C#).",
+  "author": { "name": "Danijel Peric" }
 }

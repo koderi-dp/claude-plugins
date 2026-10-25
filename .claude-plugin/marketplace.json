@@ -1,6 +1,7 @@
 {
   "name": "code101-plugins",
   "owner": { "name": "Danijel Peric" },
+  "description": "Claude Code plugins for faster, quieter sessions: file lookup, output trimming, code outlines, SSH, and a one-session feature pipeline.",
   "plugins": [
     {
       "name": "everything-find",

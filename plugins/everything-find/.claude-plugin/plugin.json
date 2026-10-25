@@ -1,5 +1,6 @@
 {
   "name": "everything-find",
   "version": "0.2.4",
-  "description": "Instant file/folder lookup via voidtools Everything (Windows)."
+  "description": "Instant file/folder lookup via voidtools Everything (Windows).",
+  "author": { "name": "Danijel Peric" }
 }
