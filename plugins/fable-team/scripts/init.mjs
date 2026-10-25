@@ -43,7 +43,8 @@ function note(status, path, extra = '') {
 }
 
 function copyAgents() {
-  const srcDir = join(pluginRoot, 'agents')
+  // Kept under templates/, not agents/, so the plugin registers no agents of its own.
+  const srcDir = join(pluginRoot, 'templates')
   const dstDir = join(projectDir, '.claude', 'agents')
   mkdirSync(dstDir, { recursive: true })
   for (const file of readdirSync(srcDir).filter((f) => f.endsWith('.md')).sort()) {
@@ -135,4 +136,4 @@ console.log(`fable-team init in ${projectDir}`)
 for (const line of report) console.log(`  ${line}`)
 console.log('')
 console.log('Start a fresh Claude Code session in this project so the agents are detected.')
-console.log('The project now works without the fable-team plugin; disable it to avoid duplicate agents.')
+console.log('The plugin registers no agents itself, so it can stay enabled.')

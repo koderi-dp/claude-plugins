@@ -1,20 +1,14 @@
 # fable-team
 
-Give Fable a team. Keep the lead session in charge and give research, building and review their own workers on the models and effort they need.
+Give Fable a team. One command, `/fable-team:init`, sets a project up the way the "Give Fable a team" field guide (FounderOS, September 2026) describes: three worker agents in the project's `.claude/agents/` and a `## Subagent routing` section in its `CLAUDE.md`. The plugin registers no agents or routing of its own, so it can stay enabled everywhere and only acts when you call it.
 
-| Agent | Model | Effort | Role |
+| Agent written | Model | Effort | Role |
 | --- | --- | --- | --- |
-| `fable-team:research` | sonnet | medium | Outside docs, APIs and changelogs. Read-only, returns Answer / Evidence / Caveats / Recommendation. |
-| `fable-team:builder` | opus | medium | Implements a planned, bounded change on assigned files only, runs the checks, returns Changed / Files / Validation / Risks. |
-| `fable-team:reviewer` | opus | medium | Reviews the finished change against the original brief, runs the checks itself, returns Findings / Validation / Risks. Never implements. |
+| `research` | sonnet | medium | Outside docs, APIs and changelogs. Read-only, returns Answer / Evidence / Caveats / Recommendation. |
+| `builder` | opus | medium | Implements a planned, bounded change on assigned files only, runs the checks, returns Changed / Files / Validation / Risks. |
+| `reviewer` | opus | medium | Reviews the finished change against the original brief, runs the checks itself, returns Findings / Validation / Risks. Never implements. |
 
 Local file discovery uses the built-in Explore agent, which needs no file.
-
-The `routing` skill holds the rule the lead follows: plan, brief, delegate, review, accept. It loads when a task is more than a tiny edit, or on demand with `/fable-team:routing`.
-
-`/fable-team:init` sets a project up the way the guide describes, so it works without the plugin: it copies the three agent files into the project's `.claude/agents/` and adds the `## Subagent routing` section to its `CLAUDE.md`, creating the file if needed. It never overwrites a differing file or section unless you ask for `--force`. Start a fresh session afterwards, and disable the plugin for that project if you do not want the agents listed twice.
-
-The agent files follow the "Give Fable a team" field guide (FounderOS, September 2026).
 
 ## Install
 
@@ -41,26 +35,26 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 ## Use
 
-Nothing to copy into the project. Ask the lead for a bounded change and name the roles if you want to be explicit:
+In a Claude Code session started in the project:
 
 ```
-Use Explore to find the signup form and its validation. Return the paths and
-current behaviour, no edits. Then write a brief: reject an invalid email and
-show an inline error. Name the allowed files and the exact validation command.
-Delegate the change to builder, then give reviewer the brief, the change set
-and the same command. If either reports a blocker, bring it back to me.
+/fable-team:init
 ```
 
-Optional: add this to the project's `CLAUDE.md` so every session routes the same way without loading the skill first. (`/fable-team:init` writes the same section with bare agent names, for the project-local setup.)
+It writes `.claude/agents/builder.md`, `research.md` and `reviewer.md` and appends the section below to `CLAUDE.md`, creating the file if needed. Existing files or an existing routing section that differ are left alone and reported; rerun with `--force` to replace them. Nothing is committed.
+
+Project agents are read when a session starts, so end the session and start a new one in the project. `/agents` then lists `builder`, `research` and `reviewer`.
+
+The routing section the lead follows:
 
 ```markdown
 ## Subagent routing
 
 Keep Fable as the lead: plan, assign work and accept the result.
 Use built-in Explore on Sonnet for local file discovery.
-Use fable-team:research for outside docs and facts.
-Use fable-team:builder once the files, approach and done criteria are clear.
-Use fable-team:reviewer to check the finished change against the original brief.
+Use research for outside docs and facts.
+Use builder once the files, approach and done criteria are clear.
+Use reviewer to check the finished change against the original brief.
 Keep the custom agents on their configured models and effort.
 Do not use Fable for workers.
 
@@ -70,8 +64,26 @@ Send concrete review findings back to builder, then recheck.
 Handle tiny changes directly. Do not spawn every role for every task.
 ```
 
+A first brief, from the guide:
+
+```
+Use Explore to find the signup form and its validation. Return the paths and
+current behaviour, no edits. Then write a brief: reject an invalid email and
+show an inline error. Name the allowed files and the exact validation command.
+Delegate the change to builder, then give reviewer the brief, the change set
+and the same command. If either reports a blocker, bring it back to me.
+```
+
+## Layout
+
+| Path | Holds |
+| --- | --- |
+| `skills/init/SKILL.md` | The `/fable-team:init` skill |
+| `scripts/init.mjs` | The copy and CLAUDE.md update, idempotent, keeps CRLF files CRLF |
+| `templates/*.md` | The three agent files, kept outside `agents/` so the plugin registers none |
+
 ## Troubleshooting
 
-- Agent missing: run `/agents` and look for the `fable-team:` prefix. If absent, reinstall the plugin and start a new session.
+- Agents missing after init: start a new session in the project. Then check `.claude/agents/` has the three `.md` files with their opening `---` block.
 - Unexpected model: check `/tasks` for a model override on the call.
-- A project that also has `.claude/agents/builder.md` etc. gets both sets; delete the project copies once the plugin is installed.
+- An older project copy differs from the plugin's: `/fable-team:init --force` replaces it.

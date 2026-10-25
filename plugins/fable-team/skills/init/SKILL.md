@@ -16,10 +16,10 @@ Set up the current project the way the "Give Fable a team" guide describes: thre
    node "${CLAUDE_PLUGIN_ROOT}/scripts/init.mjs" "<project root>"
    ```
 
-   It copies `agents/builder.md`, `agents/research.md` and `agents/reviewer.md` into `<project root>/.claude/agents/`, and appends the routing section to `CLAUDE.md`, creating the file when it is missing. It never overwrites a differing file or section unless `--force` is passed.
+   It copies `templates/builder.md`, `templates/research.md` and `templates/reviewer.md` into `<project root>/.claude/agents/`, and appends the routing section to `CLAUDE.md`, creating the file when it is missing. It never overwrites a differing file or section unless `--force` is passed.
 3. Read the script's report. For every line marked `kept`, tell the user what differs and ask whether to rerun with `--force`. Do not pass `--force` on your own.
-4. If `node` is not available, do the same by hand: copy the three files from `${CLAUDE_PLUGIN_ROOT}/agents/` with the Read and Write tools, keeping the opening `---` block intact, and add the section below to `CLAUDE.md`.
-5. Tell the user to start a fresh Claude Code session in the project so the agents are detected, and that they can now disable the plugin (`claude plugin disable fable-team@code101-plugins`) to avoid the agents appearing twice.
+4. If `node` is not available, do the same by hand: copy the three files from `${CLAUDE_PLUGIN_ROOT}/templates/` with the Read and Write tools, keeping the opening `---` block intact, and add the section below to `CLAUDE.md`.
+5. Tell the user, in its own paragraph so it is not missed, that project agents are read only at session start: they must end this session and start a new one in the project before `builder`, `research` and `reviewer` appear in `/agents`. The plugin registers no agents itself, so it can stay enabled.
 
 Do not commit. The user decides when the new files go into git.
 
