@@ -16,6 +16,7 @@ import {
   formatMinutes,
   insideRoot,
   mergeTasks,
+  parseFinish,
   parseLedger,
   parsePlan,
   percent,
@@ -48,6 +49,18 @@ async function readText($: Api, path: string): Promise<string> {
 async function ledgerDone($: Api, root: string | null): Promise<Set<number>> {
   if (!root) return new Set()
   return parseLedger(await readText($, `${root}/.shipright/ledger.md`))
+}
+
+async function ledgerFinish($: Api, root: string | null): Promise<string | null> {
+  if (!root) return null
+  return parseFinish(await readText($, `${root}/.shipright/ledger.md`))
+}
+
+/** The plan's `Branch:` line applied: the work mode and branch name, and the Branch phase once Phase 2 filled it. */
+function withBranch(p: Progress, branch: ReturnType<typeof parsePlan>['branch']): Progress {
+  if (!branch) return p
+  const next = { ...p, mode: branch.mode, branch: branch.branch ?? p.branch }
+  return phaseIndex(p.phase) >= phaseIndex('models') ? { ...next, phase: advance(p.phase, 'branch') } : next
 }
 
 function featureFromSpec(path: string): string | null {
@@ -111,7 +124,7 @@ async function after($: Api, prev: Progress, sig: Signal, ok: boolean, output: s
     case 'plan': {
       const plan = parsePlan(await readText($, sig.path))
       const done = await ledgerDone($, sig.root)
-      return {
+      return withBranch({
         ...p,
         root: sig.root,
         planPath: sig.path,
@@ -120,7 +133,7 @@ async function after($: Api, prev: Progress, sig: Signal, ok: boolean, output: s
         phase: advance(p.phase, 'plan'),
         startedAt: p.startedAt ?? now,
         tasks: mergeTasks(p.tasks, plan.tasks, done, now, building),
-      }
+      }, plan.branch)
     }
     case 'ledger':
     case 'commit': {
@@ -129,12 +142,18 @@ async function after($: Api, prev: Progress, sig: Signal, ok: boolean, output: s
       const done = await ledgerDone($, root)
       if (done.size === 0 && !building) return p
       const plan = planOf(p.tasks)
-      return {
+      const next: Progress = {
         ...p,
         phase: advance(p.phase, 'build'),
         buildStartedAt: p.buildStartedAt ?? now,
         tasks: mergeTasks(p.tasks, plan, done, now, true),
       }
+      // The ledger's closing `## Done:` entry ends the run, however it ended: PR, local merge, current branch or no git.
+      const finish = await ledgerFinish($, root)
+      if (finish && next.tasks.every(t => t.status === 'done')) {
+        return { ...endReview(next, now), phase: 'done', finishedBy: 'ledger', finishNote: finish }
+      }
+      return next
     }
     case 'code': {
       if (p.tasks.length === 0 || phaseIndex(p.phase) < phaseIndex('plan')) return p
@@ -159,7 +178,7 @@ async function after($: Api, prev: Progress, sig: Signal, ok: boolean, output: s
       return ok ? { ...p, phase: 'done', finishedBy: 'pr' } : p
     case 'merge':
       // Keeping a repo with no remote local: merging the feature branch into its base ends the run.
-      if (!ok || !p.branch || !sig.command.includes(p.branch)) return p
+      if (!ok || p.mode === 'none' || (p.branch && !sig.command.includes(p.branch))) return p
       if (phaseIndex(p.phase) < phaseIndex('review')) return p
       return { ...p, phase: 'done', finishedBy: 'merge' }
     default:
@@ -181,8 +200,9 @@ async function restore($: Api, cwd: string): Promise<Progress | null> {
   const planPath = `${dir}/${newest.name}`
   const plan = parsePlan(await readText($, planPath))
   if (plan.tasks.length === 0) return null
+  // A run whose ledger says `## Done:` is over; one with every task in but no Done entry is still at its gate or review.
+  if (await ledgerFinish($, cwd)) return null
   const done = await ledgerDone($, cwd)
-  if (plan.tasks.every(t => done.has(t.n))) return null
   const now = await $.clock.now()
   const p: Progress = {
     ...emptyProgress(),
@@ -190,6 +210,8 @@ async function restore($: Api, cwd: string): Promise<Progress | null> {
     planPath,
     feature: plan.feature,
     gateCommand: plan.gate,
+    mode: plan.branch?.mode ?? null,
+    branch: plan.branch?.branch ?? null,
     phase: done.size > 0 ? 'build' : 'plan',
     startedAt: now,
     buildStartedAt: done.size > 0 ? now : null,
@@ -331,7 +353,7 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
           <Text weight="semibold">{clip(p.feature ?? 'Shipright run')}</Text>
-          {p.branch ? <Text dimColor>{clip(p.branch)}</Text> : null}
+          {p.mode === 'none' ? <Text dimColor>no git</Text> : p.branch ? <Text dimColor>{clip(p.branch)}</Text> : null}
         </Box>
         <Box flexDirection="column">
           <Text mono color={p.phase === 'done' ? 'success' : 'claude'}>{`${bar(pct, Math.min(40, cols - 6))} ${pct}%`}</Text>
@@ -345,7 +367,7 @@ export const register: Register = on => {
             const note = ph.id === 'build' && p.tasks.length > 0 ? `  ${done}/${p.tasks.length}` : ''
             const failed = ph.id === 'gate' && p.gate === 'fail'
             return row(
-              `${isDone ? '✓' : isNow ? '▶' : '○'} ${ph.label}${note}`,
+              `${isDone ? '✓' : isNow ? '▶' : '○'} ${ph.id === 'branch' && p.mode === 'none' ? 'No git' : ph.label}${note}`,
               phaseRight(ph.id),
               failed && isNow ? 'error' : isDone ? 'success' : isNow ? 'claude' : undefined,
               !isDone && !isNow,

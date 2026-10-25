@@ -8,7 +8,7 @@ export const PHASES: readonly { id: Phase; label: string; weight: number }[] = [
   { id: 'build', label: 'Build', weight: 60 },
   { id: 'gate', label: 'Release gate', weight: 8 },
   { id: 'review', label: 'Final review', weight: 7 },
-  { id: 'pr', label: 'Pull request', weight: 5 },
+  { id: 'pr', label: 'Finish', weight: 5 },
 ]
 
 export function emptyProgress(): Progress {
@@ -17,6 +17,7 @@ export function emptyProgress(): Progress {
     planPath: null,
     feature: null,
     branch: null,
+    mode: null,
     phase: null,
     tasks: [],
     startedAt: null,
@@ -30,6 +31,7 @@ export function emptyProgress(): Progress {
     reviewStartedAt: null,
     reviewEndedAt: null,
     finishedBy: null,
+    finishNote: null,
     activity: '',
     updatedAt: 0,
   }
@@ -50,11 +52,29 @@ const TASK_HEADING = /^#{2,3}\s+Task\s+(\d+)\s*[:.\-–]?\s*(.*)$/gm
 
 export type PlanTask = { n: number; title: string; check: string | null }
 
-/** Tasks (with each one's `Done:` check), feature name and gate command from a shipright plan (also reads older `### Task N:` plans). */
-export function parsePlan(text: string): { feature: string | null; gate: string | null; tasks: PlanTask[] } {
+export type WorkMode = 'feature' | 'current' | 'none'
+
+/** The plan's `Branch:` line: `feature/x`, `current <name>` or `none`; null until Phase 2 fills it. */
+export function parseBranch(text: string): { mode: WorkMode; branch: string | null } | null {
+  const raw = /^Branch:\s*(.+?)\s*$/m.exec(text)?.[1]?.replace(/`/g, '').trim()
+  if (!raw || raw.startsWith('<')) return null
+  if (/^none\b/i.test(raw)) return { mode: 'none', branch: null }
+  const current = /^current\b\s*(\S+)?/i.exec(raw)
+  if (current) return { mode: 'current', branch: current[1] ?? null }
+  return { mode: 'feature', branch: raw.split(/\s+/)[0] ?? null }
+}
+
+/** Tasks (with each one's `Done:` check), feature name, gate command and branch from a shipright plan (also reads older `### Task N:` plans). */
+export function parsePlan(text: string): {
+  feature: string | null
+  gate: string | null
+  branch?: { mode: WorkMode; branch: string | null } | null
+  tasks: PlanTask[]
+} {
   const title = /^#\s+(.+?)\s*$/m.exec(text)?.[1] ?? null
   const feature = title ? title.replace(/\s+(implementation\s+)?plan$/i, '').trim() || null : null
   const gate = /^Gate:\s*`([^`]+)`/m.exec(text)?.[1]?.trim() || null
+  const branch = parseBranch(text)
   const headings = [...text.matchAll(TASK_HEADING)]
   const seen = new Set<number>()
   const tasks: PlanTask[] = []
@@ -66,15 +86,42 @@ export function parsePlan(text: string): { feature: string | null; gate: string 
     const check = /^Done:\s*`([^`]+)`/m.exec(block)?.[1]?.trim() || null
     tasks.push({ n, title: (m[2] ?? '').trim() || `Task ${n}`, check })
   })
-  return { feature, gate, tasks }
+  return branch ? { feature, gate, branch, tasks } : { feature, gate, tasks }
 }
 
-/** Whether a shell command runs the plan's gate: one of its `&&`, `;` or `|` parts is exactly that command. */
+/**
+ * One part of a shell command reduced to the command it runs: without leading env assignments,
+ * an `rtk` / `rtk proxy` wrapper, or output redirections such as `2>&1` and `> out.txt`.
+ */
+function bareCommand(part: string): string {
+  const tokens = part.trim().split(/\s+/).filter(Boolean)
+  while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0] ?? '')) tokens.shift()
+  if (tokens[0] === 'rtk') {
+    tokens.shift()
+    if (tokens[0] === 'proxy') tokens.shift()
+  }
+  const kept: string[] = []
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i] ?? ''
+    if (/^(\d|\*)?>>?$/.test(t)) {
+      i++ // a bare `>` or `2>` takes the next token as its target
+      continue
+    }
+    if (/^(\d|\*)?>>?(&\d|\S+)$/.test(t)) continue
+    kept.push(t)
+  }
+  return kept.join(' ')
+}
+
+/** Whether a shell command runs this exact command in one of its `&&`, `;` or `|` parts (after `cd x &&`, redirections and wrappers). */
 export function runsGate(command: string, gate: string | null): boolean {
   if (!gate) return false
-  const want = gate.replace(/\s+/g, ' ').trim()
-  return command.split(/&&|\|\||;|\|/).some(part => part.replace(/\s+/g, ' ').trim() === want)
+  const want = bareCommand(gate)
+  return command.split(/&&|\|\||;|\|/).some(part => bareCommand(part) === want)
 }
+
+/** `git` plus any global options (`-C <dir>`, `-c k=v`, `--no-pager`), as a regex source. */
+const GIT = String.raw`\bgit(?:\s+(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)|-c\s+\S+|--no-pager|--git-dir=\S+|--work-tree=\S+))*\s+`
 
 /** Whether a written file belongs to the run's repo (case-insensitive, as on Windows). */
 export function insideRoot(path: string, root: string | null): boolean {
@@ -88,6 +135,11 @@ export function parseLedger(text: string): Set<number> {
   const done = new Set<number>()
   for (const m of text.matchAll(/^##\s+Task\s+(\d+)/gm)) done.add(Number(m[1]))
   return done
+}
+
+/** The ledger's closing `## Done: <how it ended>` entry, or null while the run is still going. */
+export function parseFinish(text: string): string | null {
+  return /^##\s+Done:\s*(.+?)\s*$/m.exec(text)?.[1] ?? null
 }
 
 /**
@@ -266,12 +318,12 @@ export function classify(input: { tool: string; [key: string]: unknown }): Signa
     const cmd = String(input.command ?? '')
     if (/gh\s+pr\s+create/.test(cmd)) return { kind: 'pr' }
     if (/check:release|release[-_ ]gate/.test(cmd)) return { kind: 'gate' }
-    const branch = /git\s+(?:switch\s+-c|checkout\s+-b)\s+(\S+)/.exec(cmd)
-    if (branch?.[1]) return { kind: 'branch', name: branch[1] }
+    const branch = new RegExp(`${GIT}(?:switch\\s+-c|checkout\\s+-b)\\s+(\\S+)`).exec(cmd)
+    if (branch?.[1]) return { kind: 'branch', name: branch[1].replace(/["']/g, '') }
     if (/\.shipright[\\/]ledger\.md/.test(cmd)) return { kind: 'ledger', root: null }
-    if (/git\s+commit\b/.test(cmd)) return { kind: 'commit' }
-    if (/git\s+push\b/.test(cmd)) return { kind: 'push' }
-    if (/git\s+merge\b/.test(cmd)) return { kind: 'merge', command: cmd }
+    if (new RegExp(`${GIT}commit\\b`).test(cmd)) return { kind: 'commit' }
+    if (new RegExp(`${GIT}push\\b`).test(cmd)) return { kind: 'push' }
+    if (new RegExp(`${GIT}merge\\b`).test(cmd)) return { kind: 'merge', command: cmd }
     return null
   }
   if (tool === 'Agent' || tool === 'Task') {
@@ -301,7 +353,7 @@ export function activityFor(p: Progress): string {
     case 'models':
       return 'Waiting for your model choices'
     case 'branch':
-      return `On ${p.branch ?? 'the feature branch'}`
+      return p.mode === 'none' ? 'Working without git' : `On ${p.branch ?? 'the feature branch'}`
     case 'build':
       if (!active) return `${done} of ${p.tasks.length} tasks done`
       if (active.status === 'review') return `Task ${active.n} of ${p.tasks.length}: in review`
@@ -309,10 +361,11 @@ export function activityFor(p: Progress): string {
     case 'gate':
       return p.gate === 'fail' ? 'Release gate failed, fixing' : p.gate === 'pass' ? 'Release gate passed' : 'Running the release gate'
     case 'review':
-      return 'Final review of the whole branch'
+      return p.mode === 'none' ? 'Final review of the whole change' : 'Final review of the whole branch'
     case 'pr':
-      return 'Opening the pull request'
+      return 'Finishing'
     case 'done':
+      if (p.finishNote) return `Done: ${p.finishNote}`
       return p.finishedBy === 'merge' ? 'Merged locally' : 'Pull request opened'
     default:
       return ''

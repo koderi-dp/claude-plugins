@@ -1,6 +1,17 @@
 import { expect, test } from 'claude-code/testing'
 
-import { classify, emptyProgress, etaMs, formatDuration, mergeTasks, parseLedger, parsePlan, percent, testCounts } from './progress'
+import {
+  classify,
+  emptyProgress,
+  etaMs,
+  formatDuration,
+  mergeTasks,
+  parseLedger,
+  parsePlan,
+  percent,
+  runsGate,
+  testCounts,
+} from './progress'
 
 const ROOT = 'C:/repo'
 const PLAN_PATH = `${ROOT}/.shipright/plans/2026-10-25-probe.md`
@@ -90,6 +101,67 @@ test('reads test counts from common runners and formats short durations', async 
   expect(formatDuration(4_400)).toBe('4s')
   expect(formatDuration(252_000)).toBe('4m 12s')
   expect(formatDuration(3_900_000)).toBe('1h 05m')
+})
+
+test('commands run from another folder, wrapped or redirected are still recognised', async () => {
+  expect(runsGate('cd "C:/repo" && node --test 2>&1 | tail -5', 'node --test')).toBe(true)
+  expect(runsGate('rtk proxy node --test > out.txt', 'node --test')).toBe(true)
+  expect(runsGate('CI=1 npm test 2> err.log', 'npm test')).toBe(true)
+  expect(runsGate('node --test test/a.test.mjs 2>&1', 'node --test')).toBe(false)
+  expect(classify({ tool: 'Bash', command: 'git -C "C:/source/x y" switch -c feature/conv' })).toEqual({ kind: 'branch', name: 'feature/conv' })
+  expect(classify({ tool: 'PowerShell', command: 'git -C C:/repo merge --no-ff feature/conv' })).toEqual({
+    kind: 'merge',
+    command: 'git -C C:/repo merge --no-ff feature/conv',
+  })
+  expect(classify({ tool: 'Bash', command: 'git --no-pager -c core.pager=cat commit -m x' })).toEqual({ kind: 'commit' })
+  expect(classify({ tool: 'Bash', command: 'echo digit merge' })).toBe(null)
+})
+
+test('a run without git shows No git and ends on the ledger Done entry', async ($, on) => {
+  let plan = PLAN.replace('Goal: x', 'Goal: x\nGate: `node --test`\nBranch: <filled in Phase 2>')
+  let ledger = ''
+  on('clock.now', () => ({ value: 1_000 }))
+  on('fs.exists', () => ({ value: false }))
+  on('fs.read', (_, e) => {
+    const path = e.path.replace(/\\/g, '/')
+    if (path === PLAN_PATH) return { value: plan }
+    if (path === LEDGER_PATH) return { value: ledger }
+    throw new Error('ENOENT')
+  })
+  on('command.register', () => ({ value: { command: 'shipright-progress' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  const lines = async () => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const found = await ui.findAll({ type: 'Text' })
+    await ui.unmount()
+    return found.map(t => t.text)
+  }
+
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Write', file_path: PLAN_PATH, content: plan })
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which model should do the final review?' }] })
+  plan = plan.replace('Branch: <filled in Phase 2>', 'Branch: none')
+  await $.tool.call({ tool: 'Edit', file_path: PLAN_PATH, old_string: 'x', new_string: 'y' })
+  let shown = await lines()
+  expect(shown).toContain('no git')
+  expect(shown).toContain('✓ Models')
+  expect(shown).toContain('▶ No git')
+  expect(shown).toContain('Working without git')
+
+  await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/a.mjs`, content: 'x' })
+  ledger = '## Task 1 A\nFiles: src/a.mjs\n## Task 2 B\n## Task 3 C\n'
+  await $.tool.call({ tool: 'Edit', file_path: LEDGER_PATH, old_string: '', new_string: ledger })
+  await $.tool.call({ tool: 'Agent', subagent_type: 'shipright:final-reviewer', prompt: 'p', description: 'd' })
+  expect(await lines()).toContain('Final review of the whole change')
+
+  ledger += '## Done: no git\nGate node --test 9/9.\n'
+  await $.tool.call({ tool: 'Edit', file_path: LEDGER_PATH, old_string: '', new_string: ledger })
+  shown = await lines()
+  expect(shown).toContain('Done: no git')
+  expect(shown).toContain('✓ Finish')
+  expect(shown.some(s => /100%$/.test(s))).toBe(true)
 })
 
 test('the running task shows its steps with durations, and collapses to one timed line when done', async ($, on) => {

@@ -7,7 +7,7 @@ tools: Read, Grep, Glob
 
 You review one task of a feature another session is building right now. It is waiting on you before it commits, so be fast.
 
-Everything you need is in your prompt: the task block from the plan, the plan's Constraints, the ledger lines of earlier tasks this one depends on, and the diff. Work from that. Do not explore the repository, open the plan or the spec, or read files to get oriented. Open a file only to confirm a specific suspected finding, and only the lines that confirm it.
+Everything you need is in your prompt: the task block from the plan (or a `## Fix:` entry for a fix after the build), the plan's Constraints, the ledger lines of earlier tasks this one depends on, and the diff (without git, new files whole and modified files as a diff against their saved originals). Work from that. Refer to the task by the number in its block heading. Do not explore the repository, open the plan or the spec, or read files to get oriented. Open a file only to confirm a specific suspected finding, and only the lines that confirm it.
 
 Check, in this order, and stop at what you can confirm:
 

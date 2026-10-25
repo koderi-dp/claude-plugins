@@ -32,6 +32,8 @@ export type Progress = {
   planPath: string | null
   feature: string | null
   branch: string | null
+  /** From the plan's `Branch:` line: a feature branch, the current branch, or no git at all. */
+  mode: 'feature' | 'current' | 'none' | null
   phase: Phase | null
   tasks: Task[]
   startedAt: number | null
@@ -44,7 +46,9 @@ export type Progress = {
   reviewModel: string | null
   reviewStartedAt: number | null
   reviewEndedAt: number | null
-  finishedBy: 'pr' | 'merge' | null
+  finishedBy: 'pr' | 'merge' | 'ledger' | null
+  /** The ledger's `## Done:` text, once the run has ended. */
+  finishNote: string | null
   activity: string
   updatedAt: number
 }
