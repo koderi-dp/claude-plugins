@@ -219,6 +219,15 @@ export const register: Register = on => {
       const ok = ran.deny === undefined && ran.isError !== true
       const now = await $.clock.now()
       const current = await read($, progress)
+      if (current.phase === null && signal.kind === 'ledger' && signal.root) {
+        // The plugin loaded mid-run, or the run lives outside the session's folder: pick it up from its ledger.
+        const restored = await restore($, signal.root).catch(() => null)
+        if (restored) {
+          await update($, progress, () => restored)
+          await openPane($)
+        }
+        return ran
+      }
       if (current.phase === null && signal.kind !== 'spec' && signal.kind !== 'plan') return ran
       const updated = finish(await after($, current, signal, ok, now), now)
       await update($, progress, () => updated)

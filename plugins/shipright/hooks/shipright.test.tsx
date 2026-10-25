@@ -71,6 +71,31 @@ test('percent moves with tasks, never hits 100 before the PR, and the ETA uses t
   expect(etaMs({ ...p, tasks: mergeTasks([], parsePlan(PLAN).tasks, new Set(), 0, true) }, 60_000)).toBe(null)
 })
 
+test('a run already under way is picked up from its ledger when the pane missed the plan', async ($, on) => {
+  on('clock.now', () => ({ value: 5_000 }))
+  on('fs.exists', (_, e) => ({ value: e.path.replace(/\\/g, '/') === `${ROOT}/.shipright/plans` }))
+  on('fs.list', () => ({ value: [{ name: '2026-10-25-probe.md', kind: 'file', mtimeMs: 1 }] }))
+  on('fs.read', (_, e) => {
+    const path = e.path.replace(/\\/g, '/')
+    if (path === PLAN_PATH) return { value: PLAN }
+    if (path === LEDGER_PATH) return { value: '## Task 1 Agent capabilities - abc123\n' }
+    throw new Error('ENOENT')
+  })
+  on('command.register', () => ({ value: { command: 'shipright-progress' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+
+  // The session started in a parent folder, so restore on start finds nothing.
+  await $.session.start({ cwd: 'C:/elsewhere', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Edit', file_path: LEDGER_PATH, old_string: '', new_string: 'x' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /^Tasks / }))?.text).toBe('Tasks 1/3')
+  expect((await ui.find({ type: 'Text', text: /^Task 2 of 3/ }))?.text).toBe('Task 2 of 3: building')
+  await ui.unmount()
+})
+
 test('the pane follows a run from plan to pull request without the session telling it', async ($, on) => {
   let now = 1_000
   let ledger = ''
