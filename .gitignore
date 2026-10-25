@@ -1,3 +1,5 @@
 /target
 *.old
 .claude/worktrees/
+
+plugins/*/evals/results/

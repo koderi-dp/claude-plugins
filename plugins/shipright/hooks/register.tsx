@@ -8,7 +8,9 @@ import {
   activityFor,
   advance,
   bar,
+  callsLabel,
   classify,
+  countCall,
   emptyProgress,
   endStep,
   etaMs,
@@ -252,6 +254,13 @@ export const register: Register = on => {
       sig = null
     }
     try {
+      // Every call during the build counts towards the active task, signal or not: the plan sizes tasks by it.
+      const current = await read($, progress)
+      if (current.phase === 'build' && activeTask(current)) await update($, progress, p => countCall(p))
+    } catch {
+      /* progress is a view; never let it break a tool call */
+    }
+    try {
       const input = e as unknown as { tool: string; command?: unknown }
       if ((input.tool === 'Bash' || input.tool === 'PowerShell') && (!sig || sig.kind === 'gate')) {
         const command = String(input.command ?? '')
@@ -383,7 +392,7 @@ export const register: Register = on => {
               const working = t.status === 'active' || t.status === 'review'
               const line = row(
                 `${t.status === 'done' ? '✓' : t.status === 'review' ? '◆' : working ? '▶' : '○'} ${t.n}. ${t.title}${t.status === 'review' ? ' (review)' : ''}`,
-                t.status === 'pending' ? '' : span(t.startedAt, t.doneAt),
+                t.status === 'pending' ? '' : [callsLabel(t.calls), span(t.startedAt, t.doneAt)].filter(Boolean).join('  '),
                 t.status === 'done' ? 'success' : t.status === 'pending' ? undefined : 'claude',
                 t.status === 'pending',
                 `task-${t.n}`,

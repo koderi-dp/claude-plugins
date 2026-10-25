@@ -23,6 +23,8 @@ export type Task = {
   check: string | null
   startedAt: number | null
   doneAt: number | null
+  /** Tool calls the session made while this task was active: a plain measure of how big it turned out. */
+  calls: number
   /** Steps of the active task; cleared when it finishes, which shows as one line. */
   steps: Step[]
 }

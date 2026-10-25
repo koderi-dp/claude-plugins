@@ -152,9 +152,10 @@ export function mergeTasks(previous: Task[], plan: PlanTask[], done: Set<number>
   return plan.map(({ n, title, check }) => {
     const old = before.get(n)
     const base = { n, title, check }
+    const calls = old?.calls ?? 0
     if (done.has(n)) {
-      // A finished task shows as one line: its steps go, its total stays.
-      return { ...base, status: 'done', startedAt: old?.startedAt ?? null, doneAt: old?.doneAt ?? now, steps: [] }
+      // A finished task shows as one line: its steps go, its total and call count stay.
+      return { ...base, status: 'done', startedAt: old?.startedAt ?? null, doneAt: old?.doneAt ?? now, calls, steps: [] }
     }
     if (building && !activeSet) {
       activeSet = true
@@ -163,10 +164,11 @@ export function mergeTasks(previous: Task[], plan: PlanTask[], done: Set<number>
         status: old?.status === 'review' ? 'review' : 'active',
         startedAt: old?.startedAt ?? now,
         doneAt: null,
+        calls,
         steps: old?.steps ?? [],
       }
     }
-    return { ...base, status: 'pending', startedAt: null, doneAt: null, steps: [] }
+    return { ...base, status: 'pending', startedAt: null, doneAt: null, calls, steps: [] }
   })
 }
 
@@ -181,6 +183,19 @@ function closeSteps(steps: Step[], now: number): Step[] {
 
 export function activeTask(p: Progress): Task | undefined {
   return p.tasks.find(t => t.status === 'active' || t.status === 'review')
+}
+
+/** One more tool call on the active task, while the build is on. */
+export function countCall(p: Progress): Progress {
+  if (p.phase !== 'build') return p
+  const task = activeTask(p)
+  if (!task) return p
+  return { ...p, tasks: p.tasks.map(t => (t === task ? { ...t, calls: t.calls + 1 } : t)) }
+}
+
+/** `12 calls`, or an empty string before the first one. */
+export function callsLabel(calls: number): string {
+  return calls > 0 ? `${calls} call${calls === 1 ? '' : 's'}` : ''
 }
 
 /**

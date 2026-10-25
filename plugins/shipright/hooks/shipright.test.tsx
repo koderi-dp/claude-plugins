@@ -216,7 +216,8 @@ test('the running task shows its steps with durations, and collapses to one time
   now = 90_000
   let shown = await lines()
   expect(shown).toContain('▶ 1. Agent capabilities')
-  expect(shown).toContain('1m 20s')
+  // Calls are counted once the build is on; the write that started it is not, so: second write, check, fix.
+  expect(shown).toContain('3 calls  1m 20s')
   // One code step for both files, the failed check with its count, then the fix still running.
   expect(shown).toContain('    ✓ code and tests')
   expect(shown).toContain('1m 00s')
@@ -227,7 +228,9 @@ test('the running task shows its steps with durations, and collapses to one time
   await $.tool.call({ tool: 'Agent', subagent_type: 'shipright:task-reviewer', model: 'sonnet', effort: 'low', prompt: 'p', description: 'd' })
   now = 120_000
   shown = await lines()
-  expect(shown).toContain('◆ 1. Agent capabilities (review)')
+  // The right column (calls and time) takes room first, so the title may be clipped.
+  expect(shown.some(s => s.startsWith('◆ 1. Agent capabilities'))).toBe(true)
+  expect(shown).toContain('4 calls  1m 50s')
   expect(shown).toContain('    ▶ review sonnet low')
   expect(shown).toContain('30s')
 
@@ -235,7 +238,7 @@ test('the running task shows its steps with durations, and collapses to one time
   await $.tool.call({ tool: 'Edit', file_path: LEDGER_PATH, old_string: '', new_string: ledger })
   shown = await lines()
   expect(shown).toContain('✓ 1. Agent capabilities')
-  expect(shown).toContain('1m 50s')
+  expect(shown).toContain('5 calls  1m 50s')
   expect(shown.some(s => s.includes('review sonnet'))).toBe(false)
 
   // Task 2: its check is a narrow one, so the plain gate command run mid-build is neither its check nor the gate.
