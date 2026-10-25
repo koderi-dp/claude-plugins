@@ -28,6 +28,13 @@ From a shell:
 claude plugin install fable-team --marketplace koderi-dp/claude-plugins
 ```
 
+If the marketplace is already added, address the plugin by marketplace name instead:
+
+```bash
+claude plugin marketplace update code101-plugins
+claude plugin install fable-team@code101-plugins
+```
+
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
 
 ## Use
