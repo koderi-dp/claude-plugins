@@ -1,0 +1,24 @@
+{
+  "name": "superpowers-flow",
+  "version": "0.1.0",
+  "description": "Live progress for superpowers plan runs: a bar above the prompt, an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Adapted from savvy-flow and savvy-progress.",
+  "author": { "name": "Danijel Peric" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Panel language",
+      "description": "auto follows Claude Code's language setting, then the system locale; en, ru or he (Hebrew, drawn right to left)",
+      "default": "auto",
+      "options": ["auto", "en", "ru", "he"]
+    },
+    "autoOpen": {
+      "type": "string",
+      "title": "Open the agents panel",
+      "description": "tier: when an sp-* worker starts or a plan is reported; any: also when any other subagent starts",
+      "default": "tier",
+      "options": ["tier", "any"]
+    }
+  },
+  "license": "MIT"
+}

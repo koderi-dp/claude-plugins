@@ -32,6 +32,11 @@
       "name": "fable-team",
       "source": "./plugins/fable-team",
       "description": "/fable-team:init gives a project the Fable subagent team: research (Sonnet), builder (Opus) and reviewer (Opus) in .claude/agents plus the Subagent routing section in CLAUDE.md. The plugin registers no agents of its own."
+    },
+    {
+      "name": "superpowers-flow",
+      "source": "./plugins/superpowers-flow",
+      "description": "Live progress for superpowers plan runs: a bar above the prompt, an agents panel with model, steps, context, cost and time, and five tiered sp-* workers superpowers dispatches instead of general-purpose."
     }
   ]
 }
