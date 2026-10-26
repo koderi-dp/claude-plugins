@@ -5,6 +5,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
+import { sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
 
 const flow = atom({ plugin: 'superpowers-flow', key: 'flow' } as const, null)
 const agents = atom({ plugin: 'superpowers-flow', key: 'agents' } as const, [])
@@ -794,9 +795,11 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
 }
 
 export const register: Register = (on, options) => {
+  sessionHooks(on)
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     lang = await detectLang($, options.language)
+    await sessionStart($)
     await $.tool.register({
       name: 'progress',
       description:
@@ -962,7 +965,7 @@ export const register: Register = (on, options) => {
 
   // Each model request of a subagent: live context, tokens and cost.
   on('turn.step', async function* ($, e, next) {
-    const result = yield* next(e)
+    const result = yield* sessionStep($, e, next as never)
     const agentId = e.agentId
     const usage = result.usage
     if (!agentId || !usage) return result
@@ -1027,7 +1030,9 @@ export const register: Register = (on, options) => {
       )
       await update($, now, () => at)
     }
-    return next(e)
+    const result = await next(e)
+    await sessionComplete($, e)
+    return result
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -1206,15 +1211,25 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
     const f = await read($, flow)
-    if (f === null || e.props.hasSurvey) return next(e)
-    // Draw this row with the other mods' bands beneath it. Claude Code's own placeholder ({ type: 'engine' }) is
-    // never nested: the desktop drops a band that nests it.
+    // The session row sits under the flow row, so neither can cover the other
+    // whatever order the mods load in; other mods' bands go beneath both.
+    const session = await sessionRow($, e)
+    if (f === null && session === null) return next(e)
+    // Claude Code's own placeholder ({ type: 'engine' }) is never nested: the desktop drops a band that nests it.
     const drawn = await Promise.resolve(next(e)).catch(() => null)
-    const below = drawn && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
+    const other = drawn && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
 
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
+    const below = (
+      <Box key="below" flexDirection="column">
+        {session}
+        {other}
+      </Box>
+    )
+    if (f === null) return below
     const list = await read($, agents)
     const crew = list.length + plannedOf(f, list).length
     const isWorking = list.some(a => a.status === 'running')

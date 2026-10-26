@@ -53,6 +53,25 @@ declare module 'claude-code' {
       agents: AgentRun[]
       panel: Panel
       now: number
+      stats: Stats
+      cache: Cache
+      isHidden: boolean
+      isBusy: boolean
+      warned: number
     }
   }
+}
+
+export type Stats = {
+  turn: number
+  speed: number | null
+  turnCost: number | null
+  total: number
+  context: number
+  costAtStart: number
+}
+
+export type Cache = {
+  expiresAt: number | null
+  secondsLeft: number | null
 }

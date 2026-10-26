@@ -36,7 +36,7 @@
     {
       "name": "superpowers-flow",
       "source": "./plugins/superpowers-flow",
-      "description": "Live progress for superpowers plan runs: a bar above the prompt, an agents panel with model, steps, context, cost and time, and five tiered sp-* workers superpowers dispatches instead of general-purpose."
+      "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers superpowers dispatches instead of general-purpose."
     }
   ]
 }
