@@ -53,6 +53,7 @@ declare module 'claude-code' {
       agents: AgentRun[]
       panel: Panel
       now: number
+      notify: boolean
       stats: Stats
       cache: Cache
       isHidden: boolean

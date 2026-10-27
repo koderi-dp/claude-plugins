@@ -1,6 +1,6 @@
 {
   "name": "superpowers-flow",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Adapted from savvy-flow and savvy-progress.",
   "author": { "name": "Danijel Peric" },
   "types": "./types/index.d.ts",
@@ -11,6 +11,13 @@
       "description": "auto follows Claude Code's language setting, then the system locale; en, ru or he (Hebrew, drawn right to left)",
       "default": "auto",
       "options": ["auto", "en", "ru", "he"]
+    },
+    "notify": {
+      "type": "string",
+      "title": "Push notifications",
+      "description": "off: none; milestones: a notification (or a toast) when a task is accepted, a worker fails, or the run finishes. Reaches the phone over Remote Control when Push when Claude decides is on in /config.",
+      "default": "off",
+      "options": ["off", "milestones"]
     },
     "autoOpen": {
       "type": "string",

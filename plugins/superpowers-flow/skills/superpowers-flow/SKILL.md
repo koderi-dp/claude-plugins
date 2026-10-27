@@ -36,4 +36,10 @@ Pass the task's title as the Agent tool's `description` and reuse it verbatim on
 
 Fields left out keep their previous value. Workers report their own steps; the mod adds that request to every subagent brief, so you add nothing to the templates.
 
+## 3. Status line
+
+Phones and browsers attached through Remote Control see the conversation, not the bar or the panel. So each time a task is accepted, write one line in your reply, nothing more: `Tasks 4/6 · next: Task 5 (sp-light)`, or `Tasks 6/6 · final review (sp-careful)` once the last one is in. That line is the whole narration for the step; the ledger holds the record.
+
+`/flow-status` answers with the panel's content as text, on any device.
+
 `/flow-agents` opens or closes the panel; `/flow-agents open` brings it forward.

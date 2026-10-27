@@ -5,7 +5,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
-import { sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
+import { pushOrToast, sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
 
 const flow = atom({ plugin: 'superpowers-flow', key: 'flow' } as const, null)
 const agents = atom({ plugin: 'superpowers-flow', key: 'agents' } as const, [])
@@ -15,6 +15,8 @@ const panel = atom({ plugin: 'superpowers-flow', key: 'panel' } as const, {
   autoOpenedFor: '',
 })
 const now = atom({ plugin: 'superpowers-flow', key: 'now' } as const, 0)
+// Milestone pushes on or off: the `notify` option at start, then `/flow-notify`.
+const notify = atom({ plugin: 'superpowers-flow', key: 'notify' } as const, false)
 
 const TOOL = 'mcp__superpowers-flow__progress'
 const STEP_TOOL = 'mcp__superpowers-flow__step'
@@ -78,6 +80,7 @@ const STRINGS = {
     tasks: 'Tasks',
     review: 'Review',
     busy: 'running',
+    accepted: 'accepted',
     ctx: 'ctx',
     tier: { light: 'light', medium: 'medium', careful: 'careful', heavy: 'heavy', fable: 'fable', other: 'other' },
     effort: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
@@ -109,6 +112,7 @@ const STRINGS = {
     tasks: 'Задачи',
     review: 'Ревью',
     busy: 'в работе',
+    accepted: 'принято',
     ctx: 'ctx',
     tier: { light: 'light', medium: 'medium', careful: 'careful', heavy: 'heavy', fable: 'fable', other: 'other' },
     effort: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
@@ -140,6 +144,7 @@ const STRINGS = {
     tasks: 'משימות',
     review: 'בדיקה',
     busy: 'בעבודה',
+    accepted: 'התקבלו',
     ctx: 'הקשר',
     tier: { light: 'קל', medium: 'בינוני', careful: 'זהיר', heavy: 'כבד', fable: 'פייבל', other: 'אחר' },
     effort: { low: 'נמוך', medium: 'בינוני', high: 'גבוה', xhigh: 'גבוה מאוד', max: 'מקסימלי' },
@@ -778,6 +783,38 @@ const ctxBar = (pct: number, width: number): string => {
 
 const STATUS_GLYPH: Record<string, string> = { running: '●', done: '✓', failed: '✗', planned: '◷' }
 
+// The panel as text, for `/flow-status`: a phone or browser attached over Remote
+// Control sees the conversation only, so this is how the panel reaches it.
+const statusText = (f: Flow | null, list: AgentRun[], at: number): string => {
+  const s = tr()
+  const t = totals(list, at)
+  const planned = plannedOf(f, list)
+  const head = f
+    ? `${f.title} · ${label(f, fallbackDoneOf(list))}${f.total || f.isFinished ? ` · ${Math.round(ratio(f) * 100)}%` : ''}`
+    : s.empty
+  const sums = list.length ? ` · ≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} ${s.tokensWord} · ${fmtTime(t.time)}` : ''
+  const row = (a: AgentRun): string => {
+    const tier = tierOf(a.type)
+    const meta = [tier === 'other' ? a.type : tierWord(tier), runModel(a)]
+    if (a.round > 1) meta.push(`${s.round} ${a.round}`)
+    if (a.stepTotal) meta.push(`${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' ' + a.stepNote : ''}`)
+    meta.push(`≈${fmtCost(a.costUsd)}`, fmtTime(elapsed(a, at)))
+    return `  ${STATUS_GLYPH[a.status]} ${a.description || a.type}  ·  ${meta.join(' · ')}`
+  }
+  const running = list.filter(a => a.status === 'running').reverse()
+  const finished = list.filter(a => a.status !== 'running').reverse()
+  const lines = [head + sums]
+  if (running.length) lines.push('', `${s.running} · ${running.length}`, ...running.map(row))
+  if (finished.length) lines.push('', `${s.finished} · ${finished.length}`, ...finished.map(row))
+  if (planned.length)
+    lines.push(
+      '',
+      `${s.planned} · ${planned.length}`,
+      ...planned.map(p => `  ◷ ${p.n}. ${p.title}  ·  ${[tierWord(p.tier || 'other'), tierModel(p.tier), p.after.length ? `${s.after} ${p.after.join(', ')}` : ''].filter(Boolean).join(' · ')}`),
+    )
+  return '```' + '\n' + lines.join('\n') + '\n' + '```'
+}
+
 // Opens the agents pane, or closes it when it is up; true when it ends up open.
 async function togglePane($: EngineInterface): Promise<boolean> {
   const isOpen = (await $.ui.panes()).some(p => p.id === PANE)
@@ -804,6 +841,7 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     lang = await detectLang($, options.language)
     await sessionStart($)
+    await update($, notify, () => options.notify === 'milestones')
     await $.tool.register({
       name: 'progress',
       description:
@@ -858,6 +896,14 @@ export const register: Register = (on, options) => {
       isDeferred: false,
     })
     await $.command.register({
+      name: 'flow-notify',
+      description: 'Push notifications at milestones (a task accepted, a worker failed, the run finished): `on`, `off`, or no argument to toggle',
+    })
+    await $.command.register({
+      name: 'flow-status',
+      description: 'The agents panel as text: the plan, running, finished and planned subagents. Works from a phone or browser attached over Remote Control.',
+    })
+    await $.command.register({
       name: 'flow-agents',
       description: 'Show or hide the panel of subagents: running, finished and planned, with model, context, cost and time',
     })
@@ -872,6 +918,17 @@ export const register: Register = (on, options) => {
       })()
     })
     return started
+  })
+
+  on('command.run', { command: 'flow-notify' }, async ($, e) => {
+    const arg = (e.args ?? '').trim().toLowerCase()
+    const next = await update($, notify, prev => (arg === 'on' ? true : arg === 'off' ? false : !prev))
+    return { text: next ? 'Milestone notifications on.' : 'Milestone notifications off.' }
+  })
+
+  on('command.run', { command: 'flow-status' }, async $ => {
+    const at = await $.clock.now()
+    return { text: statusText(await read($, flow), await read($, agents), at) }
   })
 
   on('command.run', { command: 'flow-agents' }, async ($, e) => {
@@ -898,6 +955,11 @@ export const register: Register = (on, options) => {
     }
     const next = await update($, flow, p => merge(p, input))
     if (next && input.tasks?.length) await autoOpen($, next.title)
+    if (next && (await read($, notify))) {
+      // A task accepted, or the run closed: one line to the phone, or a toast.
+      if (next.isFinished && !prev?.isFinished) void pushOrToast($, `${next.title}: ${tr().done.toLowerCase()}`, '✓')
+      else if (prev && next.done > prev.done && !next.isFinished) void pushOrToast($, `${next.title}: ${next.done}/${next.total || '?'} ${tr().accepted}`, '✓')
+    }
     return { result: `ok: ${label(next ?? blank())}` }
   })
 
@@ -1036,6 +1098,10 @@ export const register: Register = (on, options) => {
         }),
       )
       await update($, now, () => at)
+      if (e.reason !== 'answer' && (await read($, notify))) {
+        const run = (await read($, agents)).find(a => a.agentId === agentId)
+        if (run && tierOf(run.type) !== 'other') void pushOrToast($, `${run.description || run.type}: ${tr().failed}`, '✗')
+      }
     }
     const result = await next(e)
     await sessionComplete($, e)

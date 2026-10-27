@@ -124,9 +124,7 @@ async function refresh($: EngineInterface): Promise<void> {
 
 // Claude Code's own notification, which also reaches the phone over Remote Control;
 // it is skipped while the person is at this session, and then a toast says it instead.
-async function notifyCacheExpiry($: EngineInterface, minutes: number): Promise<void> {
-  const project = (await $.session.cwd()).split(/[\\/]/).filter(Boolean).pop() ?? 'session'
-  const text = `${project}: prompt cache expires in ${minutes} min`
+export async function pushOrToast($: EngineInterface, text: string, glyph = '⏳'): Promise<void> {
   const sent = await $.tool.call({ tool: 'PushNotification', message: text, status: 'proactive' }).catch(() => null)
   const isDelivered =
     sent !== null &&
@@ -134,7 +132,12 @@ async function notifyCacheExpiry($: EngineInterface, minutes: number): Promise<v
     sent.isError !== true &&
     (sent.result.pushSent === true || sent.result.localSent === true)
 
-  if (!isDelivered) $.ui.toast(`⏳ ${text}`, { timeoutMs: 30000 })
+  if (!isDelivered) $.ui.toast(`${glyph} ${text}`, { timeoutMs: 30000 })
+}
+
+async function notifyCacheExpiry($: EngineInterface, minutes: number): Promise<void> {
+  const project = (await $.session.cwd()).split(/[\\/]/).filter(Boolean).pop() ?? 'session'
+  await pushOrToast($, `${project}: prompt cache expires in ${minutes} min`)
 }
 
 // One hook per event per module: register.tsx owns session.start, turn.step and
