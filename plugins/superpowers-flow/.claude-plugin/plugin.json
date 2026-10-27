@@ -1,6 +1,6 @@
 {
   "name": "superpowers-flow",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Adapted from savvy-flow and savvy-progress.",
   "author": { "name": "Danijel Peric" },
   "types": "./types/index.d.ts",

@@ -27,13 +27,12 @@ Pass the task's title as the Agent tool's `description` and reuse it verbatim on
 
 ## 2. Progress bar
 
-`mcp__superpowers-flow__progress` is in your tools, deferred: load it once with ToolSearch (`select:mcp__superpowers-flow__progress`). Skip silently only if ToolSearch does not find it. Call it:
+`mcp__superpowers-flow__progress` is in your tool list; it needs no loading. Call it **before the first dispatch**, whatever brought you there: a plan just written, or a resumed run picked up from the ledger. Without that first call the bar only shows what it counts by itself.
 
-- when the plan is read and the dispatch order is known: `title` (the plan's name, a few words), `total` (number of implementation tasks), `tasks` (`[{ title, tier, after }]` in plan order, `tier` without the `sp-` prefix, `after` the numbers of the tasks it waits for), `phase: "delegate"`;
-- while brainstorming or writing the plan, if this skill is active then: `phase: "plan"`;
-- each time a task's review accepts it: `done` (accepted so far); `phase: "review"` while a task review or the final review runs, back to `"delegate"` when the next task is dispatched;
-- if the plan changes mid-run: the new `tasks` and `total`;
-- once the branch is finished: `finished: true`.
+- First call: `title` (the plan's name, a few words), `total` (number of implementation tasks), `done` (tasks the ledger already marks accepted; 0 on a fresh run), `tasks` (`[{ title, tier, after }]` in plan order, `tier` without the `sp-` prefix, `after` the numbers of the tasks it waits for), `phase: "delegate"`.
+- Each time a task's review accepts it: `done`. `phase: "review"` while a task review or the final review runs, back to `"delegate"` at the next dispatch.
+- If the plan changes mid-run: the new `tasks` and `total`.
+- Once the branch is finished: `finished: true`.
 
 Fields left out keep their previous value. Workers report their own steps; the mod adds that request to every subagent brief, so you add nothing to the templates.
 

@@ -220,14 +220,18 @@ const merge = (prev: Flow | null, input: ProgressInput): Flow => {
   }
 }
 
-const label = (f: Flow): string => {
+// `fallbackDone`: finished sp-* runs, shown when no plan was ever reported and the
+// bar only knows what the safety net counted.
+const label = (f: Flow, fallbackDone = 0): string => {
   const s = tr()
   if (f.isFinished) return s.done
   if (f.phase === 'plan') return s.plan
   if (f.phase === 'design') return s.design
-  const count = f.total ? `${f.done}/${f.total}` : `${f.running} ${s.busy}`
+  const count = f.total ? `${f.done}/${f.total}` : `${fallbackDone} ${s.done.toLowerCase()} · ${f.running} ${s.busy}`
   return `${f.phase === 'review' ? s.review : s.tasks} ${count}`
 }
+
+const fallbackDoneOf = (list: AgentRun[]): number => list.filter(a => a.status === 'done' && tierOf(a.type) !== 'other').length
 
 const ratio = (f: Flow): number => (f.isFinished ? 1 : f.total ? f.done / f.total : 0)
 
@@ -275,7 +279,7 @@ const fitText = (s: string, size: number, maxW: number): string => {
   return out + '…'
 }
 
-const rowSvg = (f: Flow, W: number, isWorking: boolean): string => {
+const rowSvg = (f: Flow, W: number, isWorking: boolean, text: string): string => {
   // The title takes what it needs, up to 40% of the row; the bar takes the rest.
   const title = fitText(f.title, 13, Math.max(60, W * 0.4))
   const BAR_X = Math.round(16 + textWidth(title, 13) + 12)
@@ -314,10 +318,10 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean): string => {
     if (x > fillW + 4) ticks.push(`<rect x="${bx(x, 1.5)}" y="${BAR_H / 2 - 4}" width="1.5" height="8" rx="0.75"/>`)
   }
 
-  const text = label(f)
   const pillW = Math.round(18 + text.length * 6.6)
   const pillX = bx(Math.max(0, Math.min(BAR_W - pillW, fillW - pillW)), pillW)
-  const percent = `${Math.round(ratio(f) * 100)}%`
+  // No plan reported: there is no share to show.
+  const percent = f.total || f.isFinished ? `${Math.round(ratio(f) * 100)}%` : ''
   // `direction="rtl"` puts Hebrew words and numbers in reading order; `start` is then the right edge.
   const titleAt = rtl ? `x="${W - 16}" direction="rtl" text-anchor="start"` : 'x="16"'
   const percentAt = rtl ? `x="${CRAB_W + 6}" y="${H / 2 + 4.5}"` : `x="${W - CRAB_W - 6}" y="${H / 2 + 4.5}" text-anchor="end"`
@@ -807,6 +811,9 @@ export const register: Register = (on, options) => {
         'Call it after presenting the plan (title, total, tasks, phase "delegate"), each time a task is accepted (done), ' +
         'when switching phase or re-planning (tasks), and once at the end with finished: true. Fields left out keep their previous value. ' +
         'For the main session only: a call from a subagent is ignored (workers report with `step`).',
+      // In the main session's tool list, not behind ToolSearch: a controller that has to
+      // load it first skips the report instead.
+      isDeferred: false,
       inputSchema: {
         type: 'object',
         properties: {
@@ -1233,10 +1240,11 @@ export const register: Register = (on, options) => {
     const list = await read($, agents)
     const crew = list.length + plannedOf(f, list).length
     const isWorking = list.some(a => a.status === 'running')
+    const text = label(f, fallbackDoneOf(list))
     const crewButton = (
       <Button key="sp-agents" label={`×${crew}`} plain onPress={() => void togglePane($)} />
     )
-    const percent = `${Math.round(ratio(f) * 100)}%`
+    const percent = f.total || f.isFinished ? `${Math.round(ratio(f) * 100)}%` : ''
     const dismiss = (
       <Button
         key="sp-dismiss"
@@ -1256,7 +1264,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column">
           <Box flexDirection={isRtl() ? 'row-reverse' : 'row'} alignItems="center" gap={1}>
-            <Svg source={rowSvg(f, width, isWorking)} alt={`${f.title}: ${label(f)}, ${percent}`} width={width} height={H} />
+            <Svg source={rowSvg(f, width, isWorking, text)} alt={`${f.title}: ${text} ${percent}`} width={width} height={H} />
             {crewButton}
             {dismiss}
           </Box>
@@ -1276,8 +1284,8 @@ export const register: Register = (on, options) => {
             <Text wrap="truncate-end">{f.title}</Text>
           </Box>
           <Text color={f.isFinished ? DONE : ACCENT}>{barText(f, width)}</Text>
-          <Text bold>{label(f)}</Text>
-          <Text dimColor>{percent}</Text>
+          <Text bold>{text}</Text>
+          {percent ? <Text dimColor>{percent}</Text> : null}
           <Text color={CLAY}>▣</Text>
           {crewButton}
           {dismiss}

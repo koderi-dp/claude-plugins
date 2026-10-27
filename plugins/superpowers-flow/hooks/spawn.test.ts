@@ -49,3 +49,21 @@ test('spawn: a step report draws on the worker row', async ($, on) => {
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', requestId: 'sp-agents', props: pane })
   expect(await ui.find({ type: 'Text', text: /2\/5 tests/ })).toBeDefined()
 })
+
+// No plan reported: the band counts finished sp-* runs itself instead of showing 0%.
+test('band: without a plan the bar counts finished sp-* runs', async ($, on) => {
+  mock.clock(on)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  let n = 0
+  on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: `a${++n}` }))
+  on('turn.complete', () => ({ text: '' }) as never)
+  on('tool.call', () => ({ result: 'worker ran' }) as never)
+  await $.tool.call({ tool: 'Agent', subagent_type: 'superpowers-flow:sp-light', description: 'Task 1', prompt: 'p' } as never)
+  await $.agent.spawn({ ...spawn, subagentType: 'superpowers-flow:sp-light' } as never)
+  await ($.turn.complete as (e: unknown) => Promise<unknown>)({ agentId: 'a1', reason: 'answer', answer: 'ok', usage: null })
+
+  const band = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 100, scroll: { offset: 0, bodyRows: 4 }, view: {} }
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'AbovePrompt', props: band })
+  expect(await ui.find({ type: 'Text', text: /^Tasks 1 done · 0 running$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^0%$/ })).toBeUndefined()
+})
