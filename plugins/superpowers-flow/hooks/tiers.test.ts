@@ -67,6 +67,7 @@ test('tiers: parallel words follow the runner; session gets its launch line and 
   expect(session).toContain('> <log folder>/<slice>.log')
   expect(session).toContain('`run: "<run id>"`, `slice: "<slice>"`')
   expect(session).not.toContain('Slices run in worktrees')
+  expect(session).toContain('Skip the final whole-branch review')
 })
 
 test('tiers: reset puts every new setting back to profile', () => {
