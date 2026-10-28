@@ -662,7 +662,8 @@ const PLAN_H = 62
 // Where a row's text starts, right of its crab.
 const TX = 56
 
-const agentSvg = (W: number, a: AgentRun, at: number): string => {
+// `reserve`: pixels kept clear on the title line for buttons laid over the row.
+const agentSvg = (W: number, a: AgentRun, at: number, reserve = 0): string => {
   const s = STRINGS
   const tier = tierOf(a.type)
   const color = colorOf(tier)
@@ -671,7 +672,7 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
   if (a.round > 1) meta.push(`${s.round} ${a.round}`)
   const progress = progressOf(a)
   const badgeW = textWidth(statusWord(a.status), 12) + 32
-  const titleW = W - TX - badgeW - 8
+  const titleW = W - TX - badgeW - 8 - reserve
   // The count beside the bar: steps done, full when finished, else the context it fills.
   const count = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}` : a.status === 'done' ? '100%' : `${s.ctx} ${ctx}%`
   // Bold digits run wider than `textWidth` reckons: a margin keeps them off the bar.
@@ -1410,17 +1411,17 @@ export const register: Register = (on, options) => {
     // A slice session's row carries its Stop (while it runs) and Log buttons; a running one
     // also lists its workers under it.
     const reportOf = (a: AgentRun) => reports.find(r => `slice:${r.slice}` === a.id)
-    // Right under the session's own row, lined up with its text: they act on that session.
-    const actions = (a: AgentRun, indent: number) => {
+    // A child session's Stop and Log, on its row's title line beside the status pill.
+    const buttons = (a: AgentRun) => {
       const r = reportOf(a)
-      if (!r) return null
-      return (
-        <Box key={`${a.id}-actions`} flexDirection="row" gap={1} marginLeft={indent}>
-          {a.status === 'running' && <Button key={`${a.id}-stop`} label={`■ ${s.stop}`} variant="secondary" onPress={async () => $.ui.log(await stopSlice($, r))} />}
-          <Button key={`${a.id}-log`} label={s.log} variant="secondary" onPress={async () => $.ui.log(await sliceLog($, r))} />
-        </Box>
-      )
+      if (!r) return []
+      return [
+        ...(a.status === 'running' ? [<Button key={`${a.id}-stop`} label={`■ ${s.stop}`} variant="secondary" onPress={async () => $.ui.log(await stopSlice($, r))} />] : []),
+        <Button key={`${a.id}-log`} label={s.log} variant="secondary" onPress={async () => $.ui.log(await sliceLog($, r))} />,
+      ]
     }
+    // Room the buttons take on the title line, in pixels: the drawing keeps it clear.
+    const ACTIONS_W = 150
     const moreCrew = (a: AgentRun) => `+${crewHidden(a)} ${s.moreRunning} · /flow-status`
     const crewRunning = (a: AgentRun) => (a.status === 'running' ? (crews.get(a.id) ?? []).filter(w => w.status === 'running') : [])
     const crewOfRow = (a: AgentRun) => crewRunning(a).slice(-ROWS_CREW)
@@ -1449,6 +1450,21 @@ export const register: Register = (on, options) => {
 
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
+      // Desktop: a run's row; a child session's carries its buttons laid over the title line,
+      // left of the status pill (Box offsets are in cells, about 8px each).
+      const deskRow = (W: number, a: AgentRun, alt: string) => {
+        const extra = buttons(a)
+        if (!extra.length) return <Svg key={a.id} source={agentSvg(W, a, at)} alt={alt} width={W} height={ROW_H} />
+        const pill = Math.ceil((textWidth(statusWord(a.status), 12) + 18 + (a.status === 'running' ? 14 : 0) + 10) / 8)
+        return (
+          <Box key={a.id} flexDirection="column">
+            <Svg source={agentSvg(W, a, at, ACTIONS_W)} alt={alt} width={W} height={ROW_H} />
+            <Box position="absolute" top={0} right={pill} flexDirection="row" gap={1}>
+              {extra}
+            </Box>
+          </Box>
+        )
+      }
       const W = Math.max(240, Math.min(900, (e.props.bodyColumns || 40) * 8 - 8))
       const section = (key: string, text: string) => (
         <Text key={key} dimColor>
@@ -1480,7 +1496,6 @@ export const register: Register = (on, options) => {
         (canMore || canFewer ? 1 : 0) +
         (doneHidden > 0 && !canMore ? 1 : 0) +
         (planHidden > 0 ? 1 : 0) +
-        [...running, ...doneRows].filter(reportOf).length +
         running.filter(a => crewHidden(a) > 0).length
       const crewRows = running.reduce((n, a) => n + crewOfRow(a).length, 0)
       const gridH = headerHeight(title) + lines * LINE_H + (running.length + doneRows.length + crewRows) * ROW_H + planRows.length * PLAN_H
@@ -1497,8 +1512,7 @@ export const register: Register = (on, options) => {
             {isEmpty && <Text dimColor>{s.empty}</Text>}
             {running.length > 0 && section('h-run', `${s.running} · ${running.length}`)}
             {running.flatMap(a => [
-              <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={ROW_H} />,
-              actions(a, 7),
+              deskRow(W, a, `${a.description}: ${modelName(a.model)}, ${s.isRunning}`),
               ...crewOfRow(a).map(w => (
                 <Box key={w.id} marginLeft={3}>
                   <Svg source={agentSvg(W - 24, w, at)} alt={`${w.description}: ${modelName(w.model)}`} width={W - 24} height={ROW_H} />
@@ -1512,8 +1526,7 @@ export const register: Register = (on, options) => {
             ])}
             {finished.length > 0 && toggleDone}
             {doneRows.flatMap(a => [
-              <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isFinished}`} width={W} height={ROW_H} />,
-              actions(a, 7),
+              deskRow(W, a, `${a.description}: ${modelName(a.model)}, ${s.isFinished}`),
             ])}
             {canMore && (
               <Button key="more" label={`${s.showMore} · ${doneHidden}`} plain onPress={() => update($, panel, prev => ({ ...prev, isMoreShown: true }))} />
@@ -1548,6 +1561,7 @@ export const register: Register = (on, options) => {
               {a.description || a.type}
             </Text>
             <Text color={a.status === 'failed' ? 'red' : a.status === 'done' ? 'green' : color}>{STATUS_GLYPH[a.status]}</Text>
+            {isWorker ? null : buttons(a)}
           </Box>
           <Text dimColor wrap="truncate-end">
             {'  '}
@@ -1596,7 +1610,6 @@ export const register: Register = (on, options) => {
             {running.length > 0 && <Text dimColor>{s.running} · {running.length}</Text>}
             {running.flatMap(a => [
               row(a),
-              actions(a, 2),
               ...crewOfRow(a).map(w => row(w, true)),
               crewHidden(a) > 0 ? (
                 <Box key={`${a.id}-crew-more`} marginLeft={3}>
@@ -1605,7 +1618,7 @@ export const register: Register = (on, options) => {
               ) : null,
             ])}
             {finished.length > 0 && toggleDone}
-            {!p.isDoneCollapsed && finished.flatMap(a => [row(a), actions(a, 2)])}
+            {!p.isDoneCollapsed && finished.map(a => row(a))}
             {planned.length > 0 && <Text dimColor>{s.planned} · {planned.length}</Text>}
             {planned.map(pl => {
               const tier = pl.tier in TIER_COLOR ? pl.tier : 'other'
