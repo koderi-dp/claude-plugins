@@ -70,6 +70,6 @@ test('pane: child sessions with many workers still draw on the desktop', async (
   const svgs = await ui.findAll({ type: 'Svg' })
   // Grid tiles, header, 4 slice rows and 3 workers under each.
   expect(svgs.filter(el => String(el.props.alt).startsWith('Task ')).length).toBe(12)
-  expect(await ui.find({ type: 'Text', text: '   +2 · /flow-status' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '+2 more running · /flow-status' })).toBeDefined()
   expect(svgs.reduce((n, el) => n + String(el.props.source).length, 0)).toBeLessThan(150_000)
 })

@@ -93,6 +93,7 @@ const STRINGS = {
   showFewer: 'Show fewer',
   stop: 'Stop',
   log: 'Log',
+  moreRunning: 'more running',
   stopAsked: 'asked to stop; it ends its turn within a few seconds',
   stoppedNote: 'stopped from the main session',
   noLog: 'no log yet',
@@ -1409,16 +1410,18 @@ export const register: Register = (on, options) => {
     // A slice session's row carries its Stop (while it runs) and Log buttons; a running one
     // also lists its workers under it.
     const reportOf = (a: AgentRun) => reports.find(r => `slice:${r.slice}` === a.id)
-    const actions = (a: AgentRun) => {
+    // Right under the session's own row, lined up with its text: they act on that session.
+    const actions = (a: AgentRun, indent: number) => {
       const r = reportOf(a)
       if (!r) return null
       return (
-        <Box key={`${a.id}-actions`} flexDirection="row" gap={2}>
-          {a.status === 'running' && <Button key={`${a.id}-stop`} label={`${s.stop} ${r.slice}`} plain onPress={async () => $.ui.log(await stopSlice($, r))} />}
-          <Button key={`${a.id}-log`} label={`${s.log} ${r.slice}`} plain onPress={async () => $.ui.log(await sliceLog($, r))} />
+        <Box key={`${a.id}-actions`} flexDirection="row" gap={1} marginLeft={indent}>
+          {a.status === 'running' && <Button key={`${a.id}-stop`} label={`■ ${s.stop}`} variant="secondary" onPress={async () => $.ui.log(await stopSlice($, r))} />}
+          <Button key={`${a.id}-log`} label={s.log} variant="secondary" onPress={async () => $.ui.log(await sliceLog($, r))} />
         </Box>
       )
     }
+    const moreCrew = (a: AgentRun) => `+${crewHidden(a)} ${s.moreRunning} · /flow-status`
     const crewRunning = (a: AgentRun) => (a.status === 'running' ? (crews.get(a.id) ?? []).filter(w => w.status === 'running') : [])
     const crewOfRow = (a: AgentRun) => crewRunning(a).slice(-ROWS_CREW)
     const crewHidden = (a: AgentRun) => crewRunning(a).length - crewOfRow(a).length
@@ -1495,18 +1498,22 @@ export const register: Register = (on, options) => {
             {running.length > 0 && section('h-run', `${s.running} · ${running.length}`)}
             {running.flatMap(a => [
               <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={ROW_H} />,
+              actions(a, 7),
               ...crewOfRow(a).map(w => (
                 <Box key={w.id} marginLeft={3}>
                   <Svg source={agentSvg(W - 24, w, at)} alt={`${w.description}: ${modelName(w.model)}`} width={W - 24} height={ROW_H} />
                 </Box>
               )),
-              crewHidden(a) > 0 ? section(`${a.id}-crew-more`, `   +${crewHidden(a)} · /flow-status`) : null,
-              actions(a),
+              crewHidden(a) > 0 ? (
+                <Box key={`${a.id}-crew-more`} marginLeft={3}>
+                  <Text dimColor>{moreCrew(a)}</Text>
+                </Box>
+              ) : null,
             ])}
             {finished.length > 0 && toggleDone}
             {doneRows.flatMap(a => [
               <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isFinished}`} width={W} height={ROW_H} />,
-              actions(a),
+              actions(a, 7),
             ])}
             {canMore && (
               <Button key="more" label={`${s.showMore} · ${doneHidden}`} plain onPress={() => update($, panel, prev => ({ ...prev, isMoreShown: true }))} />
@@ -1589,12 +1596,16 @@ export const register: Register = (on, options) => {
             {running.length > 0 && <Text dimColor>{s.running} · {running.length}</Text>}
             {running.flatMap(a => [
               row(a),
+              actions(a, 2),
               ...crewOfRow(a).map(w => row(w, true)),
-              crewHidden(a) > 0 ? <Text key={`${a.id}-crew-more`} dimColor>{`   +${crewHidden(a)} · /flow-status`}</Text> : null,
-              actions(a),
+              crewHidden(a) > 0 ? (
+                <Box key={`${a.id}-crew-more`} marginLeft={3}>
+                  <Text dimColor>{moreCrew(a)}</Text>
+                </Box>
+              ) : null,
             ])}
             {finished.length > 0 && toggleDone}
-            {!p.isDoneCollapsed && finished.flatMap(a => [row(a), actions(a)])}
+            {!p.isDoneCollapsed && finished.flatMap(a => [row(a), actions(a, 2)])}
             {planned.length > 0 && <Text dimColor>{s.planned} · {planned.length}</Text>}
             {planned.map(pl => {
               const tier = pl.tier in TIER_COLOR ? pl.tier : 'other'
