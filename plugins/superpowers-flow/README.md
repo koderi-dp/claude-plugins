@@ -46,6 +46,8 @@ Disable savvy-progress and session-band if they are installed: this plugin draws
 
 `autoOpen`: `tier` (default) opens the panel when an `sp-*` worker starts or a plan is reported; `any` also opens it, once per session, when any other subagent starts.
 
+**`/flow-config`** lists every setting with its value and choices, and changes them anywhere: the desktop app (with or without its Settings tab), the terminal, a session over SSH, or the phone. `/flow-config coderTier=medium mediumModel=sonnet` saves both and the running session uses them from the next worker on; `/flow-config reset` puts everything back to the defaults. It writes the same values the Settings tab does.
+
 **Roles and tiers.** `coderTier`, `reviewerTier` and `finalReviewTier` fix the tier each role runs on: `auto` (default) lets the skill choose by task difficulty, or one of `light`, `medium`, `careful`, `heavy`, `fable`. A fixed coder tier is the starting tier; a stuck coder is still re-dispatched one tier up. `<tier>Model` (`haiku`, `sonnet`, `opus`, `fable`) and `<tier>Effort` (`low` … `max`) change what a tier runs on; `default` keeps the agent file's. The mod applies them when each worker starts, and the panel shows them on planned rows. Settings are read when a session starts.
 
 The settings page in the desktop app saves values for sessions on that computer only. On another machine, such as one you reach over SSH, put them in its `~/.claude/settings.json`:
@@ -74,6 +76,6 @@ The settings page in the desktop app saves values for sessions on that computer 
 | Skill | `superpowers-flow`, picked up when a superpowers plan runs with subagents |
 | Agents | `sp-light`, `sp-medium`, `sp-careful`, `sp-heavy`, `sp-fable` |
 | Settings | `hooks/tiers.ts`: role and tier settings, and the skill section they add |
-| Mod | `hooks/register.tsx`: the bar, the panel, the `progress` and `step` tools, `/flow-agents`, `/flow-status`, `/flow-notify`; `hooks/session.tsx`: the session row and `/flow-session` |
+| Mod | `hooks/register.tsx`: the bar, the panel, the `progress` and `step` tools, `/flow-agents`, `/flow-status`, `/flow-notify`, `/flow-config`; `hooks/session.tsx`: the session row and `/flow-session` |
 
 The mod is built on function hooks, an early-access Claude Code API that may change between releases. Tests run with `claude plugin test plugins/superpowers-flow`.

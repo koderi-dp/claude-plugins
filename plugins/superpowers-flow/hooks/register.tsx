@@ -5,7 +5,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
-import { skillWithSettings, tierSettingsOf } from './tiers'
+import { CONFIG_DEFAULTS, fieldOf, parseConfigArgs, skillWithSettings, tierSettingsOf } from './tiers'
 import type { TierSettings } from './tiers'
 import { pushOrToast, sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
 
@@ -844,13 +844,16 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
 }
 
 export const register: Register = (on, options) => {
-  tierSettings = tierSettingsOf(options)
+  // The settings as this session sees them: the options it started with, then what
+  // `/flow-config` changed since.
+  const opts: Record<string, unknown> = { ...options }
+  tierSettings = tierSettingsOf(opts)
   sessionHooks(on)
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    lang = await detectLang($, options.language)
+    lang = await detectLang($, opts.language)
     await sessionStart($)
-    await update($, notify, () => options.notify === 'milestones')
+    await update($, notify, () => opts.notify === 'milestones')
     await $.tool.register({
       name: 'progress',
       description:
@@ -905,6 +908,10 @@ export const register: Register = (on, options) => {
       isDeferred: false,
     })
     await $.command.register({
+      name: 'flow-config',
+      description: "List this plugin's settings, or change them: `coderTier=medium mediumModel=sonnet`, or `reset`. The same values as the plugin's Settings tab, saved, and used by this session from now on.",
+    })
+    await $.command.register({
       name: 'flow-notify',
       description: 'Push notifications at milestones (a task accepted, a worker failed, the run finished): `on`, `off`, or no argument to toggle',
     })
@@ -932,7 +939,45 @@ export const register: Register = (on, options) => {
   on('skill.prompt', async ($, e, next) => {
     if (!/(^|:)superpowers-flow$/.test(e.skill)) return next(e)
     const computed = await next(e)
-    return { text: skillWithSettings(computed.text, options, tierSettings, tierModel) }
+    return { text: skillWithSettings(computed.text, opts, tierSettings, tierModel) }
+  })
+
+  on('command.run', { command: 'flow-config' }, async ($, e) => {
+    const rows = (await $.config.list()).filter(r => fieldOf(r.key) !== null)
+    if (!rows.length) return { text: 'No settings found for superpowers-flow in /config: is the plugin enabled?' }
+    const arg = (e.args ?? '').trim()
+    const { pairs, bad } = arg === 'reset' ? { pairs: Object.entries(CONFIG_DEFAULTS), bad: [] } : parseConfigArgs(arg)
+    const notes = bad.map(w => `${w}: write it as key=value`)
+    for (const [field, value] of pairs) {
+      const row = rows.find(r => fieldOf(r.key) === field)
+      if (!row) {
+        notes.push(`${field}: no such setting`)
+        continue
+      }
+      if (row.options && !row.options.includes(value)) {
+        notes.push(`${field}: takes ${row.options.join(', ')}`)
+        continue
+      }
+      if (row.isLocked) {
+        notes.push(`${field}: set by your organization`)
+        continue
+      }
+      const set = await $.config.set({ key: row.key, value })
+      if (set.deny !== undefined) notes.push(`${field}: ${set.deny}`)
+      else opts[field] = value
+    }
+    // This session picks the change up at once: the next worker, the next skill load.
+    tierSettings = tierSettingsOf(opts)
+    await update($, notify, () => opts.notify === 'milestones')
+    if (pairs.some(([field]) => field === 'language')) lang = await detectLang($, opts.language)
+    const width = Math.max(...rows.map(r => (fieldOf(r.key) ?? '').length))
+    const list = rows.map(r => {
+      const field = fieldOf(r.key) ?? ''
+      const value = String(opts[field] ?? r.value)
+      return `  ${field.padEnd(width)} = ${value}${r.options ? `   (${r.options.join(', ')})` : ''}`
+    })
+    const head = pairs.length ? 'superpowers-flow settings, saved:' : 'superpowers-flow settings (change with /flow-config key=value, or reset):'
+    return { text: [...notes, '```', head, ...list, '```'].join('\n') }
   })
 
   on('command.run', { command: 'flow-notify' }, async ($, e) => {
@@ -1043,7 +1088,7 @@ export const register: Register = (on, options) => {
     if (tierOf(e.subagentType) !== 'other') {
       const f = await read($, flow)
       await autoOpen($, f && !f.isFinished ? f.title : 'superpowers')
-    } else if (options.autoOpen === 'any') {
+    } else if (opts.autoOpen === 'any') {
       await autoOpen($, 'any-agent')
     }
     return started

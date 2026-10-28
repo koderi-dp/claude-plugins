@@ -60,3 +60,29 @@ export const skillWithSettings = (
   const at = text.indexOf('\n## 2.')
   return at === -1 ? `${text}\n\n${block}` : `${text.slice(0, at)}\n\n${block}${text.slice(at)}`
 }
+
+// Each setting's default, as plugin.json declares it, for `/flow-config reset`.
+export const CONFIG_DEFAULTS: Record<string, string> = {
+  language: 'auto',
+  notify: 'off',
+  autoOpen: 'tier',
+  coderTier: 'auto',
+  reviewerTier: 'auto',
+  finalReviewTier: 'auto',
+  ...Object.fromEntries(TIER_NAMES.flatMap(t => [[`${t}Model`, 'default'], [`${t}Effort`, 'default']])),
+}
+
+// `coderTier=medium mediumModel=sonnet` as pairs; a word without `=` is reported back.
+export const parseConfigArgs = (args: string): { pairs: [key: string, value: string][]; bad: string[] } => {
+  const pairs: [string, string][] = []
+  const bad: string[] = []
+  for (const word of args.trim().split(/\s+/).filter(Boolean)) {
+    const m = /^([A-Za-z]+)=(\S+)$/.exec(word)
+    if (m) pairs.push([m[1] ?? '', m[2] ?? ''])
+    else bad.push(word)
+  }
+  return { pairs, bad }
+}
+
+// `superpowers-flow.coderTier`, or with the marketplace, to `coderTier`; null for another plugin's row.
+export const fieldOf = (key: string): string | null => /^superpowers-flow(?:@[^.]+)?\.([A-Za-z]+)$/.exec(key)?.[1] ?? null
