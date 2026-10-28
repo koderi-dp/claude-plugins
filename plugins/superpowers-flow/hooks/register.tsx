@@ -5,6 +5,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
+import { skillWithSettings, tierSettingsOf } from './tiers'
+import type { TierSettings } from './tiers'
 import { pushOrToast, sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
 
 const flow = atom({ plugin: 'superpowers-flow', key: 'flow' } as const, null)
@@ -388,10 +390,16 @@ const TIER_MODEL: Record<string, [model: string, effort: string]> = {
   light: ['Opus', 'low'],
 }
 
+// The user's model and effort for each tier; set in register from the options.
+let tierSettings: TierSettings = {}
+
 // "Opus · xhigh", with the effort word in the panel's language; '' for an unknown tier.
 const tierModel = (tier: string): string => {
   const m = TIER_MODEL[tier]
-  return m ? `${m[0]} · ${effortWord(m[1])}` : ''
+  if (!m) return ''
+  const set = tierSettings[tier] ?? {}
+  const model = set.model ? set.model.charAt(0).toUpperCase() + set.model.slice(1) : m[0]
+  return `${model} · ${effortWord(set.effort ?? m[1])}`
 }
 
 // "Opus 5.5 · low" for a run, or just the model when no effort was seen.
@@ -836,6 +844,7 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
 }
 
 export const register: Register = (on, options) => {
+  tierSettings = tierSettingsOf(options)
   sessionHooks(on)
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -920,6 +929,12 @@ export const register: Register = (on, options) => {
     return started
   })
 
+  on('skill.prompt', async ($, e, next) => {
+    if (!/(^|:)superpowers-flow$/.test(e.skill)) return next(e)
+    const computed = await next(e)
+    return { text: skillWithSettings(computed.text, options, tierSettings, tierModel) }
+  })
+
   on('command.run', { command: 'flow-notify' }, async ($, e) => {
     const arg = (e.args ?? '').trim().toLowerCase()
     const next = await update($, notify, prev => (arg === 'on' ? true : arg === 'off' ? false : !prev))
@@ -999,7 +1014,9 @@ export const register: Register = (on, options) => {
 
   on('agent.spawn', async ($, e, next) => {
     const isUnbriefed = !e.prompt.includes(STEP_TOOL)
-    const started = await next(isUnbriefed ? { ...e, prompt: e.prompt + STEP_BRIEF } : e)
+    // A tier's model from the settings replaces the agent file's; its effort is set per request below.
+    const model = e.fork ? undefined : tierSettings[tierOf(e.subagentType)]?.model
+    const started = await next({ ...e, ...(isUnbriefed ? { prompt: e.prompt + STEP_BRIEF } : {}), ...(model ? { model } : {}) })
     if (started.deny !== undefined) return started
 
     const at = await $.clock.now()
@@ -1033,7 +1050,11 @@ export const register: Register = (on, options) => {
   })
 
   // Each model request of a subagent: live context, tokens and cost.
-  on('turn.step', async function* ($, e, next) {
+  on('turn.step', async function* ($, e0, next) {
+    // An sp-* worker's request goes out at the effort the settings give its tier.
+    const run = e0.agentId ? (await read($, agents)).find(a => a.agentId === e0.agentId) : undefined
+    const effort = run ? tierSettings[tierOf(run.type)]?.effort : undefined
+    const e = effort && e0.effort !== undefined ? { ...e0, effort } : e0
     const result = yield* sessionStep($, e, next as never)
     const agentId = e.agentId
     const usage = result.usage

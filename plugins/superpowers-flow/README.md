@@ -16,7 +16,7 @@ Live status for [superpowers](https://github.com/obra/superpowers) plan runs, ad
 | most capable, for understanding | `sp-heavy` | Opus / xhigh |
 | most capable, for architecture and the final review | `sp-fable` | Fable / high |
 
-Each tier draws its own crab in the panel. A plan task may name a tier (`tier: sp-careful`) to override the table.
+Each tier draws its own crab in the panel. A plan task may name a tier (`tier: sp-careful`) to override the table, and the settings below can fix a tier per role and change each tier's model and effort.
 
 Cost is a rough estimate from token counts and a per-model price table (`PRICES` in `hooks/register.tsx`), not a bill.
 
@@ -46,8 +46,25 @@ Disable savvy-progress and session-band if they are installed: this plugin draws
 
 `autoOpen`: `tier` (default) opens the panel when an `sp-*` worker starts or a plan is reported; `any` also opens it, once per session, when any other subagent starts.
 
+**Roles and tiers.** `coderTier`, `reviewerTier` and `finalReviewTier` fix the tier each role runs on: `auto` (default) lets the skill choose by task difficulty, or one of `light`, `medium`, `careful`, `heavy`, `fable`. A fixed coder tier is the starting tier; a stuck coder is still re-dispatched one tier up. `<tier>Model` (`haiku`, `sonnet`, `opus`, `fable`) and `<tier>Effort` (`low` … `max`) change what a tier runs on; `default` keeps the agent file's. The mod applies them when each worker starts, and the panel shows them on planned rows. Settings are read when a session starts.
+
+The settings page in the desktop app saves values for sessions on that computer only. On another machine, such as one you reach over SSH, put them in its `~/.claude/settings.json`:
+
 ```json
-{ "pluginConfigs": { "superpowers-flow": { "options": { "autoOpen": "any" } } } }
+{
+  "pluginConfigs": {
+    "superpowers-flow@code101-plugins": {
+      "options": {
+        "coderTier": "medium",
+        "reviewerTier": "careful",
+        "finalReviewTier": "fable",
+        "mediumModel": "sonnet",
+        "mediumEffort": "high",
+        "autoOpen": "any"
+      }
+    }
+  }
+}
 ```
 
 ## What it contains
@@ -56,6 +73,7 @@ Disable savvy-progress and session-band if they are installed: this plugin draws
 | --- | --- |
 | Skill | `superpowers-flow`, picked up when a superpowers plan runs with subagents |
 | Agents | `sp-light`, `sp-medium`, `sp-careful`, `sp-heavy`, `sp-fable` |
+| Settings | `hooks/tiers.ts`: role and tier settings, and the skill section they add |
 | Mod | `hooks/register.tsx`: the bar, the panel, the `progress` and `step` tools, `/flow-agents`, `/flow-status`, `/flow-notify`; `hooks/session.tsx`: the session row and `/flow-session` |
 
 The mod is built on function hooks, an early-access Claude Code API that may change between releases. Tests run with `claude plugin test plugins/superpowers-flow`.

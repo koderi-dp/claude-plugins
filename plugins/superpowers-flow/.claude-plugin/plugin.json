@@ -1,8 +1,10 @@
 {
   "name": "superpowers-flow",
-  "version": "0.3.0",
-  "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Adapted from savvy-flow and savvy-progress.",
-  "author": { "name": "Danijel Peric" },
+  "version": "0.4.0",
+  "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Roles (coder, reviewer, final reviewer) and each tier's model and effort are settings. Adapted from savvy-flow, savvy-progress and session-band.",
+  "author": {
+    "name": "Danijel Peric"
+  },
   "types": "./types/index.d.ts",
   "userConfig": {
     "language": {
@@ -10,21 +12,209 @@
       "title": "Panel language",
       "description": "auto follows Claude Code's language setting, then the system locale; en, ru or he (Hebrew, drawn right to left)",
       "default": "auto",
-      "options": ["auto", "en", "ru", "he"]
+      "options": [
+        "auto",
+        "en",
+        "ru",
+        "he"
+      ]
     },
     "notify": {
       "type": "string",
       "title": "Push notifications",
       "description": "off: none; milestones: a notification (or a toast) when a task is accepted, a worker fails, or the run finishes. Reaches the phone over Remote Control when Push when Claude decides is on in /config.",
       "default": "off",
-      "options": ["off", "milestones"]
+      "options": [
+        "off",
+        "milestones"
+      ]
     },
     "autoOpen": {
       "type": "string",
       "title": "Open the agents panel",
       "description": "tier: when an sp-* worker starts or a plan is reported; any: also when any other subagent starts",
       "default": "tier",
-      "options": ["tier", "any"]
+      "options": [
+        "tier",
+        "any"
+      ]
+    },
+    "coderTier": {
+      "type": "string",
+      "title": "Coder tier",
+      "description": "The worker that implements each task and its fix rounds. auto: the skill picks by task difficulty.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "light",
+        "medium",
+        "careful",
+        "heavy",
+        "fable"
+      ]
+    },
+    "reviewerTier": {
+      "type": "string",
+      "title": "Reviewer tier",
+      "description": "The worker that reviews each task and re-reviews its fixes. auto: scaled to the diff.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "light",
+        "medium",
+        "careful",
+        "heavy",
+        "fable"
+      ]
+    },
+    "finalReviewTier": {
+      "type": "string",
+      "title": "Final reviewer tier",
+      "description": "The worker for the whole-branch review at the end. auto: sp-fable.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "light",
+        "medium",
+        "careful",
+        "heavy",
+        "fable"
+      ]
+    },
+    "lightModel": {
+      "type": "string",
+      "title": "sp-light model",
+      "description": "default: opus, as the agent file says.",
+      "default": "default",
+      "options": [
+        "default",
+        "haiku",
+        "sonnet",
+        "opus",
+        "fable"
+      ]
+    },
+    "lightEffort": {
+      "type": "string",
+      "title": "sp-light effort",
+      "description": "default: low. Applies where the model supports effort.",
+      "default": "default",
+      "options": [
+        "default",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "mediumModel": {
+      "type": "string",
+      "title": "sp-medium model",
+      "description": "default: opus, as the agent file says.",
+      "default": "default",
+      "options": [
+        "default",
+        "haiku",
+        "sonnet",
+        "opus",
+        "fable"
+      ]
+    },
+    "mediumEffort": {
+      "type": "string",
+      "title": "sp-medium effort",
+      "description": "default: medium. Applies where the model supports effort.",
+      "default": "default",
+      "options": [
+        "default",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "carefulModel": {
+      "type": "string",
+      "title": "sp-careful model",
+      "description": "default: opus, as the agent file says.",
+      "default": "default",
+      "options": [
+        "default",
+        "haiku",
+        "sonnet",
+        "opus",
+        "fable"
+      ]
+    },
+    "carefulEffort": {
+      "type": "string",
+      "title": "sp-careful effort",
+      "description": "default: high. Applies where the model supports effort.",
+      "default": "default",
+      "options": [
+        "default",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "heavyModel": {
+      "type": "string",
+      "title": "sp-heavy model",
+      "description": "default: opus, as the agent file says.",
+      "default": "default",
+      "options": [
+        "default",
+        "haiku",
+        "sonnet",
+        "opus",
+        "fable"
+      ]
+    },
+    "heavyEffort": {
+      "type": "string",
+      "title": "sp-heavy effort",
+      "description": "default: xhigh. Applies where the model supports effort.",
+      "default": "default",
+      "options": [
+        "default",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "fableModel": {
+      "type": "string",
+      "title": "sp-fable model",
+      "description": "default: fable, as the agent file says.",
+      "default": "default",
+      "options": [
+        "default",
+        "haiku",
+        "sonnet",
+        "opus",
+        "fable"
+      ]
+    },
+    "fableEffort": {
+      "type": "string",
+      "title": "sp-fable effort",
+      "description": "default: high. Applies where the model supports effort.",
+      "default": "default",
+      "options": [
+        "default",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     }
   },
   "license": "MIT"
