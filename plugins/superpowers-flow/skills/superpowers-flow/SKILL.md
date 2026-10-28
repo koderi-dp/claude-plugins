@@ -23,6 +23,8 @@ Use the name exactly as the Agent tool lists it: `sp-medium`, or `superpowers-fl
 
 Keep superpowers' prompt templates as they are; only the `Subagent (general-purpose)` line and the `model:` line change. Explore agents for wide searches stay as they are.
 
+If the user asks for a faster run without per-task reviews ("skip task reviews", "review only at the end"), run it as the `taskReview: final` setting does: no spec or quality reviewer per task, accept a task once its tests pass and its self-review is clean, and let the final whole-branch review check every task against the plan. "One reviewer per task" means `combined`: spec and quality in a single review. The user's words for this run win over the setting.
+
 Pass the task's title as the Agent tool's `description` and reuse it verbatim on a resume or re-review: the panel matches runs to planned tasks by it.
 
 ## 2. Progress bar

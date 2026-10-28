@@ -50,6 +50,8 @@ Disable savvy-progress and session-band if they are installed: this plugin draws
 
 **`/flow-config`** lists every setting with its value and choices, and changes them anywhere: the desktop app (with or without its Settings tab), the terminal, a session over SSH, or the phone. `/flow-config coderTier=medium mediumModel=sonnet` saves both and the running session uses them from the next worker on; `/flow-config reset` puts everything back to the defaults. It writes the same values the Settings tab does.
 
+**Task reviews.** `taskReview` trades per-task review for speed: `each` (default) keeps superpowers' spec review then quality review after every task; `combined` runs one reviewer per task for both; `final` runs no per-task reviewers, accepts a task once its tests pass, and leaves it to the final whole-branch review to check every task against the plan. `/flow-config taskReview=final` before the run starts, or just tell Claude "skip task reviews" for one run.
+
 **Roles and tiers.** `coderTier`, `reviewerTier` and `finalReviewTier` fix the tier each role runs on: `auto` (default) lets the skill choose by task difficulty, or one of `light`, `medium`, `careful`, `heavy`, `fable`. A fixed coder tier is the starting tier; a stuck coder is still re-dispatched one tier up. `<tier>Model` (`haiku`, `sonnet`, `opus`, `fable`) and `<tier>Effort` (`low` … `max`) change what a tier runs on; `default` keeps the agent file's. The mod applies them when each worker starts, and the panel shows them on planned rows. Settings are read when a session starts.
 
 The settings page in the desktop app saves values for sessions on that computer only. On another machine, such as one you reach over SSH, put them in its `~/.claude/settings.json`:
@@ -62,6 +64,7 @@ The settings page in the desktop app saves values for sessions on that computer 
         "coderTier": "medium",
         "reviewerTier": "careful",
         "finalReviewTier": "fable",
+        "taskReview": "combined",
         "mediumModel": "sonnet",
         "mediumEffort": "high",
         "autoOpen": "any"

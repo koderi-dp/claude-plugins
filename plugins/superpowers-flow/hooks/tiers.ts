@@ -23,6 +23,18 @@ export const tierSettingsOf = (options: Record<string, unknown>): TierSettings =
     }),
   )
 
+// How each task is gated: `each` keeps superpowers' spec review then quality review per
+// task; the others trade per-task review for speed and lean on the final review.
+const REVIEW_MODES: Record<string, string[]> = {
+  combined: [
+    'Task reviews are combined: after each implementer reports DONE, dispatch **one** reviewer that checks spec compliance and code quality in a single pass (both templates\' checklists in one brief), instead of the spec reviewer followed by the quality reviewer. Its fix rounds and re-review work as superpowers says.',
+  ],
+  final: [
+    'Task reviews are off for this run: after each implementer reports DONE, check its tests pass and its self-review raised nothing open, mark the task accepted and dispatch the next one. No spec or quality reviewer runs per task.',
+    'The final whole-branch review still runs, and runs against the plan as the spec: it checks every task\'s requirements as well as code quality. Its findings go to one fixer and a re-review, as superpowers says. A task that comes back BLOCKED or DONE_WITH_CONCERNS still gets its usual handling.',
+  ],
+}
+
 const ROLES: readonly [key: string, who: string][] = [
   ['coderTier', 'Coders (implementers, and fixers on a return round)'],
   ['reviewerTier', 'Task reviewers and re-reviewers'],
@@ -46,8 +58,10 @@ export const skillWithSettings = (
     const set = settings[t] ?? {}
     return set.model || set.effort ? [`- \`sp-${t}\` runs on ${describe(t)}.`] : []
   })
-  if (!roles.length && !tiers.length) return text
+  const review = typeof options.taskReview === 'string' ? (REVIEW_MODES[options.taskReview] ?? []) : []
+  if (!roles.length && !tiers.length && !review.length) return text
   const lines = ['## Settings from the user', '']
+  if (review.length) lines.push(...review.flatMap(r => [r, '']))
   if (roles.length)
     lines.push(
       'These roles have a fixed tier and win over the table and over a tier a plan task names. Escalation still applies: after BLOCKED, or a third fix round, re-dispatch one tier up.',
@@ -69,6 +83,7 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   coderTier: 'auto',
   reviewerTier: 'auto',
   finalReviewTier: 'auto',
+  taskReview: 'each',
   ...Object.fromEntries(TIER_NAMES.flatMap(t => [[`${t}Model`, 'default'], [`${t}Effort`, 'default']])),
 }
 

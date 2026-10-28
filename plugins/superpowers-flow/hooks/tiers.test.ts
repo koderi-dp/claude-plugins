@@ -30,6 +30,16 @@ test('tiers: roles and tier models go into the skill before section 2', () => {
   expect(text.indexOf('## Settings from the user')).toBeLessThan(text.indexOf('## 2. Progress bar'))
 })
 
+test('tiers: taskReview each changes nothing; combined and final go into the skill', () => {
+  const set = tierSettingsOf({})
+  expect(skillWithSettings(SKILL, { taskReview: 'each' }, set, describe)).toBe(SKILL)
+  expect(skillWithSettings(SKILL, { taskReview: 'combined' }, set, describe)).toContain('dispatch **one** reviewer')
+  const text = skillWithSettings(SKILL, { taskReview: 'final' }, set, describe)
+  expect(text).toContain('Task reviews are off for this run')
+  expect(text).toContain('The final whole-branch review still runs')
+  expect(text.indexOf('## Settings from the user')).toBeLessThan(text.indexOf('## 2. Progress bar'))
+})
+
 // With every setting at its default the spawn goes out as the controller asked:
 // no model is forced on the worker.
 test('tiers: with default settings a spawn keeps its own model', async ($, on) => {

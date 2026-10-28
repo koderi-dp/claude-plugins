@@ -1,7 +1,7 @@
 {
   "name": "superpowers-flow",
-  "version": "0.4.2",
-  "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Roles (coder, reviewer, final reviewer) and each tier's model and effort are settings. Adapted from savvy-flow, savvy-progress and session-band.",
+  "version": "0.5.0",
+  "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Per-task review (each, combined, final only), roles (coder, reviewer, final reviewer) and each tier's model and effort are settings. Adapted from savvy-flow, savvy-progress and session-band.",
   "author": {
     "name": "Danijel Peric"
   },
@@ -37,6 +37,17 @@
       "options": [
         "tier",
         "any"
+      ]
+    },
+    "taskReview": {
+      "type": "string",
+      "title": "Task reviews",
+      "description": "each: superpowers' spec review then quality review after every task; combined: one reviewer per task for both; final: no per-task reviewers, only the final whole-branch review (fastest).",
+      "default": "each",
+      "options": [
+        "each",
+        "combined",
+        "final"
       ]
     },
     "coderTier": {
