@@ -439,6 +439,9 @@ const GRID_TILE = 4096
 const ROWS_DONE = 8
 const ROWS_DONE_MORE = 24
 const ROWS_PLANNED = 8
+// A child session's workers drawn under its row: its running ones only, the newest few.
+// The rest are in /flow-status, as finished rows past the limit are.
+const ROWS_CREW = 3
 const gridTiles = (H: number) => Array.from({ length: Math.ceil(H / GRID_TILE) }, (_, i) => Math.min(GRID_TILE, H - i * GRID_TILE))
 const gridSvg = (W: number, H: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
 <style>.d{fill:#e4e3de}@media (prefers-color-scheme: dark){.d{fill:#2c2c2a}}</style>
@@ -1414,7 +1417,9 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
-    const crewOfRow = (a: AgentRun) => (a.status === 'running' ? (crews.get(a.id) ?? []) : [])
+    const crewRunning = (a: AgentRun) => (a.status === 'running' ? (crews.get(a.id) ?? []).filter(w => w.status === 'running') : [])
+    const crewOfRow = (a: AgentRun) => crewRunning(a).slice(-ROWS_CREW)
+    const crewHidden = (a: AgentRun) => crewRunning(a).length - crewOfRow(a).length
     // The pane's title says "Agents"; inside, only the flow's own name.
     const title = f && !f.isFinished ? f.title : ''
 
@@ -1470,7 +1475,8 @@ export const register: Register = (on, options) => {
         (canMore || canFewer ? 1 : 0) +
         (doneHidden > 0 && !canMore ? 1 : 0) +
         (planHidden > 0 ? 1 : 0) +
-        [...running, ...doneRows].filter(reportOf).length
+        [...running, ...doneRows].filter(reportOf).length +
+        running.filter(a => crewHidden(a) > 0).length
       const crewRows = running.reduce((n, a) => n + crewOfRow(a).length, 0)
       const gridH = headerHeight(title) + lines * LINE_H + (running.length + doneRows.length + crewRows) * ROW_H + planRows.length * PLAN_H
       return (
@@ -1492,6 +1498,7 @@ export const register: Register = (on, options) => {
                   <Svg source={agentSvg(W - 24, w, at)} alt={`${w.description}: ${modelName(w.model)}`} width={W - 24} height={ROW_H} />
                 </Box>
               )),
+              crewHidden(a) > 0 ? section(`${a.id}-crew-more`, `   +${crewHidden(a)} · /flow-status`) : null,
               actions(a),
             ])}
             {finished.length > 0 && toggleDone}
@@ -1578,7 +1585,12 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column" marginTop={1}>
             {isEmpty && <Text dimColor>{s.empty}</Text>}
             {running.length > 0 && <Text dimColor>{s.running} · {running.length}</Text>}
-            {running.flatMap(a => [row(a), ...crewOfRow(a).map(w => row(w, true)), actions(a)])}
+            {running.flatMap(a => [
+              row(a),
+              ...crewOfRow(a).map(w => row(w, true)),
+              crewHidden(a) > 0 ? <Text key={`${a.id}-crew-more`} dimColor>{`   +${crewHidden(a)} · /flow-status`}</Text> : null,
+              actions(a),
+            ])}
             {finished.length > 0 && toggleDone}
             {!p.isDoneCollapsed && finished.flatMap(a => [row(a), actions(a)])}
             {planned.length > 0 && <Text dimColor>{s.planned} · {planned.length}</Text>}
