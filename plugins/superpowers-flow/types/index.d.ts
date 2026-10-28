@@ -56,13 +56,32 @@ export type SliceReport = {
   costUsd: number
   contextTokens: number
   contextMax: number
-  /** Workers the slice session started, and how many run now. */
-  workers: number
+  /** The workers the slice session runs, newest last, and how many run now. */
+  crew: SliceWorker[]
   running: number
+  /** The session ended because the main session asked it to stop. */
+  isStopped: boolean
   startedAt: number
   updatedAt: number
   /** The titles of the slice's tasks, so the parent does not list them as planned. */
   tasks: string[]
+}
+
+/** One worker of a slice session, as its panel row would show it. */
+export type SliceWorker = {
+  description: string
+  type: string
+  model: string
+  effort?: string
+  status: AgentStatus
+  stepDone?: number
+  stepTotal?: number
+  stepNote?: string
+  costUsd: number
+  contextTokens: number
+  contextMax: number
+  startedAt: number
+  endedAt?: number
 }
 
 /** Set in a slice's own session by `progress({ run, slice })`: where it reports. */

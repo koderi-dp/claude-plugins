@@ -43,8 +43,6 @@ Disable savvy-progress and session-band if they are installed: this plugin draws
 
 ## Settings
 
-`language`: `auto` (default), `en`, `ru` or `he`. Hebrew draws the bar and the panel right to left.
-
 `notify`: `off` (default) or `milestones`: whether a session starts with milestone notifications on. `/flow-notify on|off` changes it for the session.
 
 `autoOpen`: `tier` (default) opens the panel when an `sp-*` worker starts or a plan is reported; `any` also opens it, once per session, when any other subagent starts.

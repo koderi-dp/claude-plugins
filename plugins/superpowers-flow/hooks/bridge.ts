@@ -6,12 +6,13 @@
 
 import type { EngineInterface } from 'claude-code'
 
-import type { AgentRun, SliceReport } from '../types'
+import type { AgentRun, AgentStatus, SliceReport, SliceWorker } from '../types'
 
 // Finished runs untouched this long are removed when a session starts.
 export const RUN_MAX_AGE_MS = 3 * 24 * 3600 * 1000
-// What one session reads of a run: a run is a handful of slices.
+// What one session reads of a run: a run is a handful of slices, each with a few workers.
 const MAX_SLICES = 50
+export const MAX_CREW = 30
 
 export const slug = (s: string, max = 40): string =>
   s
@@ -55,6 +56,29 @@ const num = (v: unknown, max = Number.MAX_SAFE_INTEGER): number =>
 
 const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
 
+const STATUSES: readonly AgentStatus[] = ['running', 'done', 'failed']
+
+const worker = (v: unknown): SliceWorker | null => {
+  if (!v || typeof v !== 'object') return null
+  const w = v as Record<string, unknown>
+  const stepTotal = Math.round(num(w.stepTotal, 100))
+  return {
+    description: str(w.description, 120),
+    type: str(w.type, 80),
+    model: str(w.model, 80),
+    effort: str(w.effort, 20) || undefined,
+    status: STATUSES.includes(w.status as AgentStatus) ? (w.status as AgentStatus) : 'running',
+    stepDone: stepTotal ? Math.min(stepTotal, Math.round(num(w.stepDone, 100))) : undefined,
+    stepTotal: stepTotal || undefined,
+    stepNote: str(w.stepNote, 120) || undefined,
+    costUsd: num(w.costUsd, 1e6),
+    contextTokens: Math.round(num(w.contextTokens)),
+    contextMax: Math.round(num(w.contextMax)),
+    startedAt: num(w.startedAt),
+    endedAt: typeof w.endedAt === 'number' ? num(w.endedAt) : undefined,
+  }
+}
+
 // A file another process wrote: taken field by field, anything malformed dropped.
 export const parseReport = (text: string, run: string, slice: string): SliceReport | null => {
   let raw: Record<string, unknown>
@@ -78,8 +102,9 @@ export const parseReport = (text: string, run: string, slice: string): SliceRepo
     costUsd: num(raw.costUsd, 1e6),
     contextTokens: Math.round(num(raw.contextTokens)),
     contextMax: Math.round(num(raw.contextMax)),
-    workers: Math.round(num(raw.workers, 1000)),
+    crew: Array.isArray(raw.crew) ? raw.crew.slice(-MAX_CREW).map(worker).filter((w): w is SliceWorker => w !== null) : [],
     running: Math.round(num(raw.running, 1000)),
+    isStopped: raw.isStopped === true,
     startedAt: num(raw.startedAt),
     updatedAt: num(raw.updatedAt),
     tasks: Array.isArray(raw.tasks) ? raw.tasks.filter((t): t is string => typeof t === 'string').slice(0, 200).map(t => t.slice(0, 120)) : [],
@@ -142,6 +167,70 @@ export async function readRun(
   return changed ? out.sort((a, b) => a.startedAt - b.startedAt) : null
 }
 
+// Asking a slice session to stop: the main session leaves a file beside its report, which
+// the slice session's own tick finds and ends its turn on.
+export const stopPath = (root: string, run: string, slice: string): string => `${root}/${run}/${slice}.stop`
+
+export async function askStop($: EngineInterface, root: string, run: string, slice: string): Promise<void> {
+  await $.fs.write(stopPath(root, run, slice), 'stop')
+}
+
+const LOG_BYTES = 256 * 1024
+
+// One line per event of a slice's stream-json log: what it said, the tools it called and
+// how it ended; a line that is no JSON event is shown as it is.
+export const logLine = (line: string): string | null => {
+  let ev: Record<string, unknown>
+  try {
+    ev = JSON.parse(line) as Record<string, unknown>
+  } catch {
+    return line.trim() ? line.trim().slice(0, 300) : null
+  }
+  if (ev.type === 'result') {
+    const cost = typeof ev.total_cost_usd === 'number' ? ` · $${ev.total_cost_usd.toFixed(2)}` : ''
+    const time = typeof ev.duration_ms === 'number' ? ` · ${Math.round(ev.duration_ms / 1000)}s` : ''
+    return `= ${String(ev.subtype ?? 'result')}${cost}${time}: ${String(ev.result ?? '').replace(/\s+/g, ' ').slice(0, 300)}`
+  }
+  // A worker's own events (parent_tool_use_id set) stay out: the slice's own story is enough.
+  if (ev.type !== 'assistant' || ev.parent_tool_use_id) return null
+  const content = (ev.message as { content?: unknown } | undefined)?.content
+  if (!Array.isArray(content)) return null
+  const parts = content.flatMap(c => {
+    const block = c as { type?: string; text?: string; name?: string; input?: Record<string, unknown> }
+    if (block.type === 'text' && block.text?.trim()) return [`› ${block.text.trim().replace(/\s+/g, ' ').slice(0, 300)}`]
+    if (block.type === 'tool_use') {
+      const input = block.input ?? {}
+      const what = input.description ?? input.command ?? input.file_path ?? ''
+      return [`· ${block.name ?? 'tool'}${what ? ': ' + String(what).replace(/\s+/g, ' ').slice(0, 120) : ''}`]
+    }
+    return []
+  })
+  return parts.length ? parts.join('\n') : null
+}
+
+// Where slice sessions' logs go: the repository's git-ignored `.worktrees/`, beside the
+// slices' worktrees. Not the run folder: Claude Code guards writes under `.git/`, so a
+// launch line's redirect there is refused. A repository whose common dir is not `.git`
+// (bare, or set apart) keeps them in the run folder.
+export const logDirOf = (root: string, run: string): string => {
+  const common = root.replace(/\/superpowers-flow$/, '')
+  return /\/\.git$/.test(common) ? `${common.slice(0, -'/.git'.length)}/.worktrees` : `${root}/${run}`
+}
+
+// The end of a slice's log as a few readable lines; null when it has none yet.
+export async function logTail($: EngineInterface, root: string, run: string, slice: string, lines = 12): Promise<string | null> {
+  const path = `${logDirOf(root, run)}/${slice}.log`
+  if (!(await $.fs.exists(path).catch(() => false))) return null
+  // `tail` keeps a long log's read small; where there is none, the whole file (up to 4 MiB).
+  const tail = await $.process.run(['tail', '-c', String(LOG_BYTES), path]).catch(() => null)
+  const text = tail?.exitCode === 0 ? tail.stdout : await $.fs.read(path).catch(() => '')
+  const out = text
+    .split('\n')
+    .slice(tail?.exitCode === 0 ? 1 : 0)
+    .flatMap(l => logLine(l)?.split('\n') ?? [])
+  return out.slice(-lines).join('\n') || null
+}
+
 // Removes run folders whose slices all finished and whose files are older than maxAge.
 // `$.fs` has no delete, so this asks the host's own tool.
 export async function pruneRuns($: EngineInterface, root: string, at: number, maxAge = RUN_MAX_AGE_MS): Promise<string[]> {
@@ -172,9 +261,9 @@ export const sliceRow = (r: SliceReport, isStale: boolean): AgentRun => ({
   type: 'session',
   description: `${r.slice} · ${r.title}`,
   model: r.model,
-  status: r.isFinished ? 'done' : isStale ? 'failed' : 'running',
+  status: r.isFinished ? 'done' : isStale || r.isStopped ? 'failed' : 'running',
   startedAt: r.startedAt,
-  endedAt: r.isFinished || isStale ? r.updatedAt : undefined,
+  endedAt: r.isFinished || isStale || r.isStopped ? r.updatedAt : undefined,
   contextTokens: r.contextTokens,
   contextMax: r.contextMax,
   tokens: r.contextTokens,
@@ -184,4 +273,25 @@ export const sliceRow = (r: SliceReport, isStale: boolean): AgentRun => ({
   stepDone: r.done,
   stepTotal: r.total || undefined,
   stepNote: r.note,
+})
+
+// A slice session's worker as a panel row, drawn under its slice's row.
+export const workerRow = (slice: string, w: SliceWorker, i: number): AgentRun => ({
+  id: `slice:${slice}:${i}`,
+  type: w.type,
+  description: w.description,
+  model: w.model,
+  effort: w.effort,
+  status: w.status,
+  startedAt: w.startedAt,
+  endedAt: w.endedAt,
+  contextTokens: w.contextTokens,
+  contextMax: w.contextMax,
+  tokens: w.contextTokens,
+  costUsd: w.costUsd,
+  steps: 0,
+  round: 1,
+  stepDone: w.stepDone,
+  stepTotal: w.stepTotal,
+  stepNote: w.stepNote,
 })

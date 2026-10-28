@@ -142,7 +142,8 @@ async function notifyCacheExpiry($: EngineInterface, minutes: number): Promise<v
 
 // One hook per event per module: register.tsx owns session.start, turn.step and
 // turn.complete and calls into these; turn.start and the command are only here.
-export const sessionHooks = (on: On): void => {
+// `onMainTurn` hears each main-loop turn's id (register.tsx ends it on a slice's stop).
+export const sessionHooks = (on: On, onMainTurn: (turnId: string) => void = () => {}): void => {
   on('command.run', { command: 'flow-session' }, async ($, e) => {
     // `/flow-session demo <minutes>` fakes the cache deadline to preview the warnings;
     // the next answer resets it.
@@ -164,6 +165,7 @@ export const sessionHooks = (on: On): void => {
   })
 
   on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) onMainTurn(e.turnId)
     const total = (await $.session.usage()).cost?.usd ?? 0
     await update($, stats, s => ({ ...s, turn: s.turn + 1, costAtStart: total, total }))
     await update($, isBusy, () => true)

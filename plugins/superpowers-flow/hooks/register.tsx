@@ -4,8 +4,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, Flow, Panel, Phase, PlannedTask, SliceReport } from '../types'
-import { bridgeRoot, currentBranch, pruneRuns, readRun, readRunSettings, runIdOf, segment, sliceRow, writeReport, writeRunSettings } from './bridge'
+import type { AgentRun, Flow, Panel, Phase, PlannedTask, SliceReport, SliceWorker } from '../types'
+import { MAX_CREW, askStop, bridgeRoot, currentBranch, logDirOf, logTail, pruneRuns, readRun, readRunSettings, runIdOf, segment, sliceRow, stopPath, workerRow, writeReport, writeRunSettings } from './bridge'
 import { CONFIG_DEFAULTS, WORKTREE_LINE, effectiveOf, fieldOf, parseConfigArgs, skillWithSettings, tierSettingsOf } from './tiers'
 import type { TierSettings } from './tiers'
 import { pushOrToast, sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
@@ -57,142 +57,47 @@ type ProgressInput = {
 }
 
 // ---------------------------------------------------------------------------
-// Language: the `language` option, else Claude Code's `language` setting, else the
-// process locale; English when nothing says Hebrew or Russian.
-
-type Lang = 'en' | 'ru' | 'he'
+// The words the bar, the panel and the commands show.
 
 const STRINGS = {
-  en: {
-    pane: 'Agents',
-    cost: 'Cost',
-    tokens: 'Tokens',
-    time: 'Time',
-    collapse: 'Collapse',
-    expand: 'Expand',
-    running: 'Running',
-    finished: 'Finished',
-    planned: 'Planned',
-    empty: 'No subagents yet.',
-    round: 'round',
-    failed: 'error',
-    after: 'after',
-    tokensWord: 'tokens',
-    agentsCount: 'agents',
-    isRunning: 'running',
-    isFinished: 'finished',
-    isPlanned: 'planned',
-    opened: 'Agents panel opened.',
-    closed: 'Agents panel closed.',
-    done: 'Done',
-    plan: 'Plan',
-    design: 'Design',
-    tasks: 'Tasks',
-    review: 'Review',
-    busy: 'running',
-    accepted: 'accepted',
-    showMore: 'Show more',
-    showFewer: 'Show fewer',
-    ctx: 'ctx',
-    tier: { light: 'light', medium: 'medium', careful: 'careful', heavy: 'heavy', fable: 'fable', other: 'other' },
-    effort: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
-  },
-  ru: {
-    pane: 'Агенты',
-    cost: 'Стоимость',
-    tokens: 'Токены',
-    time: 'Время',
-    collapse: 'Свернуть',
-    expand: 'Развернуть',
-    running: 'Работают',
-    finished: 'Завершены',
-    planned: 'Запланированы',
-    empty: 'Субагентов пока нет.',
-    round: 'раунд',
-    failed: 'ошибка',
-    after: 'после',
-    tokensWord: 'токенов',
-    agentsCount: 'агентов',
-    isRunning: 'работает',
-    isFinished: 'завершён',
-    isPlanned: 'запланирована',
-    opened: 'Панель агентов открыта.',
-    closed: 'Панель агентов закрыта.',
-    done: 'Готово',
-    plan: 'План',
-    design: 'Дизайн',
-    tasks: 'Задачи',
-    review: 'Ревью',
-    busy: 'в работе',
-    accepted: 'принято',
-    showMore: 'Показать ещё',
-    showFewer: 'Свернуть',
-    ctx: 'ctx',
-    tier: { light: 'light', medium: 'medium', careful: 'careful', heavy: 'heavy', fable: 'fable', other: 'other' },
-    effort: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
-  },
-  he: {
-    pane: 'סוכנים',
-    cost: 'עלות',
-    tokens: 'טוקנים',
-    time: 'זמן',
-    collapse: 'כיווץ',
-    expand: 'הרחבה',
-    running: 'פועלים',
-    finished: 'הסתיימו',
-    planned: 'מתוכננים',
-    empty: 'עדיין אין סוכנים.',
-    round: 'סבב',
-    failed: 'שגיאה',
-    after: 'אחרי',
-    tokensWord: 'טוקנים',
-    agentsCount: 'סוכנים',
-    isRunning: 'פועל',
-    isFinished: 'הסתיים',
-    isPlanned: 'מתוכנן',
-    opened: 'חלונית הסוכנים נפתחה.',
-    closed: 'חלונית הסוכנים נסגרה.',
-    done: 'הושלם',
-    plan: 'תכנון',
-    design: 'עיצוב',
-    tasks: 'משימות',
-    review: 'בדיקה',
-    busy: 'בעבודה',
-    accepted: 'התקבלו',
-    showMore: 'הצג עוד',
-    showFewer: 'הצג פחות',
-    ctx: 'הקשר',
-    tier: { light: 'קל', medium: 'בינוני', careful: 'זהיר', heavy: 'כבד', fable: 'פייבל', other: 'אחר' },
-    effort: { low: 'נמוך', medium: 'בינוני', high: 'גבוה', xhigh: 'גבוה מאוד', max: 'מקסימלי' },
-  },
+  pane: 'Agents',
+  cost: 'Cost',
+  tokens: 'Tokens',
+  time: 'Time',
+  collapse: 'Collapse',
+  expand: 'Expand',
+  running: 'Running',
+  finished: 'Finished',
+  planned: 'Planned',
+  empty: 'No subagents yet.',
+  round: 'round',
+  failed: 'error',
+  after: 'after',
+  tokensWord: 'tokens',
+  agentsCount: 'agents',
+  isRunning: 'running',
+  isFinished: 'finished',
+  isPlanned: 'planned',
+  opened: 'Agents panel opened.',
+  closed: 'Agents panel closed.',
+  done: 'Done',
+  plan: 'Plan',
+  design: 'Design',
+  tasks: 'Tasks',
+  review: 'Review',
+  busy: 'running',
+  accepted: 'accepted',
+  showMore: 'Show more',
+  showFewer: 'Show fewer',
+  stop: 'Stop',
+  log: 'Log',
+  stopAsked: 'asked to stop; it ends its turn within a few seconds',
+  stoppedNote: 'stopped from the main session',
+  noLog: 'no log yet',
+  noSlice: 'No such slice session. Slices of this run:',
+  noSlices: 'No slice sessions in this run.',
+  ctx: 'ctx',
 } as const
-
-// Module scope is fine here: session.start sets it again on every (re)load.
-let lang: Lang = 'en'
-const tr = () => STRINGS[lang]
-
-// Hebrew draws every row mirrored: crab and title on the right, numbers on the left.
-const isRtl = () => lang === 'he'
-
-// Tier and effort words as shown; anything unknown shows as it came.
-const tierWord = (tier: string): string => (tr().tier as Record<string, string>)[tier] ?? tier
-const effortWord = (effort: string): string => (tr().effort as Record<string, string>)[effort] ?? effort
-
-const isRussian = (v: unknown): boolean => typeof v === 'string' && /^(ru|russian|рус)/i.test(v.trim())
-const isHebrew = (v: unknown): boolean => typeof v === 'string' && /^(he|iw|hebrew|עברית)/i.test(v.trim())
-const langOf = (v: unknown): Lang => (isHebrew(v) ? 'he' : isRussian(v) ? 'ru' : 'en')
-
-async function detectLang($: EngineInterface, option: unknown): Promise<Lang> {
-  if (option === 'en' || option === 'ru' || option === 'he') return option
-  try {
-    const settings = (await $.settings.read()) as Record<string, unknown>
-    if (typeof settings.language === 'string' && settings.language.trim()) return langOf(settings.language)
-  } catch {
-    // No settings: fall through to the locale.
-  }
-  const locale = (await $.env.get('LC_ALL')) || (await $.env.get('LC_MESSAGES')) || (await $.env.get('LANG'))
-  return langOf(locale)
-}
 
 const blank = (): Flow => ({
   title: 'superpowers',
@@ -244,7 +149,7 @@ const merge = (prev: Flow | null, input: ProgressInput): Flow => {
 // `fallbackDone`: finished sp-* runs, shown when no plan was ever reported and the
 // bar only knows what the safety net counted.
 const label = (f: Flow, fallbackDone = 0): string => {
-  const s = tr()
+  const s = STRINGS
   if (f.isFinished) return s.done
   if (f.phase === 'plan') return s.plan
   if (f.phase === 'design') return s.design
@@ -310,11 +215,6 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean, text: string): string =>
   const fillW = Math.round(BAR_W * ratio(f))
   const runW = f.total ? Math.round((BAR_W * Math.min(f.total, f.done + f.running)) / f.total) : 0
   const dots: string[] = []
-  // Positions are worked out left to right; right to left mirrors each box
-  // inside the bar (`bx`) and across the row (`rx`). Text is never mirrored.
-  const rtl = isRtl()
-  const bx = (x: number, w: number): number => (rtl ? BAR_W - x - w : x)
-  const rx = (x: number, w: number): number => (rtl ? W - x - w : x)
 
   // Dithered fill: sparse at the start, dense toward the head.
   const cols = Math.floor(fillW / CELL)
@@ -322,30 +222,27 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean, text: string): string =>
   for (let c = 0; c < cols; c++) {
     const density = 0.35 + 0.6 * Math.pow(c / Math.max(1, cols), 1.2)
     for (let r = 0; r < rows; r++) {
-      if (noise(c, r) < density) dots.push(`<rect class="t${Math.floor(noise(r, c) * 4)}" x="${bx(c * CELL + 1, 2)}" y="${r * CELL + 1}" width="2" height="2"/>`)
+      if (noise(c, r) < density) dots.push(`<rect class="t${Math.floor(noise(r, c) * 4)}" x="${c * CELL + 1}" y="${r * CELL + 1}" width="2" height="2"/>`)
     }
   }
   // Handed to workers, not yet accepted: a faint second layer.
   const faint: string[] = []
   for (let c = cols; c < Math.floor(runW / CELL); c++) {
     for (let r = 0; r < rows; r++) {
-      if (noise(c + 7, r + 3) < 0.2) faint.push(`<rect class="t${Math.floor(noise(r + 5, c) * 4)}" x="${bx(c * CELL + 1, 1.7)}" y="${r * CELL + 1}" width="1.7" height="1.7"/>`)
+      if (noise(c + 7, r + 3) < 0.2) faint.push(`<rect class="t${Math.floor(noise(r + 5, c) * 4)}" x="${c * CELL + 1}" y="${r * CELL + 1}" width="1.7" height="1.7"/>`)
     }
   }
 
   const ticks: string[] = []
   for (let i = 1; i < f.total; i++) {
     const x = Math.round((BAR_W * i) / f.total)
-    if (x > fillW + 4) ticks.push(`<rect x="${bx(x, 1.5)}" y="${BAR_H / 2 - 4}" width="1.5" height="8" rx="0.75"/>`)
+    if (x > fillW + 4) ticks.push(`<rect x="${x}" y="${BAR_H / 2 - 4}" width="1.5" height="8" rx="0.75"/>`)
   }
 
   const pillW = Math.round(18 + text.length * 6.6)
-  const pillX = bx(Math.max(0, Math.min(BAR_W - pillW, fillW - pillW)), pillW)
+  const pillX = Math.max(0, Math.min(BAR_W - pillW, fillW - pillW))
   // No plan reported: there is no share to show.
   const percent = f.total || f.isFinished ? `${Math.round(ratio(f) * 100)}%` : ''
-  // `direction="rtl"` puts Hebrew words and numbers in reading order; `start` is then the right edge.
-  const titleAt = rtl ? `x="${W - 16}" direction="rtl" text-anchor="start"` : 'x="16"'
-  const percentAt = rtl ? `x="${CRAB_W + 6}" y="${H / 2 + 4.5}"` : `x="${W - CRAB_W - 6}" y="${H / 2 + 4.5}" text-anchor="end"`
   const crabW = CRAB_BOX * 0.8
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
@@ -359,9 +256,9 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean, text: string): string =>
 @media (prefers-reduced-motion: reduce){.t0,.t1,.t2,.t3{animation:none}}
 </style>
 <defs><clipPath id="c"><rect x="0" y="0" width="${BAR_W}" height="${BAR_H}" rx="${BAR_H / 2}"/></clipPath></defs>
-<circle cx="${rtl ? W - 5 : 5}" cy="${H / 2}" r="4" fill="${color}"/>
-<text class="t" ${titleAt} y="${H / 2 + 4.5}" font-family="${FONT}" font-size="13" font-weight="500">${xml(title)}</text>
-<g transform="translate(${rx(BAR_X, BAR_W)},${y0})">
+<circle cx="5" cy="${H / 2}" r="4" fill="${color}"/>
+<text class="t" x="16" y="${H / 2 + 4.5}" font-family="${FONT}" font-size="13" font-weight="500">${xml(title)}</text>
+<g transform="translate(${BAR_X},${y0})">
 <rect class="k" width="${BAR_W}" height="${BAR_H}" rx="${BAR_H / 2}"/>
 <g clip-path="url(#c)">
 <g fill="${color}">${dots.join('')}</g>
@@ -369,10 +266,10 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean, text: string): string =>
 <g class="tk">${ticks.join('')}</g>
 </g>
 <rect x="${pillX}" width="${pillW}" height="${BAR_H}" rx="${BAR_H / 2}" fill="${color}"/>
-<text x="${pillX + pillW / 2}" y="${BAR_H / 2 + 4}" text-anchor="middle"${rtl ? ' direction="rtl"' : ''} font-family="${FONT}" font-size="11" font-weight="600" fill="#ffffff">${xml(text)}</text>
+<text x="${pillX + pillW / 2}" y="${BAR_H / 2 + 4}" text-anchor="middle" font-family="${FONT}" font-size="11" font-weight="600" fill="#ffffff">${xml(text)}</text>
 </g>
-<text class="m" ${percentAt} font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${percent}</text>
-${CRAB_CSS}${crab(rx(W - CRAB_W + 1, crabW), 0, 'other', false, isWorking, 0.8, rtl)}
+<text class="m" x="${W - CRAB_W - 6}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${percent}</text>
+${CRAB_CSS}${crab(W - CRAB_W + 1, 0, 'other', false, isWorking, 0.8)}
 </svg>`
 }
 
@@ -407,17 +304,17 @@ const TIER_MODEL: Record<string, [model: string, effort: string]> = {
 // The user's model and effort for each tier; set in register from the options.
 let tierSettings: TierSettings = {}
 
-// "Opus · xhigh", with the effort word in the panel's language; '' for an unknown tier.
+// "Opus · xhigh"; '' for an unknown tier.
 const tierModel = (tier: string): string => {
   const m = TIER_MODEL[tier]
   if (!m) return ''
   const set = tierSettings[tier] ?? {}
   const model = set.model ? set.model.charAt(0).toUpperCase() + set.model.slice(1) : m[0]
-  return `${model} · ${effortWord(set.effort ?? m[1])}`
+  return `${model} · ${set.effort ?? m[1]}`
 }
 
 // "Opus 5.5 · low" for a run, or just the model when no effort was seen.
-const runModel = (a: AgentRun): string => (a.effort ? `${modelName(a.model)} · ${effortWord(a.effort)}` : modelName(a.model))
+const runModel = (a: AgentRun): string => (a.effort ? `${modelName(a.model)} · ${a.effort}` : modelName(a.model))
 
 // USD per million tokens: input, output, cache read, cache write. The first row that
 // matches a model id wins, so a release sits above its family.
@@ -658,9 +555,8 @@ const costumeOf = (type: string): string => (type === 'Explore' ? 'explore' : ti
 const CRAB_SCALE = 1.1
 
 // Body and props nest inside `bd` so a prop rides the bob and adds its own motion;
-// legs stay outside it and step on their own. `mirror` flips the crab inside its
-// own box (x .. x + CRAB_BOX * scale) so it faces left.
-const crab = (x: number, y: number, costume: string, dim = false, isWalking = false, scale = CRAB_SCALE, mirror = false): string => {
+// legs stay outside it and step on their own.
+const crab = (x: number, y: number, costume: string, dim = false, isWalking = false, scale = CRAB_SCALE): string => {
   // A pixel that continues the previous one in its group (same row, height and color)
   // widens that rect instead of adding one: a costume is drawn row by row, so this
   // keeps the paint order and cuts the markup several times over.
@@ -679,7 +575,7 @@ const crab = (x: number, y: number, costume: string, dim = false, isWalking = fa
   const group = (cls: string) => `<g class="${cls}">${rects(cls)}</g>`
   const props = [...groups.keys()].filter(k => k !== 'bd' && k !== 'la' && k !== 'lb')
   const body = `<g class="bd">${rects('bd')}${props.map(group).join('')}</g>`
-  const place = mirror ? `translate(${x + CRAB_BOX * scale},${y}) scale(${-scale},${scale})` : `translate(${x},${y}) scale(${scale})`
+  const place = `translate(${x},${y}) scale(${scale})`
   return `<g transform="${place}" opacity="${dim ? 0.45 : 1}" shape-rendering="crispEdges"><g class="c-${costume}${isWalking ? ' run' : ''}">${body}${group('la')}${group('lb')}</g></g>`
 }
 
@@ -690,27 +586,12 @@ const statusMark = (x: number, y: number, status: string, color: string): string
   return `<circle cx="${x}" cy="${y}" r="5" fill="none" stroke="#9a9a96" stroke-width="1.4"/><path d="M${x} ${y - 2.5}v2.8l1.8 1.2" fill="none" stroke="#9a9a96" stroke-width="1.4" stroke-linecap="round"/>`
 }
 
-// Panel rows are laid out left to right; in Hebrew each box mirrors across the
-// row (`mx`) and text hugs the mirrored side. `words` text may hold Hebrew and
-// takes `direction="rtl"` (whose `start` is the right edge); numbers stay
-// left to right so "≈$0.25" keeps its order.
-const mx = (W: number, x: number, w = 0): number => (isRtl() ? W - x - w : x)
+// Text that starts at x, and text that ends at x.
+const startText = (x: number, y: number): string => `x="${x}" y="${y}"`
+const endText = (x: number, y: number): string => `x="${x}" y="${y}" text-anchor="end"`
 
-// Text that starts at x: left-aligned, or right-aligned at the mirrored x.
-const startText = (W: number, x: number, y: number, words = true): string =>
-  !isRtl()
-    ? `x="${x}" y="${y}"`
-    : `x="${W - x}" y="${y}"${words ? ' direction="rtl" text-anchor="start"' : ' text-anchor="end"'}`
-
-// Text that ends at x: right-aligned, or left-aligned at the mirrored x.
-const endText = (W: number, x: number, y: number, words = false): string =>
-  !isRtl() ? `x="${x}" y="${y}" text-anchor="end"` : `x="${W - x}" y="${y}"${words ? ' direction="rtl" text-anchor="end"' : ''}`
-
-const crabWidth = (scale: number): number => Math.round(CRAB_BOX * scale * 100) / 100
-
-// A panel crab at x in a row of width W: on the mirrored side and facing left in Hebrew.
-const rowCrab = (W: number, x: number, y: number, costume: string, dim = false, isWalking = false): string =>
-  crab(mx(W, x, crabWidth(CRAB_SCALE)), y, costume, dim, isWalking, CRAB_SCALE, isRtl())
+const rowCrab = (x: number, y: number, costume: string, dim = false, isWalking = false): string =>
+  crab(x, y, costume, dim, isWalking, CRAB_SCALE)
 
 // Only the crab rules a drawing uses: the rows of a long run each carried every
 // costume's rules, and a pane past a few hundred thousand characters stops drawing.
@@ -727,18 +608,18 @@ const svg = (W: number, H: number, body: string): string =>
 
 // The pane's own title already says "Agents": the header names the flow, if any.
 const headerSvg = (W: number, title: string, t: ReturnType<typeof totals>): string => {
-  const s = tr()
+  const s = STRINGS
   const gap = 6
   const tw = (W - gap * 2) / 3
   const top = title ? 28 : 0
   const tile = (i: number, k: string, v: string) =>
-    `<rect class="tile" x="${mx(W, i * (tw + gap), tw)}" y="${top}" width="${tw}" height="40" rx="8"/>
-<text class="s" ${startText(W, i * (tw + gap) + 9, top + 16)} font-family="${FONT}" font-size="11">${k}</text>
-<text class="t" ${startText(W, i * (tw + gap) + 9, top + 33, false)} font-family="${FONT}" font-size="15" font-weight="600" font-variant-numeric="tabular-nums">${v}</text>`
+    `<rect class="tile" x="${i * (tw + gap)}" y="${top}" width="${tw}" height="40" rx="8"/>
+<text class="s" ${startText(i * (tw + gap) + 9, top + 16)} font-family="${FONT}" font-size="11">${k}</text>
+<text class="t" ${startText(i * (tw + gap) + 9, top + 33)} font-family="${FONT}" font-size="15" font-weight="600" font-variant-numeric="tabular-nums">${v}</text>`
   return svg(
     W,
     headerHeight(title),
-    `${title ? `<text class="t" ${startText(W, 0, 15)} font-family="${FONT}" font-size="14" font-weight="600">${xml(fitText(title, 14, W))}</text>` : ''}
+    `${title ? `<text class="t" ${startText(0, 15)} font-family="${FONT}" font-size="14" font-weight="600">${xml(fitText(title, 14, W))}</text>` : ''}
 ${tile(0, s.cost, '≈' + fmtCost(t.cost))}${tile(1, s.tokens, fmtTokens(t.tokens))}${tile(2, s.time, fmtTime(t.time))}`,
   )
 }
@@ -755,7 +636,7 @@ const progressOf = (a: AgentRun): number | null => {
 const ctxOf = (a: AgentRun): number => (a.contextMax ? Math.min(100, Math.round((a.contextTokens / a.contextMax) * 100)) : 0)
 
 const agentSvg = (W: number, a: AgentRun, at: number): string => {
-  const s = tr()
+  const s = STRINGS
   const tier = tierOf(a.type)
   const color = colorOf(tier)
   const ctx = ctxOf(a)
@@ -773,13 +654,13 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
   return svg(
     W,
     66,
-    `${rowCrab(W, 0, 14, costumeOf(a.type), false, a.status === 'running')}
-<text class="t" ${startText(W, 42, 18)} font-family="${FONT}" font-size="13" font-weight="600">${xml(fitText(a.description || a.type, 13, textW))}</text>
-<text ${startText(W, 42, 34)} font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier === 'other' ? a.type : tierWord(tier))}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
-${steps && stepsW > 30 ? `<text class="t" ${startText(W, 42, 49)} font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(fitText(steps, 11, stepsW))}</text>` : ''}
-<text class="s" ${endText(W, 42 + barW, 49, true)} font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${stats}</text>
-<rect class="k" x="${mx(W, 42, barW)}" y="55" width="${barW}" height="4" rx="2"/><rect${progress === null ? ' class="m"' : ''} x="${mx(W, 42, fillW)}" y="55" width="${fillW}" height="4" rx="2"${progress === null ? '' : ` fill="${color}"`}/>
-${statusMark(mx(W, W - 8), 16, a.status, color)}
+    `${rowCrab(0, 14, costumeOf(a.type), false, a.status === 'running')}
+<text class="t" ${startText(42, 18)} font-family="${FONT}" font-size="13" font-weight="600">${xml(fitText(a.description || a.type, 13, textW))}</text>
+<text ${startText(42, 34)} font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier === 'other' ? a.type : tier)}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
+${steps && stepsW > 30 ? `<text class="t" ${startText(42, 49)} font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(fitText(steps, 11, stepsW))}</text>` : ''}
+<text class="s" ${endText(42 + barW, 49)} font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${stats}</text>
+<rect class="k" x="${42}" y="55" width="${barW}" height="4" rx="2"/><rect${progress === null ? ' class="m"' : ''} x="${42}" y="55" width="${fillW}" height="4" rx="2"${progress === null ? '' : ` fill="${color}"`}/>
+${statusMark(W - 8, 16, a.status, color)}
 <line class="ln" x1="0" y1="65.5" x2="${W}" y2="65.5"/>`,
   )
 }
@@ -789,14 +670,14 @@ const plannedSvg = (W: number, p: Planned): string => {
   const color = colorOf(tier)
   const textW = W - 42 - 22
   const meta = [tierModel(tier)]
-  if (p.after.length) meta.push(`${tr().after} ${p.after.join(', ')}`)
+  if (p.after.length) meta.push(`${STRINGS.after} ${p.after.join(', ')}`)
   return svg(
     W,
     46,
-    `${rowCrab(W, 0, 6, tier, true)}
-<text class="s" ${startText(W, 42, 18)} font-family="${FONT}" font-size="13" font-weight="600">${xml(fitText(`${p.n}. ${p.title}`, 13, textW))}</text>
-<text ${startText(W, 42, 34)} font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tierWord(tier))}</tspan><tspan class="m">  ${xml(meta.filter(Boolean).join('  ·  '))}</tspan></text>
-${statusMark(mx(W, W - 8), 16, 'planned', color)}
+    `${rowCrab(0, 6, tier, true)}
+<text class="s" ${startText(42, 18)} font-family="${FONT}" font-size="13" font-weight="600">${xml(fitText(`${p.n}. ${p.title}`, 13, textW))}</text>
+<text ${startText(42, 34)} font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier)}</tspan><tspan class="m">  ${xml(meta.filter(Boolean).join('  ·  '))}</tspan></text>
+${statusMark(W - 8, 16, 'planned', color)}
 <line class="ln" x1="0" y1="45.5" x2="${W}" y2="45.5"/>`,
   )
 }
@@ -811,14 +692,14 @@ const compactSvg = (W: number, list: AgentRun[], planned: Planned[], t: ReturnTy
   const shown = icons.slice(0, fit)
   const more = icons.length - shown.length
   const body = shown
-    .map((ic, i) => rowCrab(W, i * 36, 0, ic.k, ic.dim, ic.s === 'running') + (ic.s === 'running' ? `<circle class="live" cx="${mx(W, i * 36 + 32)}" cy="4" r="3" fill="${ic.c}"/>` : ''))
+    .map((ic, i) => rowCrab(i * 36, 0, ic.k, ic.dim, ic.s === 'running') + (ic.s === 'running' ? `<circle class="live" cx="${i * 36 + 32}" cy="4" r="3" fill="${ic.c}"/>` : ''))
     .join('')
   const x = shown.length * 36 + (more ? 4 : 0)
   return svg(
     W,
     32,
-    `${body}${more ? `<text class="s" ${startText(W, x, 21, false)} font-family="${FONT}" font-size="12">+${more}</text>` : ''}
-<text class="s" ${endText(W, W, 21)} font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}</text>`,
+    `${body}${more ? `<text class="s" ${startText(x, 21)} font-family="${FONT}" font-size="12">+${more}</text>` : ''}
+<text class="s" ${endText(W, 21)} font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}</text>`,
   )
 }
 
@@ -833,32 +714,34 @@ const STATUS_GLYPH: Record<string, string> = { running: '●', done: '✓', fail
 
 // The panel as text, for `/flow-status`: a phone or browser attached over Remote
 // Control sees the conversation only, so this is how the panel reaches it.
-const statusText = (f: Flow | null, list: AgentRun[], at: number, elsewhere: string[] = []): string => {
-  const s = tr()
+const statusText = (f: Flow | null, list: AgentRun[], at: number, elsewhere: string[] = [], crews: Crews = new Map()): string => {
+  const s = STRINGS
   const t = totals(list, at)
   const planned = plannedOf(f, list, elsewhere)
   const head = f
     ? `${f.title} · ${label(f, fallbackDoneOf(list))}${f.total || f.isFinished ? ` · ${Math.round(ratio(f) * 100)}%` : ''}`
     : s.empty
   const sums = list.length ? ` · ≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} ${s.tokensWord} · ${fmtTime(t.time)}` : ''
-  const row = (a: AgentRun): string => {
+  const line = (a: AgentRun, lead: string): string => {
     const tier = tierOf(a.type)
-    const meta = [tier === 'other' ? a.type : tierWord(tier), runModel(a)]
+    const meta = [tier === 'other' ? a.type : tier, runModel(a)]
     if (a.round > 1) meta.push(`${s.round} ${a.round}`)
     if (a.stepTotal) meta.push(`${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' ' + a.stepNote : ''}`)
     meta.push(`≈${fmtCost(a.costUsd)}`, fmtTime(elapsed(a, at)))
-    return `  ${STATUS_GLYPH[a.status]} ${a.description || a.type}  ·  ${meta.join(' · ')}`
+    return `${lead}${STATUS_GLYPH[a.status]} ${a.description || a.type}  ·  ${meta.join(' · ')}`
   }
+  // A slice session's row, then its own workers beneath it.
+  const row = (a: AgentRun): string[] => [line(a, '  '), ...(crews.get(a.id) ?? []).map(w => line(w, '      ↳ '))]
   const running = list.filter(a => a.status === 'running').reverse()
   const finished = list.filter(a => a.status !== 'running').reverse()
   const lines = [head + sums]
-  if (running.length) lines.push('', `${s.running} · ${running.length}`, ...running.map(row))
-  if (finished.length) lines.push('', `${s.finished} · ${finished.length}`, ...finished.map(row))
+  if (running.length) lines.push('', `${s.running} · ${running.length}`, ...running.flatMap(row))
+  if (finished.length) lines.push('', `${s.finished} · ${finished.length}`, ...finished.flatMap(row))
   if (planned.length)
     lines.push(
       '',
       `${s.planned} · ${planned.length}`,
-      ...planned.map(p => `  ◷ ${p.n}. ${p.title}  ·  ${[tierWord(p.tier || 'other'), tierModel(p.tier), p.after.length ? `${s.after} ${p.after.join(', ')}` : ''].filter(Boolean).join(' · ')}`),
+      ...planned.map(p => `  ◷ ${p.n}. ${p.title}  ·  ${[p.tier || 'other', tierModel(p.tier), p.after.length ? `${s.after} ${p.after.join(', ')}` : ''].filter(Boolean).join(' · ')}`),
     )
   return '```' + '\n' + lines.join('\n') + '\n' + '```'
 }
@@ -872,7 +755,7 @@ async function togglePane($: EngineInterface): Promise<boolean> {
   }
   const at = await $.clock.now()
   await update($, now, () => at)
-  await $.ui.open({ id: PANE, title: tr().pane })
+  await $.ui.open({ id: PANE, title: STRINGS.pane })
   return true
 }
 
@@ -880,21 +763,54 @@ async function togglePane($: EngineInterface): Promise<boolean> {
 // a live session rewrites its file at least every 30 seconds.
 const SLICE_STALE_MS = 5 * 60 * 1000
 
-// The panel's rows: the session's own agents, then one row per slice session.
-async function crewOf($: EngineInterface, at: number): Promise<{ list: AgentRun[]; elsewhere: string[] }> {
+// Each slice session's workers, by its row's id.
+type Crews = Map<string, AgentRun[]>
+
+// The panel's rows: the session's own agents, then one row per slice session, whose own
+// workers come apart in `crews` (its row's cost already counts theirs).
+async function crewOf($: EngineInterface, at: number): Promise<{ list: AgentRun[]; elsewhere: string[]; crews: Crews; reports: SliceReport[] }> {
   const own = await read($, agents)
   const reports: SliceReport[] = await read($, slices)
   return {
     list: [...own, ...reports.map(r => sliceRow(r, !r.isFinished && at - r.updatedAt > SLICE_STALE_MS))],
     elsewhere: reports.flatMap(r => r.tasks),
+    crews: new Map(reports.map(r => [`slice:${r.slice}`, r.crew.map((w, i) => workerRow(r.slice, w, i))])),
+    reports,
   }
+}
+
+// The slice of this run a command or button names; undefined when none matches.
+const sliceNamed = (reports: SliceReport[], name: string): SliceReport | undefined => {
+  const want = segment(name)
+  return reports.find(r => r.slice === want)
+}
+
+async function sliceCommand($: EngineInterface, args: string, act: 'stop' | 'log'): Promise<{ text: string }> {
+  const { reports } = await crewOf($, await $.clock.now())
+  if (!reports.length) return { text: STRINGS.noSlices }
+  const r = sliceNamed(reports, args)
+  if (!r) return { text: `${STRINGS.noSlice} ${reports.map(x => x.slice).join(', ')}` }
+  return { text: act === 'stop' ? await stopSlice($, r) : '```\n' + (await sliceLog($, r)) + '\n```' }
+}
+
+async function stopSlice($: EngineInterface, r: SliceReport): Promise<string> {
+  const root = await rootOf($)
+  if (!root) return `${r.slice}: ${STRINGS.noLog}`
+  await askStop($, root, r.run, r.slice)
+  return `${r.slice}: ${STRINGS.stopAsked}`
+}
+
+async function sliceLog($: EngineInterface, r: SliceReport): Promise<string> {
+  const root = await rootOf($)
+  const tail = root ? await logTail($, root, r.run, r.slice) : null
+  return tail ? `${r.slice} · ${r.title}\n${tail}` : `${r.slice}: ${STRINGS.noLog}`
 }
 
 async function autoOpen($: EngineInterface, key: string): Promise<void> {
   const p = await read($, panel)
   if (p.autoOpenedFor === key) return
   await update($, panel, prev => ({ ...prev, autoOpenedFor: key }))
-  void $.ui.open({ id: PANE, title: tr().pane })
+  void $.ui.open({ id: PANE, title: STRINGS.pane })
 }
 
 // --- the slice bridge (hooks/bridge.ts): the module's own memory of it, which a reload
@@ -924,6 +840,21 @@ const HEARTBEAT_MS = 30_000
 let sliceOptions: Record<string, string> | null = null
 const optionsFor = (opts: Record<string, unknown>): Record<string, unknown> =>
   sliceOptions ? { ...opts, ...sliceOptions, runner: 'subagent', parallel: 'off' } : opts
+
+// In a slice session: the main loop's running turn, which a stop from the main session ends.
+let mainTurn: string | undefined
+let isStopped = false
+
+// In a slice session: the main session left a stop file. The report says so first, then the
+// turn ends, and with it a headless session.
+async function obeyStop($: EngineInterface): Promise<void> {
+  const b = await read($, bridge)
+  const root = b ? await rootOf($) : null
+  if (!b || !root || isStopped || !(await $.fs.exists(stopPath(root, b.run, b.slice)).catch(() => false))) return
+  isStopped = true
+  await syncSlice($, true)
+  if (mainTurn) await $.turn.abort({ turnId: mainTurn }).catch(() => undefined)
+}
 
 // A session started with the slice environment reports as that slice from its start.
 async function joinRun($: EngineInterface): Promise<void> {
@@ -956,13 +887,30 @@ async function syncSlice($: EngineInterface, force: boolean): Promise<void> {
     total: f?.total ?? 0,
     phase: f?.phase ?? 'plan',
     isFinished: f?.isFinished ?? false,
-    note: busy ? clip(`${busy.description}${busy.stepNote ? ' · ' + busy.stepNote : ''}`, 120) : undefined,
+    note: isStopped ? STRINGS.stoppedNote : busy ? clip(`${busy.description}${busy.stepNote ? ' · ' + busy.stepNote : ''}`, 120) : undefined,
     model: await $.session.model().catch(() => ''),
     costUsd: usage?.cost?.usd ?? list.reduce((sum, a) => sum + a.costUsd, 0),
     contextTokens: usage?.context.tokens ?? 0,
     contextMax: usage?.context.window ?? 0,
-    workers: list.length,
+    crew: list.slice(-MAX_CREW).map(
+      (a): SliceWorker => ({
+        description: a.description,
+        type: a.type,
+        model: a.model,
+        effort: a.effort,
+        status: a.status,
+        stepDone: a.stepDone,
+        stepTotal: a.stepTotal,
+        stepNote: a.stepNote,
+        costUsd: a.costUsd,
+        contextTokens: a.contextTokens,
+        contextMax: a.contextMax,
+        startedAt: a.startedAt,
+        endedAt: a.endedAt,
+      }),
+    ),
     running: runningNow.length,
+    isStopped,
     startedAt: b.startedAt,
     tasks: (f?.tasks ?? []).map(t => t.title),
   }
@@ -995,7 +943,9 @@ export const register: Register = (on, options) => {
   // `/flow-config` changed since.
   const opts: Record<string, unknown> = { ...options }
   tierSettings = tierSettingsOf(opts)
-  sessionHooks(on)
+  sessionHooks(on, turnId => {
+    mainTurn = turnId
+  })
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await joinRun($).catch(() => undefined)
@@ -1006,9 +956,12 @@ export const register: Register = (on, options) => {
     })().catch(() => undefined)
     // The slice bridge: a slice session writes its report, the session that started it reads them.
     $.clock.every(2000, () => {
-      void (async () => ((await read($, bridge)) ? syncSlice($, false) : readSlices($)))().catch(() => undefined)
+      void (async () => {
+        if (!(await read($, bridge))) return readSlices($)
+        await obeyStop($)
+        await syncSlice($, false)
+      })().catch(() => undefined)
     })
-    lang = await detectLang($, opts.language)
     await sessionStart($)
     await update($, notify, () => opts.notify === 'milestones')
     await $.tool.register({
@@ -1071,6 +1024,14 @@ export const register: Register = (on, options) => {
       description: "List this plugin's settings, or change them: `coderTier=medium mediumModel=sonnet`, or `reset`. The same values as the plugin's Settings tab, saved, and used by this session from now on.",
     })
     await $.command.register({
+      name: 'flow-stop',
+      description: 'Stop a slice session of this run: `/flow-stop <slice>`. It ends its turn within a few seconds; its branch and commits stay.',
+    })
+    await $.command.register({
+      name: 'flow-log',
+      description: "The end of a slice session's log: `/flow-log <slice>`. What it said, the tools it called and how it ended.",
+    })
+    await $.command.register({
       name: 'flow-notify',
       description: 'Push notifications at milestones (a task accepted, a worker failed, the run finished): `on`, `off`, or no argument to toggle',
     })
@@ -1128,7 +1089,6 @@ export const register: Register = (on, options) => {
     // This session picks the change up at once: the next worker, the next skill load.
     tierSettings = tierSettingsOf(opts)
     await update($, notify, () => opts.notify === 'milestones')
-    if (pairs.some(([field]) => field === 'language')) lang = await detectLang($, opts.language)
     const width = Math.max(...rows.map(r => (fieldOf(r.key) ?? '').length))
     const list = rows.map(r => {
       const field = fieldOf(r.key) ?? ''
@@ -1147,8 +1107,8 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'flow-status' }, async $ => {
     const at = await $.clock.now()
-    const { list, elsewhere } = await crewOf($, at)
-    return { text: statusText(await read($, flow), list, at, elsewhere) }
+    const { list, elsewhere, crews } = await crewOf($, at)
+    return { text: statusText(await read($, flow), list, at, elsewhere, crews) }
   })
 
   on('command.run', { command: 'flow-agents' }, async ($, e) => {
@@ -1156,11 +1116,11 @@ export const register: Register = (on, options) => {
     if ((e.args ?? '').trim() === 'open') {
       const at = await $.clock.now()
       await update($, now, () => at)
-      await $.ui.open({ id: PANE, title: tr().pane })
-      return { text: tr().opened }
+      await $.ui.open({ id: PANE, title: STRINGS.pane })
+      return { text: STRINGS.opened }
     }
     const isOpen = await togglePane($)
-    return { text: isOpen ? tr().opened : tr().closed }
+    return { text: isOpen ? STRINGS.opened : STRINGS.closed }
   })
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
@@ -1198,12 +1158,12 @@ export const register: Register = (on, options) => {
     if (next && input.tasks?.length) await autoOpen($, next.title)
     if (next && (await read($, notify))) {
       // A task accepted, or the run closed: one line to the phone, or a toast.
-      if (next.isFinished && !prev?.isFinished) void pushOrToast($, `${next.title}: ${tr().done.toLowerCase()}`, '✓')
-      else if (prev && next.done > prev.done && !next.isFinished) void pushOrToast($, `${next.title}: ${next.done}/${next.total || '?'} ${tr().accepted}`, '✓')
+      if (next.isFinished && !prev?.isFinished) void pushOrToast($, `${next.title}: ${STRINGS.done.toLowerCase()}`, '✓')
+      else if (prev && next.done > prev.done && !next.isFinished) void pushOrToast($, `${next.title}: ${next.done}/${next.total || '?'} ${STRINGS.accepted}`, '✓')
     }
     // Slice sessions need the run id and the folder their logs go to; nobody else does.
     const root = next?.run && isSessionRunner ? await rootOf($) : null
-    const where = root && next?.run ? ` · run ${next.run} · bridge folder ${root}/${next.run}` : ''
+    const where = root && next?.run ? ` · run ${next.run} · log folder ${logDirOf(root, next.run)}` : ''
     return { result: `ok: ${label(next ?? blank())}${where}` }
   })
 
@@ -1277,6 +1237,8 @@ export const register: Register = (on, options) => {
       return [...list.filter(a => a.id !== run.id), run].slice(-200)
     })
     await update($, now, () => at)
+    // A slice session's panel row in the main session lists its workers from the start.
+    if (await read($, bridge)) await syncSlice($, true).catch(() => undefined)
     if (tierOf(e.subagentType) !== 'other') {
       const f = await read($, flow)
       await autoOpen($, f && !f.isFinished ? f.title : 'superpowers')
@@ -1328,6 +1290,10 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // `/flow-stop <slice>` and `/flow-log <slice>`: what the slice rows' buttons do, from any device.
+  on('command.run', { command: 'flow-stop' }, ($, e) => sliceCommand($, e.args ?? '', 'stop'))
+  on('command.run', { command: 'flow-log' }, ($, e) => sliceCommand($, e.args ?? '', 'log'))
+
   on('turn.complete', async ($, e, next) => {
     const agentId = e.agentId
     if (agentId) {
@@ -1358,7 +1324,7 @@ export const register: Register = (on, options) => {
       await update($, now, () => at)
       if (e.reason !== 'answer' && (await read($, notify))) {
         const run = (await read($, agents)).find(a => a.agentId === agentId)
-        if (run && tierOf(run.type) !== 'other') void pushOrToast($, `${run.description || run.type}: ${tr().failed}`, '✗')
+        if (run && tierOf(run.type) !== 'other') void pushOrToast($, `${run.description || run.type}: ${STRINGS.failed}`, '✗')
       }
     }
     const result = await next(e)
@@ -1368,11 +1334,11 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const s = tr()
+    const s = STRINGS
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
     const ticked = await read($, now)
-    const { list, elsewhere } = await crewOf($, ticked)
+    const { list, elsewhere, crews, reports } = await crewOf($, ticked)
     const f = await read($, flow)
     const p: Panel = await read($, panel)
     const at = Math.max(ticked, ...list.map(a => a.startedAt), 0)
@@ -1381,6 +1347,20 @@ export const register: Register = (on, options) => {
     const finished = list.filter(a => a.status !== 'running').reverse()
     const planned = plannedOf(f, list, elsewhere)
     const t = totals(list, at)
+    // A slice session's row carries its Stop (while it runs) and Log buttons; a running one
+    // also lists its workers under it.
+    const reportOf = (a: AgentRun) => reports.find(r => `slice:${r.slice}` === a.id)
+    const actions = (a: AgentRun) => {
+      const r = reportOf(a)
+      if (!r) return null
+      return (
+        <Box key={`${a.id}-actions`} flexDirection="row" gap={2}>
+          {a.status === 'running' && <Button key={`${a.id}-stop`} label={`${s.stop} ${r.slice}`} plain onPress={async () => $.ui.log(await stopSlice($, r))} />}
+          <Button key={`${a.id}-log`} label={`${s.log} ${r.slice}`} plain onPress={async () => $.ui.log(await sliceLog($, r))} />
+        </Box>
+      )
+    }
+    const crewOfRow = (a: AgentRun) => (a.status === 'running' ? (crews.get(a.id) ?? []) : [])
     // The pane's title says "Agents"; inside, only the flow's own name.
     const title = f && !f.isFinished ? f.title : ''
 
@@ -1395,7 +1375,7 @@ export const register: Register = (on, options) => {
     const toggleDone = (
       <Button
         key="done"
-        label={`${p.isDoneCollapsed ? (isRtl() ? '◂' : '▸') : '▾'} ${s.finished} · ${finished.length}`}
+        label={`${p.isDoneCollapsed ? '▸' : '▾'} ${s.finished} · ${finished.length}`}
         plain
         onPress={() => update($, panel, prev => ({ ...prev, isDoneCollapsed: !prev.isDoneCollapsed }))}
       />
@@ -1412,11 +1392,9 @@ export const register: Register = (on, options) => {
         </Text>
       )
 
-      // In Hebrew the column hugs the right edge: section heads and buttons right-aligned.
-      const align = isRtl() ? 'flex-end' : undefined
       if (p.isCompact) {
         return (
-          <Box flexDirection="column" gap={1} alignItems={align}>
+          <Box flexDirection="column" gap={1}>
             <Svg source={compactSvg(W, list, planned, t)} alt={`${list.length} ${s.agentsCount}, ${summary}`} width={W} height={32} />
             {toggleCompact}
           </Box>
@@ -1437,8 +1415,10 @@ export const register: Register = (on, options) => {
         (planned.length > 0 ? 1 : 0) +
         (canMore || canFewer ? 1 : 0) +
         (doneHidden > 0 && !canMore ? 1 : 0) +
-        (planHidden > 0 ? 1 : 0)
-      const gridH = headerHeight(title) + lines * LINE_H + (running.length + doneRows.length) * 66 + planRows.length * 46
+        (planHidden > 0 ? 1 : 0) +
+        [...running, ...doneRows].filter(reportOf).length
+      const crewRows = running.reduce((n, a) => n + crewOfRow(a).length, 0)
+      const gridH = headerHeight(title) + lines * LINE_H + (running.length + doneRows.length + crewRows) * 66 + planRows.length * 46
       return (
         <Box flexDirection="column">
           {/* The grid sizes the pane; the content is placed over it, as an
@@ -1446,18 +1426,25 @@ export const register: Register = (on, options) => {
           {gridTiles(gridH).map((tileH, i) => (
             <Svg key={`grid-${i}`} source={gridSvg(W, tileH)} alt="dotted grid" width={W} height={tileH} />
           ))}
-          <Box flexDirection="column" position="absolute" top={0} left={0} right={0} alignItems={align}>
+          <Box flexDirection="column" position="absolute" top={0} left={0} right={0}>
             <Svg source={headerSvg(W, title, t)} alt={title ? `${title}: ${summary}` : summary} width={W} height={headerHeight(title)} />
             {toggleCompact}
             {isEmpty && <Text dimColor>{s.empty}</Text>}
             {running.length > 0 && section('h-run', `${s.running} · ${running.length}`)}
-            {running.map(a => (
-              <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={66} />
-            ))}
+            {running.flatMap(a => [
+              <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={66} />,
+              ...crewOfRow(a).map(w => (
+                <Box key={w.id} marginLeft={3}>
+                  <Svg source={agentSvg(W - 24, w, at)} alt={`${w.description}: ${modelName(w.model)}`} width={W - 24} height={66} />
+                </Box>
+              )),
+              actions(a),
+            ])}
             {finished.length > 0 && toggleDone}
-            {doneRows.map(a => (
-              <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isFinished}`} width={W} height={66} />
-            ))}
+            {doneRows.flatMap(a => [
+              <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isFinished}`} width={W} height={66} />,
+              actions(a),
+            ])}
             {canMore && (
               <Button key="more" label={`${s.showMore} · ${doneHidden}`} plain onPress={() => update($, panel, prev => ({ ...prev, isMoreShown: true }))} />
             )}
@@ -1476,7 +1463,7 @@ export const register: Register = (on, options) => {
     // Terminal: the same content in text rows.
     const cols = Math.max(24, e.props.bodyColumns || 40)
     const barW = Math.max(6, Math.min(20, cols - 34))
-    const row = (a: AgentRun) => {
+    const row = (a: AgentRun, isWorker = false) => {
       const tier = tierOf(a.type)
       const color = colorOf(tier)
       const ctx = ctxOf(a)
@@ -1484,9 +1471,9 @@ export const register: Register = (on, options) => {
       const model = runModel(a)
       const steps = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' ' + a.stepNote : ''} · ` : ''
       return (
-        <Box key={a.id} flexDirection="column" marginBottom={1}>
+        <Box key={a.id} flexDirection="column" marginBottom={1} marginLeft={isWorker ? 3 : 0}>
           <Box flexDirection="row" gap={1}>
-            <Text color={color}>▣</Text>
+            <Text color={color}>{isWorker ? '↳' : '▣'}</Text>
             <Text bold wrap="truncate-end">
               {a.description || a.type}
             </Text>
@@ -1494,7 +1481,7 @@ export const register: Register = (on, options) => {
           </Box>
           <Text dimColor wrap="truncate-end">
             {'  '}
-            {tier === 'other' ? a.type : tierWord(tier)} · {model}
+            {tier === 'other' ? a.type : tier} · {model}
             {a.round > 1 ? ` · ${s.round} ${a.round}` : ''}
           </Text>
           <Text wrap="truncate-end">
@@ -1537,9 +1524,9 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column" marginTop={1}>
             {isEmpty && <Text dimColor>{s.empty}</Text>}
             {running.length > 0 && <Text dimColor>{s.running} · {running.length}</Text>}
-            {running.map(row)}
+            {running.flatMap(a => [row(a), ...crewOfRow(a).map(w => row(w, true)), actions(a)])}
             {finished.length > 0 && toggleDone}
-            {!p.isDoneCollapsed && finished.map(row)}
+            {!p.isDoneCollapsed && finished.flatMap(a => [row(a), actions(a)])}
             {planned.length > 0 && <Text dimColor>{s.planned} · {planned.length}</Text>}
             {planned.map(pl => {
               const tier = pl.tier in TIER_COLOR ? pl.tier : 'other'
@@ -1550,7 +1537,7 @@ export const register: Register = (on, options) => {
                   </Text>
                   <Text dimColor wrap="truncate-end">
                     {'  '}
-                    {tierWord(tier)} · {tierModel(tier)}
+                    {tier} · {tierModel(tier)}
                     {pl.after.length ? ` · ${s.after} ${pl.after.join(', ')}` : ''}
                   </Text>
                 </Box>
@@ -1608,7 +1595,7 @@ export const register: Register = (on, options) => {
       const width = Math.max(180, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 96))
       return (
         <Box flexDirection="column">
-          <Box flexDirection={isRtl() ? 'row-reverse' : 'row'} alignItems="center" gap={1}>
+          <Box flexDirection="row" alignItems="center" gap={1}>
             <Svg source={rowSvg(f, width, isWorking, text)} alt={`${f.title}: ${text} ${percent}`} width={width} height={H} />
             {crewButton}
             {dismiss}

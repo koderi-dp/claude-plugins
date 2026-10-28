@@ -50,9 +50,6 @@ test('/flow-config saves a change and the skill picks it up in this session', as
 
 test('/flow-config reset puts every setting back to its default', async ($, on) => {
   mock.clock(on)
-  // Reset includes `language`, which detects the panel's language again.
-  mock.env(on, { LANG: 'en_US.UTF-8' })
-  on('settings.read', async () => ({ value: {} }) as never)
   on('config.list', () => ({ value: [row('coderTier', 'heavy', TIERS), row('notify', 'milestones', ['off', 'milestones'])] }))
   const saved: [string, unknown][] = []
   on('config.set', (_$, e) => {
