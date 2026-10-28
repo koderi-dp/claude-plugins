@@ -33,7 +33,10 @@ Code: `hooks/tiers.ts` gains `PROFILES`, `effectiveOf(options)` and a skill sect
 - Run id: `<date>-<branch>-<plan slug>`, made by the parent's first `progress` call and returned in its result.
 - Child: `progress` takes `run` and `slice`; from then on the child's mod rewrites its own file (one file per slice, so writers never collide) with its title, done/total, phase, note, model, cost, tokens, start and update time.
 - Parent: every 2 seconds while a flow is open, lists the run's folder, reads files that changed, and keeps them in a `slices` atom. The panel and `/flow-status` show each slice as a row (progress = its tasks done/total); planned tasks a slice reported are not listed again as planned.
+- Child sessions in the panel: each report carries the child's own workers, listed under its row while it runs, with a **Log** button (end of `.worktrees/<slice>.log`, stream-json, in the transcript) and a **Stop** button (writes `<slice>.stop`; the child's tick finds it, reports stopped and ends its turn). `/flow-log` and `/flow-stop` do the same from any device.
+- Launch: `claude -p ... --settings '{"env":{"SUPERPOWERS_FLOW_RUN":...,"SUPERPOWERS_FLOW_SLICE":...}}'`; the child reads the run's settings from `_run.json` and never starts slices of its own. Logs live in `.worktrees/`, since Claude Code guards writes under `.git/`.
 - Cleanup: on session start, run folders whose slices are all finished and untouched for 3 days are removed.
+- English only: the `language` setting and the Russian and Hebrew strings are gone.
 
 ## 4. Tests
 
