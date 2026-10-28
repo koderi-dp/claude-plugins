@@ -1,6 +1,8 @@
 // The settings that choose each role's tier and each tier's model and effort, as
 // plain functions of the plugin's options, so tests can call them directly.
 
+import type { Role, RoleModels } from '../types'
+
 export const TIER_NAMES = ['fable', 'heavy', 'careful', 'medium', 'light'] as const
 export const MODELS = ['haiku', 'sonnet', 'opus', 'fable'] as const
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -66,6 +68,48 @@ export const effectiveOf = (options: Record<string, unknown>): Record<string, st
   }
   return out
 }
+
+// Models and efforts per role for one run, chosen at the plan's handoff. A role left out
+// is auto: the tier table picks per task. A brief names its worker's role in a line of its
+// own (`Role: coder`), which the mod reads when the worker starts.
+export const ROLE_NAMES: readonly Role[] = ['coder', 'reviewer', 'final']
+export const ROLE_LINE = /^Role: (coder|reviewer|final)\b/m
+const ROLE_WHO: Record<Role, string> = { coder: 'coders', reviewer: 'reviewers', final: 'final review' }
+
+export const MODEL_PRESETS: Record<string, RoleModels> = {
+  economy: { coder: { model: 'sonnet', effort: 'medium' }, reviewer: { model: 'sonnet', effort: 'high' }, final: { model: 'opus', effort: 'high' } },
+  strong: { coder: { model: 'opus', effort: 'high' }, reviewer: { model: 'opus', effort: 'high' }, final: { model: 'fable', effort: 'high' } },
+}
+
+// What a call or a file says, kept only where it names a known model or effort.
+export const cleanRoleModels = (v: unknown): RoleModels | undefined => {
+  if (!v || typeof v !== 'object') return undefined
+  const out: RoleModels = {}
+  for (const role of ROLE_NAMES) {
+    const r = (v as Record<string, unknown>)[role]
+    if (!r || typeof r !== 'object') continue
+    const { model, effort } = r as Record<string, unknown>
+    const set = {
+      ...(MODELS.includes(model as never) ? { model: model as string } : {}),
+      ...(EFFORTS.includes(effort as never) ? { effort: effort as string } : {}),
+    }
+    if (set.model || set.effort) out[role] = set
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+const titled = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+
+// "coders Sonnet · medium, final review Fable · high".
+export const describeRoleModels = (m: RoleModels): string =>
+  ROLE_NAMES.flatMap(role => {
+    const r = m[role]
+    return r ? [`${ROLE_WHO[role]} ${[r.model && titled(r.model), r.effort].filter(Boolean).join(' · ')}`] : []
+  }).join(', ')
+
+// For the progress result: how to mark the briefs so the choice reaches each worker.
+export const roleModelsText = (m: RoleModels): string =>
+  `Models for this run: ${describeRoleModels(m)}; any other role is auto. Put a line of its own in every brief naming its worker's role: \`Role: coder\` for implementers and fixers, \`Role: reviewer\` for task reviewers and re-reviewers, \`Role: final\` for the final whole-branch review. Keep choosing the \`sp-*\` tier by the table: the role's model and effort replace the tier's when the worker starts.`
 
 // The brief line the mod reads to start a worker in its slice's worktree.
 export const WORKTREE_LINE = /^Worktree: (\S.*?)\s*$/m
@@ -204,7 +248,14 @@ export const handoffWithProfiles = (text: string, saved: Record<string, unknown>
     '- **Native** as superpowers says, when the tasks are tightly coupled through each other\'s interfaces.',
     `The user's saved profile is \`${savedProfile}\`${savedProfile === 'thorough' ? '' : ', so it is the default when the plan gives no reason for another'}. ${runner === 'session' ? 'Their runner is `session`: each slice runs in its own headless Claude Code session.' : 'When the plan splits into three or more large independent slices, mention that `/flow-config runner=session` would run each in its own session.'}`,
     '',
-    '**If a Subagent-driven profile is chosen:** before the first dispatch, call `mcp__superpowers-flow__progress` with `profile: "<balanced|fast|thorough>"` along with the plan\'s title, total, tasks and phase `delegate`. Its result carries that profile\'s instructions for this run; they win over the superpowers-flow skill\'s settings section if it was loaded before. Then use superpowers:subagent-driven-development, as the plan says.',
+    '',
+    'With a Subagent-driven option, ask in the same AskUserQuestion a second question, **Models for this run**:',
+    '- **Auto (Recommended)** - the `sp-*` tier table picks per task: mechanical tasks on fast workers, reviews scaled to the diff, the final review on the strongest.',
+    `- **Economy** - ${describeRoleModels(MODEL_PRESETS.economy ?? {})}. Cheaper; for well-specified plans.`,
+    `- **Strong** - ${describeRoleModels(MODEL_PRESETS.strong ?? {})}. For hard or risky code.`,
+    'The user may answer in their own words instead ("coders sonnet medium, final fable"): take the model (haiku, sonnet, opus, fable) and effort (low, medium, high, xhigh, max) they name per role; a role they leave out stays auto. Recommend Auto unless the spec makes a case: Strong beside thorough for risky code, Economy beside fast for a mechanical plan.',
+    '',
+    '**If a Subagent-driven profile is chosen:** before the first dispatch, call `mcp__superpowers-flow__progress` with `profile: "<balanced|fast|thorough>"` along with the plan\'s title, total, tasks and phase `delegate`, and, unless models are Auto, `models: { coder, reviewer, final }`, each `{ model, effort }` (a preset spelled out). Its result carries that profile\'s instructions and how to mark the briefs for the models; they win over the superpowers-flow skill\'s settings section if it was loaded before. Then use superpowers:subagent-driven-development, as the plan says.',
   ].join('\n')
   const line = /^- \*\*Subagent-driven\*\*.*$/m
   if (!line.test(text)) return `${text}\n\n${rules}`

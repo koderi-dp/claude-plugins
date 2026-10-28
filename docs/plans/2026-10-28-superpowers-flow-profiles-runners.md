@@ -23,7 +23,7 @@ Code: `hooks/tiers.ts` gains `PROFILES`, `effectiveOf(options)` and a skill sect
 
 ### Choosing a profile at the plan's handoff
 
-The mod rewrites superpowers:writing-plans as it loads (`skill.prompt`): its single Subagent-driven option becomes one per profile, with rules for recommending one from the spec and plan, and Native kept. The chosen profile goes in the first `progress` call (`profile`), which stores it on the flow for this run, answers with that profile's instructions, and makes the superpowers-flow skill load with it. A run profile wins over the saved profile, knobs and reviewer tiers; models, efforts and the coder tier stay as saved.
+The mod rewrites superpowers:writing-plans as it loads (`skill.prompt`): its single Subagent-driven option becomes one per profile, with rules for recommending one from the spec and plan, and Native kept. The chosen profile goes in the first `progress` call (`profile`), which stores it on the flow for this run, answers with that profile's instructions, and makes the superpowers-flow skill load with it. A run profile wins over the saved profile, knobs and reviewer tiers; models, efforts and the coder tier stay as saved. A second question picks models per role for the run (Auto, Economy, Strong, or the user's words); `progress({ models })` stores them on the flow and in `_run.json`, briefs carry `Role: coder|reviewer|final`, and `agent.spawn` sets that role's model while `turn.step` sends its effort.
 
 ## 2. Runners
 

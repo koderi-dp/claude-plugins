@@ -6,7 +6,8 @@
 
 import type { EngineInterface } from 'claude-code'
 
-import type { AgentRun, AgentStatus, SliceReport, SliceWorker } from '../types'
+import type { AgentRun, AgentStatus, RoleModels, SliceReport, SliceWorker } from '../types'
+import { cleanRoleModels } from './tiers'
 
 // Finished runs untouched this long are removed when a session starts.
 export const RUN_MAX_AGE_MS = 3 * 24 * 3600 * 1000
@@ -116,8 +117,17 @@ export const parseReport = (text: string, run: string, slice: string): SliceRepo
 // slice name is a slug, and a slug never starts with `_`.
 export const RUN_FILE = '_run.json'
 
-export async function writeRunSettings($: EngineInterface, root: string, run: string, options: Record<string, string>): Promise<void> {
-  await $.fs.write(`${root}/${run}/${RUN_FILE}`, JSON.stringify({ options }))
+export async function writeRunSettings($: EngineInterface, root: string, run: string, options: Record<string, string>, models?: RoleModels): Promise<void> {
+  await $.fs.write(`${root}/${run}/${RUN_FILE}`, JSON.stringify({ options, ...(models ? { models } : {}) }))
+}
+
+// The models and efforts chosen for the run's roles, as the main session wrote them.
+export async function readRunModels($: EngineInterface, root: string, run: string): Promise<RoleModels | undefined> {
+  try {
+    return cleanRoleModels((JSON.parse(await $.fs.read(`${root}/${run}/${RUN_FILE}`)) as { models?: unknown }).models)
+  } catch {
+    return undefined
+  }
 }
 
 // Only the settings `tiers.ts` knows, each a short word: another process wrote the file.

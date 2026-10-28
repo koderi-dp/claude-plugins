@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { CONFIG_DEFAULTS, effectiveOf, handoffWithProfiles, skillWithSettings, tierSettingsOf, withRunProfile } from './tiers'
+import { CONFIG_DEFAULTS, cleanRoleModels, effectiveOf, handoffWithProfiles, skillWithSettings, tierSettingsOf, withRunProfile } from './tiers'
 
 const SKILL = '# superpowers-flow\n\n## 1. Tier instead of model\n\nthe table\n\n## 2. Progress bar\n\nreport it'
 const describe = (t: string) => `Model-of-${t}`
@@ -153,4 +153,49 @@ test('tiers: the chosen profile comes back in the progress result and in the ski
 
   const thorough = await $.tool.call({ tool: 'mcp__superpowers-flow__progress', title: 'Another', total: 1, profile: 'thorough' } as never)
   expect(String((thorough as { result?: string }).result)).toContain('Profile thorough for this run. Superpowers runs as it ships.')
+})
+
+test('tiers: the handoff asks for models per role, Auto recommended, with the presets spelled out', () => {
+  const text = handoffWithProfiles(HANDOFF, {})
+  expect(text).toContain('**Models for this run**')
+  expect(text).toContain('- **Auto (Recommended)** - the `sp-*` tier table picks per task')
+  expect(text).toContain('- **Economy** - coders Sonnet · medium, reviewers Sonnet · high, final review Opus · high.')
+  expect(text).toContain('- **Strong** - coders Opus · high, reviewers Opus · high, final review Fable · high.')
+  expect(text).toContain('`models: { coder, reviewer, final }`')
+})
+
+test('tiers: role models keep only known models and efforts', () => {
+  expect(cleanRoleModels({ coder: { model: 'sonnet', effort: 'medium' }, reviewer: { model: 'gpt-9' }, final: 'fable', other: { model: 'opus' } })).toEqual({ coder: { model: 'sonnet', effort: 'medium' } })
+  expect(cleanRoleModels({ reviewer: { model: 'gpt-9', effort: 'huge' } })).toBeUndefined()
+})
+
+// A brief marked `Role: coder` starts on the model chosen for coders and asks at its effort;
+// a brief with no role, and a role left auto, keep their tier's.
+test('tiers: models chosen for the run reach each worker by the role its brief names', async ($, on) => {
+  mock.clock(on)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  const spawned: (string | undefined)[] = []
+  on('agent.spawn', (_$, e) => {
+    spawned.push((e as { model?: string }).model)
+    return { model: 'claude-opus-5-5', agentId: `a${spawned.length}` }
+  })
+  const efforts: unknown[] = []
+  on('turn.step', async function* (_$, e) {
+    efforts.push((e as { effort?: unknown }).effort)
+    return { turnId: 'turn', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  const out = await $.tool.call({ tool: 'mcp__superpowers-flow__progress', title: 'Ship it', total: 2, phase: 'delegate', profile: 'balanced', models: { coder: { model: 'sonnet', effort: 'medium' }, final: { model: 'fable', effort: 'high' } } } as never)
+  expect(String((out as { result?: string }).result)).toContain('Models for this run: coders Sonnet · medium, final review Fable · high; any other role is auto.')
+
+  const base = { tool_use_id: 't', provider: 'engine', parentModel: 'claude-opus-5-5', background: false, fork: false }
+  await $.agent.spawn({ ...base, prompt: 'Task 1.\nRole: coder\n', description: 'Task 1', subagentType: 'superpowers-flow:sp-light' } as never)
+  await $.agent.spawn({ ...base, tool_use_id: 't2', prompt: 'Review.\nRole: reviewer\n', description: 'Review 1', subagentType: 'superpowers-flow:sp-medium' } as never)
+  await $.agent.spawn({ ...base, tool_use_id: 't3', prompt: 'Final.\nRole: final\n', description: 'Final review', subagentType: 'superpowers-flow:sp-fable' } as never)
+  expect(spawned).toEqual(['sonnet', undefined, 'fable'])
+
+  for (const agentId of ['a1', 'a2', 'a3']) {
+    const stream = ($.turn.step as (e: unknown) => AsyncIterable<unknown>)({ turnId: 'turn', index: 0, model: 'm', effort: 'low', messageCount: 1, agentId })
+    for await (const _ of stream) void _
+  }
+  expect(efforts).toEqual(['medium', 'low', 'high'])
 })

@@ -4,9 +4,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, Flow, Panel, Phase, PlannedTask, SliceReport, SliceWorker } from '../types'
-import { MAX_CREW, askStop, bridgeRoot, currentBranch, logDirOf, logTail, pruneRuns, readRun, readRunSettings, runIdOf, segment, sliceRow, stopPath, workerRow, writeReport, writeRunSettings } from './bridge'
-import { CONFIG_DEFAULTS, PROFILE_NAMES, WORKTREE_LINE, effectiveOf, fieldOf, handoffWithProfiles, parseConfigArgs, settingsBlock, skillWithSettings, tierSettingsOf, withRunProfile } from './tiers'
+import type { AgentRun, Flow, Panel, Phase, PlannedTask, Role, RoleModels, SliceReport, SliceWorker } from '../types'
+import { MAX_CREW, askStop, bridgeRoot, currentBranch, logDirOf, logTail, pruneRuns, readRun, readRunModels, readRunSettings, runIdOf, segment, sliceRow, stopPath, workerRow, writeReport, writeRunSettings } from './bridge'
+import { CONFIG_DEFAULTS, PROFILE_NAMES, ROLE_LINE, WORKTREE_LINE, cleanRoleModels, effectiveOf, roleModelsText, fieldOf, handoffWithProfiles, parseConfigArgs, settingsBlock, skillWithSettings, tierSettingsOf, withRunProfile } from './tiers'
 import type { TierSettings } from './tiers'
 import { pushOrToast, sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
 
@@ -55,6 +55,7 @@ type ProgressInput = {
   run?: string
   slice?: string
   profile?: string
+  models?: unknown
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +146,7 @@ const merge = (prev: Flow | null, input: ProgressInput): Flow => {
     isFinished: input.finished === true,
     tasks,
     profile: PROFILE_NAMES.includes(input.profile as never) ? input.profile : base.profile,
+    models: input.models === undefined ? base.models : cleanRoleModels(input.models),
   }
 }
 
@@ -840,6 +842,7 @@ const HEARTBEAT_MS = 30_000
 // In a slice session: the run's settings as the session that started it wrote them. A
 // slice runs its own tasks in place, so it never starts slices of its own.
 let sliceOptions: Record<string, string> | null = null
+let sliceModels: RoleModels | undefined
 // `profile`: one chosen for this run at the plan's handoff.
 const optionsFor = (opts: Record<string, unknown>, profile?: string): Record<string, unknown> =>
   sliceOptions ? { ...opts, ...sliceOptions, runner: 'subagent', parallel: 'off' } : withRunProfile(opts, profile)
@@ -867,6 +870,7 @@ async function joinRun($: EngineInterface): Promise<void> {
   if (!run || !slice) return
   const root = await rootOf($)
   sliceOptions = root ? await readRunSettings($, root, run) : {}
+  sliceModels = root ? await readRunModels($, root, run) : undefined
   const at = await $.clock.now()
   await update($, bridge, b => (b?.run === run && b.slice === slice ? b : { run, slice, startedAt: at }))
 }
@@ -987,6 +991,16 @@ export const register: Register = (on, options) => {
           finished: { type: 'boolean', description: 'True once the flow is closed.' },
           run: { type: 'string', description: 'Only in a slice session: the run id its brief gives.' },
           profile: { type: 'string', enum: [...PROFILE_NAMES], description: 'The profile the user chose for this run at the plan handoff; the result carries its instructions.' },
+          models: {
+            type: 'object',
+            description: 'Models and efforts the user chose for this run at the plan handoff, per role; a role left out is auto. The result says how to mark the briefs.',
+            properties: Object.fromEntries(
+              ['coder', 'reviewer', 'final'].map(role => [
+                role,
+                { type: 'object', properties: { model: { type: 'string', enum: ['haiku', 'sonnet', 'opus', 'fable'] }, effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] } } },
+              ]),
+            ),
+          },
           slice: { type: 'string', description: 'Only in a slice session: the slice name its brief gives. With run, this session reports to the session that started it.' },
           tasks: {
             type: 'array',
@@ -1163,7 +1177,7 @@ export const register: Register = (on, options) => {
       next = await update($, flow, p => (p ? { ...p, run: id } : p))
       // Every slice session of the run reads these, so all follow this session's profile.
       const root = await rootOf($)
-      if (root) await writeRunSettings($, root, id, effective).catch(() => undefined)
+      if (root) await writeRunSettings($, root, id, effective, next?.models).catch(() => undefined)
     }
     if (await read($, bridge)) await syncSlice($, true)
     if (next && input.tasks?.length) await autoOpen($, next.title)
@@ -1178,7 +1192,8 @@ export const register: Register = (on, options) => {
     // A profile chosen at the plan's handoff: its instructions, whenever the skill was loaded.
     const chosen = input.profile && next?.profile === input.profile ? settingsBlock(runOptions, tierSettings, tierModel) : ''
     const howTo = input.profile && next?.profile === input.profile ? `\n\nProfile ${input.profile} for this run.${chosen ? '\n\n' + chosen : ' Superpowers runs as it ships.'}` : ''
-    return { result: `ok: ${label(next ?? blank())}${where}${howTo}` }
+    const models = input.models !== undefined && next?.models ? `\n\n${roleModelsText(next.models)}` : ''
+    return { result: `ok: ${label(next ?? blank())}${where}${howTo}${models}` }
   })
 
   // A worker's own progress: the call runs in the worker's loop, so agentId names it.
@@ -1218,7 +1233,10 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const isUnbriefed = !e.prompt.includes(STEP_TOOL)
     // A tier's model from the settings replaces the agent file's; its effort is set per request below.
-    const model = e.fork ? undefined : tierSettings[tierOf(e.subagentType)]?.model
+    // A role the brief names takes the model and effort chosen for it at the plan's handoff.
+    const role = e.fork ? undefined : (ROLE_LINE.exec(e.prompt)?.[1] as Role | undefined)
+    const chosen = role ? (sliceModels ?? (await read($, flow))?.models)?.[role] : undefined
+    const model = e.fork ? undefined : (chosen?.model ?? tierSettings[tierOf(e.subagentType)]?.model)
     // A brief for a slice in its own worktree names it: the worker starts there.
     const tree = e.cwd || e.fork || e.isTeammate ? undefined : WORKTREE_LINE.exec(e.prompt)?.[1]
     const cwd = tree && (await $.fs.stat(tree).catch(() => null))?.kind === 'dir' ? tree : undefined
@@ -1247,6 +1265,7 @@ export const register: Register = (on, options) => {
         costUsd: 0,
         steps: 0,
         round,
+        ...(chosen?.effort ? { roleEffort: chosen.effort } : {}),
       }
       return [...list.filter(a => a.id !== run.id), run].slice(-200)
     })
@@ -1266,7 +1285,7 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e0, next) {
     // An sp-* worker's request goes out at the effort the settings give its tier.
     const run = e0.agentId ? (await read($, agents)).find(a => a.agentId === e0.agentId) : undefined
-    const effort = run ? tierSettings[tierOf(run.type)]?.effort : undefined
+    const effort = run ? (run.roleEffort ?? tierSettings[tierOf(run.type)]?.effort) : undefined
     const e = effort && e0.effort !== undefined ? { ...e0, effort } : e0
     const result = yield* sessionStep($, e, next as never)
     const agentId = e.agentId

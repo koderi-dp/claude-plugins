@@ -18,7 +18,12 @@ export type Flow = {
   run?: string
   /** A profile chosen for this run at the plan's handoff, over the saved one. */
   profile?: string
+  /** Models and efforts chosen for this run's roles at the handoff; a role left out is auto. */
+  models?: RoleModels
 }
+
+export type Role = 'coder' | 'reviewer' | 'final'
+export type RoleModels = Partial<Record<Role, { model?: string; effort?: string }>>
 
 export type AgentStatus = 'running' | 'done' | 'failed'
 
@@ -38,6 +43,8 @@ export type AgentRun = {
   costUsd: number
   steps: number
   round: number
+  /** The effort its role was given for this run, over its tier's. */
+  roleEffort?: string
   /** Self-reported by the worker through the `step` tool. */
   stepDone?: number
   stepTotal?: number
