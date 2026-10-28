@@ -5,7 +5,7 @@ Live status for [superpowers](https://github.com/obra/superpowers) plan runs, ad
 - **Progress bar** above the prompt: the plan's name, phase, accepted tasks out of planned, and a crew button that opens the panel.
 - **Session row** beneath it, from the first turn on: turn number, output speed of the last response, cost of the last turn and of the session, a countdown of the 1-hour prompt cache, and context fill. The row gets an amber frame 20 minutes before the cache expires and a red one at 10, and a notification (or a toast) at 10 and 5 minutes. `×` hides it for the session; `/flow-session` shows or hides it, `/flow-session demo <minutes>` previews the warning. Drawn by the same mod as the progress bar, so the two never cover each other.
 - **On the phone**: a device attached over Remote Control sees the conversation, not the bar or the panel, so three things carry the run there. The skill writes one status line per accepted task (`Tasks 4/6 · next: Task 5 (sp-light)`); `/flow-status` answers with the panel as text, from any device; and with notifications on (`/flow-notify on`, or the `notify` setting), a push notification (or a toast when it cannot be delivered) at each accepted task, a failed worker and the finish. Pushes reach the phone when **Push when Claude decides** is on in `/config`.
-- **Agents panel** (`/flow-agents` toggles it; `/flow-agents open` brings it forward): running, finished and planned subagents with model, effort, their own step progress, context, estimated cost and time. Every subagent brief gets a one-line request to report its steps, so superpowers' implementers and reviewers draw a progress bar of their own instead of a grey context bar.
+- **Agents panel** (`/flow-agents` toggles it; `/flow-agents open` brings it forward): running, finished and planned subagents with model, effort, their own step progress, context, estimated cost and time. On the desktop it draws every running agent, the latest 8 finished (Show more: 24) and the next 8 planned, and counts the rest, so a long run keeps drawing; `/flow-status` lists all of them. Every subagent brief gets a one-line request to report its steps, so superpowers' implementers and reviewers draw a progress bar of their own instead of a grey context bar.
 - **Five tiered workers** that superpowers dispatches in place of `general-purpose` plus a model. The skill maps superpowers' Model Selection onto them:
 
 | Superpowers says | Worker | Model / effort |
@@ -21,6 +21,8 @@ Each tier draws its own crab in the panel. A plan task may name a tier (`tier: s
 Cost is a rough estimate from token counts and a per-model price table (`PRICES` in `hooks/register.tsx`), not a bill.
 
 ## Install
+
+Needs Claude Code v2.1.287 or later, for mods; `claude --version` shows yours and `claude update` updates it. Older versions refuse the manifest.
 
 At the prompt of a terminal session:
 

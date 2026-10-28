@@ -14,6 +14,7 @@ const agents = atom({ plugin: 'superpowers-flow', key: 'agents' } as const, [])
 const panel = atom({ plugin: 'superpowers-flow', key: 'panel' } as const, {
   isCompact: false,
   isDoneCollapsed: false,
+  isMoreShown: false,
   autoOpenedFor: '',
 })
 const now = atom({ plugin: 'superpowers-flow', key: 'now' } as const, 0)
@@ -83,6 +84,8 @@ const STRINGS = {
     review: 'Review',
     busy: 'running',
     accepted: 'accepted',
+    showMore: 'Show more',
+    showFewer: 'Show fewer',
     ctx: 'ctx',
     tier: { light: 'light', medium: 'medium', careful: 'careful', heavy: 'heavy', fable: 'fable', other: 'other' },
     effort: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
@@ -115,6 +118,8 @@ const STRINGS = {
     review: 'Ревью',
     busy: 'в работе',
     accepted: 'принято',
+    showMore: 'Показать ещё',
+    showFewer: 'Свернуть',
     ctx: 'ctx',
     tier: { light: 'light', medium: 'medium', careful: 'careful', heavy: 'heavy', fable: 'fable', other: 'other' },
     effort: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
@@ -147,6 +152,8 @@ const STRINGS = {
     review: 'בדיקה',
     busy: 'בעבודה',
     accepted: 'התקבלו',
+    showMore: 'הצג עוד',
+    showFewer: 'הצג פחות',
     ctx: 'הקשר',
     tier: { light: 'קל', medium: 'בינוני', careful: 'זהיר', heavy: 'כבד', fable: 'פייבל', other: 'אחר' },
     effort: { low: 'נמוך', medium: 'בינוני', high: 'גבוה', xhigh: 'גבוה מאוד', max: 'מקסימלי' },
@@ -516,6 +523,13 @@ const LINE_H = 24
 // The engine refuses an Svg taller than 4096px, so a long grid is stacked from
 // tiles of at most this height; a multiple of GRID_STEP keeps the dots aligned.
 const GRID_TILE = 4096
+// Rows the desktop pane draws: every row is an Svg of a few thousand characters, and the
+// app stops drawing a pane whose tree grows past a few hundred thousand, as a long run's
+// did when the session was opened again. Running rows are always drawn; finished rows
+// show the latest few, or more on request, and the rest are counted.
+const ROWS_DONE = 8
+const ROWS_DONE_MORE = 24
+const ROWS_PLANNED = 8
 const gridTiles = (H: number) => Array.from({ length: Math.ceil(H / GRID_TILE) }, (_, i) => Math.min(GRID_TILE, H - i * GRID_TILE))
 const gridSvg = (W: number, H: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
 <style>.d{fill:#d9d8d4}@media (prefers-color-scheme: dark){.d{fill:#3a3a38}}</style>
@@ -639,16 +653,24 @@ const CRAB_SCALE = 1.1
 // legs stay outside it and step on their own. `mirror` flips the crab inside its
 // own box (x .. x + CRAB_BOX * scale) so it faces left.
 const crab = (x: number, y: number, costume: string, dim = false, isWalking = false, scale = CRAB_SCALE, mirror = false): string => {
-  const groups = new Map<string, string[]>([['bd', []]])
+  // A pixel that continues the previous one in its group (same row, height and color)
+  // widens that rect instead of adding one: a costume is drawn row by row, so this
+  // keeps the paint order and cuts the markup several times over.
+  type Px = { x: number; y: number; w: number; h: number; c: string }
+  const groups = new Map<string, Px[]>([['bd', []]])
   const f: Fill = (cx, cy, w, h, c, cls = 'bd') => {
     if (!groups.has(cls)) groups.set(cls, [])
-    groups.get(cls)?.push(`<rect x="${cx}" y="${cy}" width="${w}" height="${h}" fill="${c}"/>`)
+    const list = groups.get(cls) ?? []
+    const last = list[list.length - 1]
+    if (last && last.y === cy && last.h === h && last.c === c && last.x + last.w === cx) last.w += w
+    else list.push({ x: cx, y: cy, w, h, c })
   }
   const draw = COSTUMES[costume] ?? ((g: Fill) => crabBody(g))
   draw(f, colorOf(costume))
-  const group = (cls: string) => `<g class="${cls}">${(groups.get(cls) ?? []).join('')}</g>`
+  const rects = (cls: string) => (groups.get(cls) ?? []).map(r => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="${r.c}"/>`).join('')
+  const group = (cls: string) => `<g class="${cls}">${rects(cls)}</g>`
   const props = [...groups.keys()].filter(k => k !== 'bd' && k !== 'la' && k !== 'lb')
-  const body = `<g class="bd">${(groups.get('bd') ?? []).join('')}${props.map(group).join('')}</g>`
+  const body = `<g class="bd">${rects('bd')}${props.map(group).join('')}</g>`
   const place = mirror ? `translate(${x + CRAB_BOX * scale},${y}) scale(${-scale},${scale})` : `translate(${x},${y}) scale(${scale})`
   return `<g transform="${place}" opacity="${dim ? 0.45 : 1}" shape-rendering="crispEdges"><g class="c-${costume}${isWalking ? ' run' : ''}">${body}${group('la')}${group('lb')}</g></g>`
 }
@@ -682,8 +704,18 @@ const crabWidth = (scale: number): number => Math.round(CRAB_BOX * scale * 100) 
 const rowCrab = (W: number, x: number, y: number, costume: string, dim = false, isWalking = false): string =>
   crab(mx(W, x, crabWidth(CRAB_SCALE)), y, costume, dim, isWalking, CRAB_SCALE, isRtl())
 
+// Only the crab rules a drawing uses: the rows of a long run each carried every
+// costume's rules, and a pane past a few hundred thousand characters stops drawing.
+const crabCss = (body: string): string => {
+  const used = new Set([...body.matchAll(/class="c-([a-z]+)/g)].map(m => m[1]))
+  if (!used.size) return ''
+  return CRAB_CSS.split('\n')
+    .filter(line => !line.startsWith('.c-') || used.has(/^\.c-([a-z]+)/.exec(line)?.[1]))
+    .join('\n')
+}
+
 const svg = (W: number, H: number, body: string): string =>
-  `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${PANE_CSS}${CRAB_CSS}${body}</svg>`
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${PANE_CSS}${crabCss(body)}${body}</svg>`
 
 // The pane's own title already says "Agents": the header names the flow, if any.
 const headerSvg = (W: number, title: string, t: ReturnType<typeof totals>): string => {
@@ -1228,9 +1260,23 @@ export const register: Register = (on, options) => {
           </Box>
         )
       }
-      const shownDone = p.isDoneCollapsed ? 0 : finished.length
-      const lines = 1 + (isEmpty ? 1 : 0) + (running.length > 0 ? 1 : 0) + (finished.length > 0 ? 1 : 0) + (planned.length > 0 ? 1 : 0)
-      const gridH = headerHeight(title) + lines * LINE_H + (running.length + shownDone) * 66 + planned.length * 46
+      const doneRows = p.isDoneCollapsed ? [] : finished.slice(0, p.isMoreShown ? ROWS_DONE_MORE : ROWS_DONE)
+      const planRows = planned.slice(0, ROWS_PLANNED)
+      const doneHidden = p.isDoneCollapsed ? 0 : finished.length - doneRows.length
+      const planHidden = planned.length - planRows.length
+      // "Show more" while rows are held back below the larger limit; "Show fewer" once it is open.
+      const canMore = !p.isDoneCollapsed && !p.isMoreShown && finished.length > ROWS_DONE
+      const canFewer = !p.isDoneCollapsed && p.isMoreShown && finished.length > ROWS_DONE
+      const lines =
+        1 +
+        (isEmpty ? 1 : 0) +
+        (running.length > 0 ? 1 : 0) +
+        (finished.length > 0 ? 1 : 0) +
+        (planned.length > 0 ? 1 : 0) +
+        (canMore || canFewer ? 1 : 0) +
+        (doneHidden > 0 && !canMore ? 1 : 0) +
+        (planHidden > 0 ? 1 : 0)
+      const gridH = headerHeight(title) + lines * LINE_H + (running.length + doneRows.length) * 66 + planRows.length * 46
       return (
         <Box flexDirection="column">
           {/* The grid sizes the pane; the content is placed over it, as an
@@ -1247,14 +1293,19 @@ export const register: Register = (on, options) => {
               <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={66} />
             ))}
             {finished.length > 0 && toggleDone}
-            {!p.isDoneCollapsed &&
-              finished.map(a => (
-                <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isFinished}`} width={W} height={66} />
-              ))}
+            {doneRows.map(a => (
+              <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isFinished}`} width={W} height={66} />
+            ))}
+            {canMore && (
+              <Button key="more" label={`${s.showMore} · ${doneHidden}`} plain onPress={() => update($, panel, prev => ({ ...prev, isMoreShown: true }))} />
+            )}
+            {canFewer && <Button key="fewer" label={s.showFewer} plain onPress={() => update($, panel, prev => ({ ...prev, isMoreShown: false }))} />}
+            {doneHidden > 0 && !canMore && section('h-done-more', `+${doneHidden} · /flow-status`)}
             {planned.length > 0 && section('h-plan', `${s.planned} · ${planned.length}`)}
-            {planned.map(pl => (
+            {planRows.map(pl => (
               <Svg key={`plan-${pl.n}`} source={plannedSvg(W, pl)} alt={`${pl.n}. ${pl.title}: ${s.isPlanned}`} width={W} height={46} />
             ))}
+            {planHidden > 0 && section('h-plan-more', `+${planHidden} · /flow-status`)}
           </Box>
         </Box>
       )

@@ -43,6 +43,7 @@ export type AgentRun = {
 export type Panel = {
   isCompact: boolean
   isDoneCollapsed: boolean
+  isMoreShown: boolean
   autoOpenedFor: string
 }
 
