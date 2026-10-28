@@ -83,6 +83,8 @@ export const MODEL_PRESETS: Record<string, RoleModels> = {
 
 // What a call or a file says, kept only where it names a known model or effort.
 export const cleanRoleModels = (v: unknown): RoleModels | undefined => {
+  // A preset by name: `economy`, `strong`.
+  if (typeof v === 'string') return Object.hasOwn(MODEL_PRESETS, v.toLowerCase()) ? MODEL_PRESETS[v.toLowerCase()] : undefined
   if (!v || typeof v !== 'object') return undefined
   const out: RoleModels = {}
   for (const role of ROLE_NAMES) {
@@ -255,7 +257,7 @@ export const handoffWithProfiles = (text: string, saved: Record<string, unknown>
     `- **Strong** - ${describeRoleModels(MODEL_PRESETS.strong ?? {})}. For hard or risky code.`,
     'The user may answer in their own words instead ("coders sonnet medium, final fable"): take the model (haiku, sonnet, opus, fable) and effort (low, medium, high, xhigh, max) they name per role; a role they leave out stays auto. Recommend Auto unless the spec makes a case: Strong beside thorough for risky code, Economy beside fast for a mechanical plan.',
     '',
-    '**If a Subagent-driven profile is chosen:** before the first dispatch, call `mcp__superpowers-flow__progress` with `profile: "<balanced|fast|thorough>"` along with the plan\'s title, total, tasks and phase `delegate`, and, unless models are Auto, `models: { coder, reviewer, final }`, each `{ model, effort }` (a preset spelled out). Its result carries that profile\'s instructions and how to mark the briefs for the models; they win over the superpowers-flow skill\'s settings section if it was loaded before. Then use superpowers:subagent-driven-development, as the plan says.',
+    '**If a Subagent-driven profile is chosen:** before the first dispatch, call `mcp__superpowers-flow__progress` with `profile: "<balanced|fast|thorough>"` along with the plan\'s title, total, tasks and phase `delegate`, and, unless models are Auto, `models`: `\"economy\"`, `\"strong\"`, or `{ coder, reviewer, final }` with each `{ model, effort }`. Its result carries that profile\'s instructions and how to mark the briefs for the models; they win over the superpowers-flow skill\'s settings section if it was loaded before. Then use superpowers:subagent-driven-development, as the plan says.',
   ].join('\n')
   const line = /^- \*\*Subagent-driven\*\*.*$/m
   if (!line.test(text)) return `${text}\n\n${rules}`

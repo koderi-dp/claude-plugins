@@ -161,12 +161,14 @@ test('tiers: the handoff asks for models per role, Auto recommended, with the pr
   expect(text).toContain('- **Auto (Recommended)** - the `sp-*` tier table picks per task')
   expect(text).toContain('- **Economy** - coders Sonnet · medium, reviewers Sonnet · high, final review Opus · high.')
   expect(text).toContain('- **Strong** - coders Opus · high, reviewers Opus · high, final review Fable · high.')
-  expect(text).toContain('`models: { coder, reviewer, final }`')
+  expect(text).toContain('`models`: `"economy"`, `"strong"`, or `{ coder, reviewer, final }`')
 })
 
 test('tiers: role models keep only known models and efforts', () => {
   expect(cleanRoleModels({ coder: { model: 'sonnet', effort: 'medium' }, reviewer: { model: 'gpt-9' }, final: 'fable', other: { model: 'opus' } })).toEqual({ coder: { model: 'sonnet', effort: 'medium' } })
   expect(cleanRoleModels({ reviewer: { model: 'gpt-9', effort: 'huge' } })).toBeUndefined()
+  expect(cleanRoleModels('Economy')).toEqual({ coder: { model: 'sonnet', effort: 'medium' }, reviewer: { model: 'sonnet', effort: 'high' }, final: { model: 'opus', effort: 'high' } })
+  expect(cleanRoleModels('cheap')).toBeUndefined()
 })
 
 // A brief marked `Role: coder` starts on the model chosen for coders and asks at its effort;

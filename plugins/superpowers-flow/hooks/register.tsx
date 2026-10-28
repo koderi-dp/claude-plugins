@@ -992,14 +992,13 @@ export const register: Register = (on, options) => {
           run: { type: 'string', description: 'Only in a slice session: the run id its brief gives.' },
           profile: { type: 'string', enum: [...PROFILE_NAMES], description: 'The profile the user chose for this run at the plan handoff; the result carries its instructions.' },
           models: {
-            type: 'object',
-            description: 'Models and efforts the user chose for this run at the plan handoff, per role; a role left out is auto. The result says how to mark the briefs.',
-            properties: Object.fromEntries(
+            description: 'Models and efforts the user chose for this run: a preset (`economy`, `strong`) or per role, a role left out auto. The result says how to mark the briefs.',
+            anyOf: [{ type: 'string', enum: ['economy', 'strong'] }, { type: 'object', properties: Object.fromEntries(
               ['coder', 'reviewer', 'final'].map(role => [
                 role,
                 { type: 'object', properties: { model: { type: 'string', enum: ['haiku', 'sonnet', 'opus', 'fable'] }, effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] } } },
               ]),
-            ),
+            ) }],
           },
           slice: { type: 'string', description: 'Only in a slice session: the slice name its brief gives. With run, this session reports to the session that started it.' },
           tasks: {
