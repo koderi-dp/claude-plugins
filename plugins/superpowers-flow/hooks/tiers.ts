@@ -23,45 +23,131 @@ export const tierSettingsOf = (options: Record<string, unknown>): TierSettings =
     }),
   )
 
-// How each task is gated: `each` keeps superpowers' spec review then quality review per
-// task; the others trade per-task review for speed and lean on the final review.
-const REVIEW_MODES: Record<string, string[]> = {
-  combined: [
-    'Task reviews are combined: after each implementer reports DONE, dispatch **one** reviewer that checks spec compliance and code quality in a single pass (both templates\' checklists in one brief), instead of the spec reviewer followed by the quality reviewer. Its fix rounds and re-review work as superpowers says.',
-  ],
-  final: [
-    'Task reviews are off for this run: after each implementer reports DONE, check its tests pass and its self-review raised nothing open, mark the task accepted and dispatch the next one. No spec or quality reviewer runs per task.',
-    'The final whole-branch review still runs, and runs against the plan as the spec: it checks every task\'s requirements as well as code quality. Its findings go to one fixer and a re-review, as superpowers says. A task that comes back BLOCKED or DONE_WITH_CONCERNS still gets its usual handling.',
-  ],
-}
-
 const ROLES: readonly [key: string, who: string][] = [
   ['coderTier', 'Coders (implementers, and fixers on a return round)'],
   ['reviewerTier', 'Task reviewers and re-reviewers'],
   ['finalReviewTier', 'The final whole-branch review'],
 ]
 
-// The skill's text plus what the user chose: which tier each role runs on, and what
-// each tier runs on (`describe` gives "Sonnet · medium"). Inserted before section 2;
-// unchanged when every setting is at its default.
+// Speed profiles: each knob below defaults to `profile`, which follows these; any other
+// value the user sets wins. `thorough` is superpowers as it ships.
+export const PROFILES = {
+  thorough: { taskReview: 'each', parallel: 'off', batchTasks: 'off', reReview: 'always', testScope: 'full', runner: 'subagent' },
+  balanced: { taskReview: 'combined', parallel: 'independent', batchTasks: 'small', reReview: 'self', testScope: 'targeted', runner: 'worktree', finalReviewTier: 'careful' },
+  fast: { taskReview: 'final', parallel: 'independent', batchTasks: 'small', reReview: 'self', testScope: 'targeted', runner: 'worktree', reviewerTier: 'light', finalReviewTier: 'careful' },
+} as const satisfies Record<string, Record<string, string>>
+export type ProfileName = keyof typeof PROFILES
+
+const KNOBS: Record<string, readonly string[]> = {
+  taskReview: ['each', 'combined', 'final'],
+  parallel: ['off', 'independent'],
+  batchTasks: ['off', 'small'],
+  reReview: ['always', 'self'],
+  testScope: ['full', 'targeted'],
+  runner: ['subagent', 'worktree', 'session'],
+}
+
+const profileOf = (options: Record<string, unknown>): ProfileName =>
+  typeof options.profile === 'string' && Object.hasOwn(PROFILES, options.profile) ? (options.profile as ProfileName) : 'thorough'
+
+// What each knob and role resolves to: the user's value when it is one the knob takes,
+// else the profile's. A role left at `auto` takes the profile's tier, if it names one.
+export const effectiveOf = (options: Record<string, unknown>): Record<string, string> => {
+  const profile: Record<string, string> = PROFILES[profileOf(options)]
+  const out: Record<string, string> = {}
+  for (const [knob, values] of Object.entries(KNOBS)) {
+    const own = options[knob]
+    out[knob] = typeof own === 'string' && values.includes(own) ? own : (profile[knob] ?? values[0] ?? '')
+  }
+  for (const [role] of ROLES) {
+    const own = options[role]
+    const tier = typeof own === 'string' && TIER_NAMES.includes(own as never) ? own : profile[role]
+    if (tier) out[role] = tier
+  }
+  return out
+}
+
+// The brief line the mod reads to start a worker in its slice's worktree.
+export const WORKTREE_LINE = /^Worktree: (\S.*?)\s*$/m
+
+// The skill's words for each knob's value; `thorough`'s values add nothing.
+const KNOB_TEXT: Record<string, Record<string, (e: Record<string, string>) => string[]>> = {
+  taskReview: {
+    combined: () => [
+      "**Task reviews are combined.** After each implementer reports DONE, dispatch **one** reviewer that checks spec compliance and code quality in a single pass (both templates' checklists in one brief), instead of the spec reviewer followed by the quality reviewer. Its fix rounds and re-review work as superpowers says.",
+    ],
+    final: () => [
+      '**Task reviews are off for this run.** After each implementer reports DONE, check its tests pass and its self-review raised nothing open, mark the task accepted and dispatch the next one. No spec or quality reviewer runs per task.',
+      "The final whole-branch review still runs, and runs against the plan as the spec: it checks every task's requirements as well as code quality. Its findings go to one fixer and a re-review, as superpowers says. A task that comes back BLOCKED or DONE_WITH_CONCERNS still gets its usual handling.",
+    ],
+  },
+  parallel: {
+    independent: e => [
+      e.runner === 'subagent'
+        ? "**Independent tasks run at once.** A task is ready when every task in its `after` list is accepted. Dispatch all ready tasks in one message, in the background, as long as the files their task texts name do not overlap: a task that shares a file with a running one waits for it. Review each as it reports; accept them in any order. This overrides superpowers' rule of one implementer at a time, for tasks whose files are apart."
+        : '**Independent slices run at once**, each in its own worktree (below): a slice starts as soon as the slices it depends on are merged, whether or not its files overlap with another running slice. Overlaps are resolved at merge.',
+    ],
+  },
+  batchTasks: {
+    small: () => [
+      '**Small tasks are batched.** Consecutive tasks that are mechanical (the `sp-light` row), touch one or two files and depend only on each other go to one implementer in one brief: every task text in order, one commit per task. They are reviewed together and accepted together. Never batch a task that needs judgment, or that the table puts on `sp-careful` or above.',
+    ],
+  },
+  reReview: {
+    self: () => [
+      "**Small fixes are checked by you, not a re-review.** When every finding of a review is small and local (a rename, a missing check, a typo, a test assertion), read the fixer's diff yourself and accept when it answers each finding. Anything larger, and any spec gap, still gets a re-review.",
+    ],
+  },
+  testScope: {
+    targeted: () => [
+      "**Targeted tests per task.** Tell each implementer and fixer to run only the tests for the code it touched (the task's test file, or its package's tests), not the whole suite. The full suite runs once before the final review; its failures go to a fixer.",
+    ],
+  },
+  runner: {
+    worktree: () => [
+      '**Slices run in worktrees.** Before the first dispatch, group the tasks into slices: a slice is a chain of tasks each depending on the one before; a small task that depends on nothing may join a neighbouring slice. For each slice, from the feature branch: `git worktree add ../<repo folder>-wt-<slice> -b <feature branch>-<slice>`. Put the line `Worktree: <absolute path of that worktree>` on a line of its own in every implementer, reviewer and fixer brief for the slice: the plugin starts that worker in the worktree.',
+      'Slices whose dependencies are merged run at the same time; tasks inside a slice run in order. When a slice\'s last task is accepted, merge its branch into the feature branch (`git merge --no-ff`; resolve conflicts yourself, or with an `sp-careful` fixer when they touch logic), then `git worktree remove` it and delete its branch. The final review runs on the feature branch once every slice is merged.',
+    ],
+    session: () => [
+      '**Slices run in their own Claude Code sessions.** Group the tasks into slices and make one worktree and branch per slice: a slice is a chain of tasks each depending on the one before; from the feature branch, `git worktree add ../<repo folder>-wt-<slice> -b <feature branch>-<slice>`. The first `progress` call\'s result names the run id and the bridge folder.',
+      'For each slice whose dependencies are merged, start a headless session in its worktree, in the background (Bash with `run_in_background`):',
+      '```\ncd <worktree> && claude -p "<slice brief>" --permission-mode <mode> --output-format json > <bridge folder>/<slice>.log 2>&1\n```',
+      'A headless session cannot ask for permission. `<mode>` is this session\'s own mode when it is `acceptEdits`, `auto`, `dontAsk` or `bypassPermissions`; otherwise ask the user once which mode the slice sessions may run in before starting any. The slice brief:',
+      '> You run slice "<slice>" of the plan <plan file> (run <run id>), in this worktree, on branch <slice branch>. Implement only tasks <numbers and titles>, with superpowers subagent-driven-development and the superpowers-flow skill, with runner `subagent`: start no other sessions and no worktrees. Before the first dispatch call `mcp__superpowers-flow__progress` with `run: "<run id>"`, `slice: "<slice>"`, the title, total, tasks and phase; then `done` as each task is accepted, and `finished: true` at the end. Commit on your branch; do not merge, push or switch branches. End with: tasks done, commits, test result.',
+      'The panel shows each slice from its own reports. When a slice\'s background command exits, read the end of its log, run the slice\'s tests on its branch, merge it into the feature branch (`git merge --no-ff`, then `git worktree remove` and delete its branch) and report its tasks as `done`. A slice that failed: read its log and finish its tasks yourself with workers whose briefs carry `Worktree: <its worktree>`. The final review runs on the feature branch once every slice is merged.',
+    ],
+  },
+}
+
+// The skill's text plus what the user chose: the profile's knobs, which tier each role
+// runs on, and what each tier runs on (`describe` gives "Sonnet · medium"). Inserted
+// before section 2; unchanged when every setting is at its default.
 export const skillWithSettings = (
   text: string,
   options: Record<string, unknown>,
   settings: TierSettings,
   describe: (tier: string) => string,
 ): string => {
+  const effective = effectiveOf(options)
+  const flow = Object.keys(KNOBS).flatMap(knob => KNOB_TEXT[knob]?.[effective[knob] ?? '']?.(effective) ?? [])
   const roles = ROLES.flatMap(([key, who]) => {
-    const tier = options[key]
-    return typeof tier === 'string' && TIER_NAMES.includes(tier as never) ? [`- ${who}: \`sp-${tier}\`.`] : []
+    const tier = effective[key]
+    return tier ? [`- ${who}: \`sp-${tier}\`.`] : []
   })
   const tiers = TIER_NAMES.flatMap(t => {
     const set = settings[t] ?? {}
     return set.model || set.effort ? [`- \`sp-${t}\` runs on ${describe(t)}.`] : []
   })
-  const review = typeof options.taskReview === 'string' ? (REVIEW_MODES[options.taskReview] ?? []) : []
-  if (!roles.length && !tiers.length && !review.length) return text
+  if (!flow.length && !roles.length && !tiers.length) return text
   const lines = ['## Settings from the user', '']
-  if (review.length) lines.push(...review.flatMap(r => [r, '']))
+  if (flow.length) {
+    const profile = profileOf(options)
+    lines.push(
+      `How this run goes (profile \`${profile}\`${profile === 'thorough' ? '' : ', chosen for speed'}). These change superpowers' flow where they say so; everything else stays as superpowers says. The user's words for a run win over them.`,
+      '',
+      ...flow.flatMap(f => [f, '']),
+    )
+  }
   if (roles.length)
     lines.push(
       'These roles have a fixed tier and win over the table and over a tier a plan task names. Escalation still applies: after BLOCKED, or a third fix round, re-dispatch one tier up.',
@@ -80,10 +166,11 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   language: 'auto',
   notify: 'off',
   autoOpen: 'tier',
+  profile: 'thorough',
+  ...Object.fromEntries(Object.keys(KNOBS).map(k => [k, 'profile'])),
   coderTier: 'auto',
   reviewerTier: 'auto',
   finalReviewTier: 'auto',
-  taskReview: 'each',
   ...Object.fromEntries(TIER_NAMES.flatMap(t => [[`${t}Model`, 'default'], [`${t}Effort`, 'default']])),
 }
 

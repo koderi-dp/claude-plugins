@@ -4,8 +4,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
-import { CONFIG_DEFAULTS, fieldOf, parseConfigArgs, skillWithSettings, tierSettingsOf } from './tiers'
+import type { AgentRun, Flow, Panel, Phase, PlannedTask, SliceReport } from '../types'
+import { bridgeRoot, currentBranch, pruneRuns, readRun, runIdOf, segment, sliceRow, writeReport } from './bridge'
+import { CONFIG_DEFAULTS, WORKTREE_LINE, effectiveOf, fieldOf, parseConfigArgs, skillWithSettings, tierSettingsOf } from './tiers'
 import type { TierSettings } from './tiers'
 import { pushOrToast, sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
 
@@ -20,6 +21,10 @@ const panel = atom({ plugin: 'superpowers-flow', key: 'panel' } as const, {
 const now = atom({ plugin: 'superpowers-flow', key: 'now' } as const, 0)
 // Milestone pushes on or off: the `notify` option at start, then `/flow-notify`.
 const notify = atom({ plugin: 'superpowers-flow', key: 'notify' } as const, false)
+// Slices running in their own sessions, as they last reported through the bridge.
+const slices = atom({ plugin: 'superpowers-flow', key: 'slices' } as const, [])
+// Set in a slice's own session: the run and slice it reports as.
+const bridge = atom({ plugin: 'superpowers-flow', key: 'bridge' } as const, null)
 
 const TOOL = 'mcp__superpowers-flow__progress'
 const STEP_TOOL = 'mcp__superpowers-flow__step'
@@ -47,6 +52,8 @@ type ProgressInput = {
   phase?: Phase
   finished?: boolean
   tasks?: { title?: string; tier?: string; after?: number[] }[]
+  run?: string
+  slice?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -499,9 +506,10 @@ const elapsed = (a: AgentRun, at: number): number => (a.endedAt ?? Math.max(at, 
 
 type Planned = PlannedTask & { n: number }
 
-const plannedOf = (f: Flow | null, list: AgentRun[]): Planned[] => {
+// `elsewhere`: task titles a slice session reported as its own, shown in that slice's row.
+const plannedOf = (f: Flow | null, list: AgentRun[], elsewhere: string[] = []): Planned[] => {
   if (!f || f.isFinished) return []
-  const started = new Set(list.map(a => norm(a.description)))
+  const started = new Set([...list.map(a => norm(a.description)), ...elsewhere.map(norm)])
   return (f.tasks ?? []).map((t, i) => ({ ...t, n: i + 1 })).filter(t => !started.has(norm(t.title)))
 }
 
@@ -825,10 +833,10 @@ const STATUS_GLYPH: Record<string, string> = { running: '●', done: '✓', fail
 
 // The panel as text, for `/flow-status`: a phone or browser attached over Remote
 // Control sees the conversation only, so this is how the panel reaches it.
-const statusText = (f: Flow | null, list: AgentRun[], at: number): string => {
+const statusText = (f: Flow | null, list: AgentRun[], at: number, elsewhere: string[] = []): string => {
   const s = tr()
   const t = totals(list, at)
-  const planned = plannedOf(f, list)
+  const planned = plannedOf(f, list, elsewhere)
   const head = f
     ? `${f.title} · ${label(f, fallbackDoneOf(list))}${f.total || f.isFinished ? ` · ${Math.round(ratio(f) * 100)}%` : ''}`
     : s.empty
@@ -868,11 +876,101 @@ async function togglePane($: EngineInterface): Promise<boolean> {
   return true
 }
 
+// A slice whose session has written nothing this long, unfinished, is drawn as failed:
+// a live session rewrites its file at least every 30 seconds.
+const SLICE_STALE_MS = 5 * 60 * 1000
+
+// The panel's rows: the session's own agents, then one row per slice session.
+async function crewOf($: EngineInterface, at: number): Promise<{ list: AgentRun[]; elsewhere: string[] }> {
+  const own = await read($, agents)
+  const reports: SliceReport[] = await read($, slices)
+  return {
+    list: [...own, ...reports.map(r => sliceRow(r, !r.isFinished && at - r.updatedAt > SLICE_STALE_MS))],
+    elsewhere: reports.flatMap(r => r.tasks),
+  }
+}
+
 async function autoOpen($: EngineInterface, key: string): Promise<void> {
   const p = await read($, panel)
   if (p.autoOpenedFor === key) return
   await update($, panel, prev => ({ ...prev, autoOpenedFor: key }))
   void $.ui.open({ id: PANE, title: tr().pane })
+}
+
+// --- the slice bridge (hooks/bridge.ts): the module's own memory of it, which a reload
+// starts over; the atoms keep what must survive one.
+
+// `<git common dir>/superpowers-flow`, looked up once; outside a repository null, asked
+// again after a minute (the session may have run `git init`).
+let rootFound: string | undefined
+let rootMissedAt = -Infinity
+async function rootOf($: EngineInterface): Promise<string | null> {
+  if (rootFound) return rootFound
+  const at = await $.clock.now()
+  if (at - rootMissedAt < 60_000) return null
+  const root = await bridgeRoot($)
+  if (root) rootFound = root
+  else rootMissedAt = at
+  return root
+}
+// The parent's view: each slice file's mtime when last read.
+const seen = new Map<string, number>()
+// The slice session's own last write, so an unchanged report is rewritten only as a heartbeat.
+let lastReport = ''
+let lastWriteAt = 0
+const HEARTBEAT_MS = 30_000
+
+// In a slice's own session: rewrites its report when it changed, when `force` asks (a
+// `progress` call, so a finish lands before the headless session exits), or as a heartbeat.
+async function syncSlice($: EngineInterface, force: boolean): Promise<void> {
+  const b = await read($, bridge)
+  const root = b ? await rootOf($) : null
+  if (!b || !root) return
+  const f = await read($, flow)
+  const list = await read($, agents)
+  const usage = await $.session.usage().catch(() => null)
+  const runningNow = list.filter(a => a.status === 'running')
+  const busy = runningNow[runningNow.length - 1]
+  const report: Omit<SliceReport, 'updatedAt'> = {
+    run: b.run,
+    slice: b.slice,
+    title: f?.title ?? b.slice,
+    done: f?.done ?? 0,
+    total: f?.total ?? 0,
+    phase: f?.phase ?? 'plan',
+    isFinished: f?.isFinished ?? false,
+    note: busy ? clip(`${busy.description}${busy.stepNote ? ' · ' + busy.stepNote : ''}`, 120) : undefined,
+    model: await $.session.model().catch(() => ''),
+    costUsd: usage?.cost?.usd ?? list.reduce((sum, a) => sum + a.costUsd, 0),
+    contextTokens: usage?.context.tokens ?? 0,
+    contextMax: usage?.context.window ?? 0,
+    workers: list.length,
+    running: runningNow.length,
+    startedAt: b.startedAt,
+    tasks: (f?.tasks ?? []).map(t => t.title),
+  }
+  const text = JSON.stringify(report)
+  const at = await $.clock.now()
+  if (!force && text === lastReport && at - lastWriteAt < HEARTBEAT_MS) return
+  await writeReport($, root, { ...report, updatedAt: at }).catch(() => undefined)
+  lastReport = text
+  lastWriteAt = at
+}
+
+// In the session that started the slices: reads the run's folder into `slices`.
+async function readSlices($: EngineInterface): Promise<void> {
+  const f = await read($, flow)
+  const prev = await read($, slices)
+  // While the flow is open, or a slice it started still runs.
+  if (!f?.run || (f.isFinished && !prev.some(r => !r.isFinished))) return
+  const root = await rootOf($)
+  if (!root) return
+  const next = await readRun($, root, f.run, seen, prev)
+  if (next) await update($, slices, () => next)
+  if ((next ?? (await read($, slices))).some(r => !r.isFinished)) {
+    const at = await $.clock.now()
+    await update($, now, () => at)
+  }
 }
 
 export const register: Register = (on, options) => {
@@ -883,6 +981,15 @@ export const register: Register = (on, options) => {
   sessionHooks(on)
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    // Old finished runs' slice folders go; not awaited, so the session starts at once.
+    void (async () => {
+      const root = await rootOf($)
+      if (root) await pruneRuns($, root, await $.clock.now())
+    })().catch(() => undefined)
+    // The slice bridge: a slice session writes its report, the session that started it reads them.
+    $.clock.every(2000, () => {
+      void (async () => ((await read($, bridge)) ? syncSlice($, false) : readSlices($)))().catch(() => undefined)
+    })
     lang = await detectLang($, opts.language)
     await sessionStart($)
     await update($, notify, () => opts.notify === 'milestones')
@@ -904,6 +1011,8 @@ export const register: Register = (on, options) => {
           done: { type: 'integer', minimum: 0, description: 'Number of tasks accepted after review.' },
           phase: { type: 'string', enum: [...PHASES] },
           finished: { type: 'boolean', description: 'True once the flow is closed.' },
+          run: { type: 'string', description: 'Only in a slice session: the run id its brief gives.' },
+          slice: { type: 'string', description: 'Only in a slice session: the slice name its brief gives. With run, this session reports to the session that started it.' },
           tasks: {
             type: 'array',
             description:
@@ -1020,7 +1129,8 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'flow-status' }, async $ => {
     const at = await $.clock.now()
-    return { text: statusText(await read($, flow), await read($, agents), at) }
+    const { list, elsewhere } = await crewOf($, at)
+    return { text: statusText(await read($, flow), list, at, elsewhere) }
   })
 
   on('command.run', { command: 'flow-agents' }, async ($, e) => {
@@ -1041,18 +1151,38 @@ export const register: Register = (on, options) => {
     if (e.agentId) return { result: 'ignored: only the main session reports the flow' }
     const input = e as unknown as ProgressInput
     const prev = await read($, flow)
-    if (isNewFlow(prev, input) && input.title !== undefined) {
+    const run = segment(input.run)
+    const slice = segment(input.slice)
+    if (run && slice) {
+      // A slice session: it reports through the bridge from now on.
+      const at = await $.clock.now()
+      await update($, bridge, b => (b?.run === run && b.slice === slice ? b : { run, slice, startedAt: at }))
+    }
+    const isNew = isNewFlow(prev, input) && input.title !== undefined
+    if (isNew) {
       // A new flow starts with a clean list; agents still running stay.
       await update($, agents, list => list.filter(a => a.status === 'running'))
+      await update($, slices, () => [])
+      seen.clear()
     }
-    const next = await update($, flow, p => merge(p, input))
+    let next = await update($, flow, p => merge(p, input))
+    // Only slice sessions report under a run id, so only the session runner makes one.
+    const isSessionRunner = effectiveOf(opts).runner === 'session'
+    if (next && !next.run && isSessionRunner && !(await read($, bridge))) {
+      const id = runIdOf(await $.clock.now(), await currentBranch($), next.title)
+      next = await update($, flow, p => (p ? { ...p, run: id } : p))
+    }
+    if (await read($, bridge)) await syncSlice($, true)
     if (next && input.tasks?.length) await autoOpen($, next.title)
     if (next && (await read($, notify))) {
       // A task accepted, or the run closed: one line to the phone, or a toast.
       if (next.isFinished && !prev?.isFinished) void pushOrToast($, `${next.title}: ${tr().done.toLowerCase()}`, '✓')
       else if (prev && next.done > prev.done && !next.isFinished) void pushOrToast($, `${next.title}: ${next.done}/${next.total || '?'} ${tr().accepted}`, '✓')
     }
-    return { result: `ok: ${label(next ?? blank())}` }
+    // Slice sessions need the run id and the folder their logs go to; nobody else does.
+    const root = next?.run && isSessionRunner ? await rootOf($) : null
+    const where = root && next?.run ? ` · run ${next.run} · bridge folder ${root}/${next.run}` : ''
+    return { result: `ok: ${label(next ?? blank())}${where}` }
   })
 
   // A worker's own progress: the call runs in the worker's loop, so agentId names it.
@@ -1093,7 +1223,15 @@ export const register: Register = (on, options) => {
     const isUnbriefed = !e.prompt.includes(STEP_TOOL)
     // A tier's model from the settings replaces the agent file's; its effort is set per request below.
     const model = e.fork ? undefined : tierSettings[tierOf(e.subagentType)]?.model
-    const started = await next({ ...e, ...(isUnbriefed ? { prompt: e.prompt + STEP_BRIEF } : {}), ...(model ? { model } : {}) })
+    // A brief for a slice in its own worktree names it: the worker starts there.
+    const tree = e.cwd || e.fork || e.isTeammate ? undefined : WORKTREE_LINE.exec(e.prompt)?.[1]
+    const cwd = tree && (await $.fs.stat(tree).catch(() => null))?.kind === 'dir' ? tree : undefined
+    const started = await next({
+      ...e,
+      ...(isUnbriefed ? { prompt: e.prompt + STEP_BRIEF } : {}),
+      ...(model ? { model } : {}),
+      ...(cwd ? { cwd } : {}),
+    })
     if (started.deny !== undefined) return started
 
     const at = await $.clock.now()
@@ -1203,6 +1341,7 @@ export const register: Register = (on, options) => {
     }
     const result = await next(e)
     await sessionComplete($, e)
+    if (agentId && (await read($, bridge))) await syncSlice($, true).catch(() => undefined)
     return result
   })
 
@@ -1210,14 +1349,15 @@ export const register: Register = (on, options) => {
     const s = tr()
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const list = await read($, agents)
+    const ticked = await read($, now)
+    const { list, elsewhere } = await crewOf($, ticked)
     const f = await read($, flow)
     const p: Panel = await read($, panel)
-    const at = Math.max(await read($, now), ...list.map(a => a.startedAt), 0)
+    const at = Math.max(ticked, ...list.map(a => a.startedAt), 0)
 
     const running = list.filter(a => a.status === 'running').reverse()
     const finished = list.filter(a => a.status !== 'running').reverse()
-    const planned = plannedOf(f, list)
+    const planned = plannedOf(f, list, elsewhere)
     const t = totals(list, at)
     // The pane's title says "Agents"; inside, only the flow's own name.
     const title = f && !f.isFinished ? f.title : ''
@@ -1420,8 +1560,8 @@ export const register: Register = (on, options) => {
       </Box>
     )
     if (f === null) return below
-    const list = await read($, agents)
-    const crew = list.length + plannedOf(f, list).length
+    const { list, elsewhere } = await crewOf($, await read($, now))
+    const crew = list.length + plannedOf(f, list, elsewhere).length
     const isWorking = list.some(a => a.status === 'running')
     const text = label(f, fallbackDoneOf(list))
     const crewButton = (

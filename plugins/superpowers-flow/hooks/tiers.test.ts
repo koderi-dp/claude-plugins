@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { skillWithSettings, tierSettingsOf } from './tiers'
+import { CONFIG_DEFAULTS, effectiveOf, skillWithSettings, tierSettingsOf } from './tiers'
 
 const SKILL = '# superpowers-flow\n\n## 1. Tier instead of model\n\nthe table\n\n## 2. Progress bar\n\nreport it'
 const describe = (t: string) => `Model-of-${t}`
@@ -38,6 +38,38 @@ test('tiers: taskReview each changes nothing; combined and final go into the ski
   expect(text).toContain('Task reviews are off for this run')
   expect(text).toContain('The final whole-branch review still runs')
   expect(text.indexOf('## Settings from the user')).toBeLessThan(text.indexOf('## 2. Progress bar'))
+})
+
+test('tiers: profiles resolve every knob; a value the user set wins', () => {
+  expect(effectiveOf({})).toEqual({ taskReview: 'each', parallel: 'off', batchTasks: 'off', reReview: 'always', testScope: 'full', runner: 'subagent' })
+  expect(effectiveOf({ profile: 'fast' })).toMatchObject({ taskReview: 'final', runner: 'worktree', reviewerTier: 'light', finalReviewTier: 'careful' })
+  expect(effectiveOf({ profile: 'fast', taskReview: 'combined', reviewerTier: 'heavy', runner: 'session' })).toMatchObject({ taskReview: 'combined', reviewerTier: 'heavy', runner: 'session' })
+  // `profile` and unknown values follow the profile.
+  expect(effectiveOf({ profile: 'balanced', taskReview: 'profile', parallel: 'sideways' })).toMatchObject({ taskReview: 'combined', parallel: 'independent' })
+  expect(effectiveOf({ profile: 'nope' }).taskReview).toBe('each')
+})
+
+test('tiers: the fast profile puts every knob and its roles into the skill', () => {
+  const text = skillWithSettings(SKILL, { profile: 'fast' }, tierSettingsOf({}), describe)
+  for (const part of ['profile `fast`', 'Task reviews are off', 'Independent slices run at once', 'Small tasks are batched', 'Small fixes are checked by you', 'Targeted tests per task', 'Slices run in worktrees', '`Worktree: <absolute path of that worktree>`'])
+    expect(text).toContain(part)
+  expect(text).toContain('- Task reviewers and re-reviewers: `sp-light`.')
+  expect(text).toContain('- The final whole-branch review: `sp-careful`.')
+  expect(text.indexOf('## Settings from the user')).toBeLessThan(text.indexOf('## 2. Progress bar'))
+})
+
+test('tiers: parallel words follow the runner; session gets its launch line and brief', () => {
+  const inPlace = skillWithSettings(SKILL, { parallel: 'independent' }, tierSettingsOf({}), describe)
+  expect(inPlace).toContain('Independent tasks run at once')
+  expect(inPlace).not.toContain('worktree')
+  const session = skillWithSettings(SKILL, { profile: 'balanced', runner: 'session' }, tierSettingsOf({}), describe)
+  expect(session).toContain('claude -p "<slice brief>" --permission-mode <mode>')
+  expect(session).toContain('`run: "<run id>"`, `slice: "<slice>"`')
+  expect(session).not.toContain('Slices run in worktrees')
+})
+
+test('tiers: reset puts every new setting back to profile', () => {
+  expect(CONFIG_DEFAULTS).toMatchObject({ profile: 'thorough', taskReview: 'profile', parallel: 'profile', batchTasks: 'profile', reReview: 'profile', testScope: 'profile', runner: 'profile' })
 })
 
 // With every setting at its default the spawn goes out as the controller asked:

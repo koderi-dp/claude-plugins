@@ -1,7 +1,7 @@
 {
   "name": "superpowers-flow",
   "version": "0.5.0",
-  "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Per-task review (each, combined, final only), roles (coder, reviewer, final reviewer) and each tier's model and effort are settings. Adapted from savvy-flow, savvy-progress and session-band.",
+  "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Speed profiles (thorough, balanced, fast) over per-task review, parallel slices, batching and runners (subagent, worktree, headless session per slice, shown in the panel); roles (coder, reviewer, final reviewer) and each tier's model and effort are settings. Adapted from savvy-flow, savvy-progress and session-band.",
   "author": {
     "name": "Danijel Peric"
   },
@@ -39,15 +39,83 @@
         "any"
       ]
     },
+    "profile": {
+      "type": "string",
+      "title": "Speed profile",
+      "description": "thorough: superpowers as it ships; balanced: one reviewer per task, independent slices in parallel worktrees, small tasks batched, targeted tests; fast: as balanced with no per-task reviewers, only the final review. Each setting below left at profile follows it.",
+      "default": "thorough",
+      "options": [
+        "thorough",
+        "balanced",
+        "fast"
+      ]
+    },
     "taskReview": {
       "type": "string",
       "title": "Task reviews",
-      "description": "each: superpowers' spec review then quality review after every task; combined: one reviewer per task for both; final: no per-task reviewers, only the final whole-branch review (fastest).",
-      "default": "each",
+      "description": "each: spec review then quality review after every task; combined: one reviewer per task for both; final: no per-task reviewers, only the final whole-branch review. profile: as the speed profile says.",
+      "default": "profile",
       "options": [
+        "profile",
         "each",
         "combined",
         "final"
+      ]
+    },
+    "parallel": {
+      "type": "string",
+      "title": "Parallel tasks",
+      "description": "off: one task at a time; independent: tasks (or slices) whose dependencies are done run at once. profile: as the speed profile says.",
+      "default": "profile",
+      "options": [
+        "profile",
+        "off",
+        "independent"
+      ]
+    },
+    "batchTasks": {
+      "type": "string",
+      "title": "Batch small tasks",
+      "description": "off: one implementer per task; small: consecutive mechanical tasks go to one implementer. profile: as the speed profile says.",
+      "default": "profile",
+      "options": [
+        "profile",
+        "off",
+        "small"
+      ]
+    },
+    "reReview": {
+      "type": "string",
+      "title": "Re-review after fixes",
+      "description": "always: a reviewer checks every fix; self: Claude checks small, local fixes itself. profile: as the speed profile says.",
+      "default": "profile",
+      "options": [
+        "profile",
+        "always",
+        "self"
+      ]
+    },
+    "testScope": {
+      "type": "string",
+      "title": "Tests per task",
+      "description": "full: the whole suite after each task; targeted: each task's own tests, the full suite once before the final review. profile: as the speed profile says.",
+      "default": "profile",
+      "options": [
+        "profile",
+        "full",
+        "targeted"
+      ]
+    },
+    "runner": {
+      "type": "string",
+      "title": "Runner",
+      "description": "subagent: workers in this session, one folder; worktree: workers in this session, one git worktree and branch per slice, merged back; session: one headless Claude Code session per slice in its worktree, shown in the panel. profile: as the speed profile says (never session).",
+      "default": "profile",
+      "options": [
+        "profile",
+        "subagent",
+        "worktree",
+        "session"
       ]
     },
     "coderTier": {
@@ -67,7 +135,7 @@
     "reviewerTier": {
       "type": "string",
       "title": "Reviewer tier",
-      "description": "The worker that reviews each task and re-reviews its fixes. auto: scaled to the diff.",
+      "description": "The worker that reviews each task and re-reviews its fixes. auto: as the speed profile says (fast: light), else scaled to the diff.",
       "default": "auto",
       "options": [
         "auto",
@@ -81,7 +149,7 @@
     "finalReviewTier": {
       "type": "string",
       "title": "Final reviewer tier",
-      "description": "The worker for the whole-branch review at the end. auto: sp-fable.",
+      "description": "The worker for the whole-branch review at the end. auto: as the speed profile says (balanced and fast: careful), else sp-fable.",
       "default": "auto",
       "options": [
         "auto",

@@ -14,6 +14,8 @@ export type Flow = {
   phase: Phase
   isFinished: boolean
   tasks: PlannedTask[]
+  /** The run id slices report under, made by the first `progress` call with a title. */
+  run?: string
 }
 
 export type AgentStatus = 'running' | 'done' | 'failed'
@@ -40,6 +42,36 @@ export type AgentRun = {
   stepNote?: string
 }
 
+/** What a slice running in its own session last wrote to the bridge. */
+export type SliceReport = {
+  run: string
+  slice: string
+  title: string
+  done: number
+  total: number
+  phase: string
+  isFinished: boolean
+  note?: string
+  model: string
+  costUsd: number
+  contextTokens: number
+  contextMax: number
+  /** Workers the slice session started, and how many run now. */
+  workers: number
+  running: number
+  startedAt: number
+  updatedAt: number
+  /** The titles of the slice's tasks, so the parent does not list them as planned. */
+  tasks: string[]
+}
+
+/** Set in a slice's own session by `progress({ run, slice })`: where it reports. */
+export type Bridge = {
+  run: string
+  slice: string
+  startedAt: number
+}
+
 export type Panel = {
   isCompact: boolean
   isDoneCollapsed: boolean
@@ -60,6 +92,8 @@ declare module 'claude-code' {
       isHidden: boolean
       isBusy: boolean
       warned: number
+      slices: SliceReport[]
+      bridge: Bridge | null
     }
   }
 }
