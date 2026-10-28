@@ -450,6 +450,7 @@ const gridSvg = (W: number, H: number) => `<svg xmlns="http://www.w3.org/2000/sv
 </svg>`
 
 const PANE_CSS = `<style>
+text{font-family:${FONT}}
 .t{fill:#1a1a19}.s{fill:#56554f}.m{fill:#83827c}.k{fill:#e6e5e0}.ln{stroke:#e3e2dd}.tile{fill:#f1f0eb}.mk{stroke:#83827c}
 @media (prefers-color-scheme: dark){.t{fill:#f2f1ee}.s{fill:#bebdb7}.m{fill:#93928c}.k{fill:#353533}.ln{stroke:#323230}.tile{fill:#292927}.mk{stroke:#93928c}}
 .live{animation:p 1.6s ease-in-out infinite}@keyframes p{50%{opacity:.3}}
@@ -601,7 +602,7 @@ const statusBadge = (W: number, y: number, status: string, tierColor: string): s
   const ink = color ? `fill="${color}"` : 'class="m"'
   return `<rect x="${x}" y="${y}" width="${w}" height="22" rx="11" ${fill}/>
 ${dot ? `<circle class="live" cx="${x + 13}" cy="${y + 11}" r="4" fill="${color}"/>` : ''}
-<text x="${x + 9 + dot}" y="${y + 15.5}" font-family="${FONT}" font-size="12" font-weight="600" ${ink}>${xml(word)}</text>`
+<text x="${x + 9 + dot}" y="${y + 15.5}" font-size="12" font-weight="600" ${ink}>${xml(word)}</text>`
 }
 
 // Text that starts at x, and text that ends at x.
@@ -614,7 +615,8 @@ const rowCrab = (x: number, y: number, costume: string, dim = false, isWalking =
 // Only the crab rules a drawing uses: the rows of a long run each carried every
 // costume's rules, and a pane past a few hundred thousand characters stops drawing.
 const crabCss = (body: string): string => {
-  const used = new Set([...body.matchAll(/class="c-([a-z]+)/g)].map(m => m[1]))
+  // Only a walking crab moves: rows of finished and planned work carry no motion rules.
+  const used = new Set([...body.matchAll(/class="c-([a-z]+) run"/g)].map(m => m[1]))
   if (!used.size) return ''
   return CRAB_CSS.split('\n')
     .filter(line => !line.startsWith('.c-') || used.has(/^\.c-([a-z]+)/.exec(line)?.[1]))
@@ -632,12 +634,12 @@ const headerSvg = (W: number, title: string, t: ReturnType<typeof totals>): stri
   const top = title ? 32 : 0
   const tile = (i: number, k: string, v: string) =>
     `<rect class="tile" x="${i * (tw + gap)}" y="${top}" width="${tw}" height="56" rx="10"/>
-<text class="s" ${startText(i * (tw + gap) + 12, top + 21)} font-family="${FONT}" font-size="12.5">${k}</text>
-<text class="t" ${startText(i * (tw + gap) + 12, top + 44)} font-family="${FONT}" font-size="19" font-weight="650" font-variant-numeric="tabular-nums">${v}</text>`
+<text class="s" ${startText(i * (tw + gap) + 12, top + 21)} font-size="12.5">${k}</text>
+<text class="t" ${startText(i * (tw + gap) + 12, top + 44)} font-size="19" font-weight="650" font-variant-numeric="tabular-nums">${v}</text>`
   return svg(
     W,
     headerHeight(title),
-    `${title ? `<text class="t" ${startText(0, 19)} font-family="${FONT}" font-size="17" font-weight="650">${xml(fitText(title, 17, W))}</text>` : ''}
+    `${title ? `<text class="t" ${startText(0, 19)} font-size="17" font-weight="650">${xml(fitText(title, 17, W))}</text>` : ''}
 ${tile(0, s.cost, '≈' + fmtCost(t.cost))}${tile(1, s.tokens, fmtTokens(t.tokens))}${tile(2, s.time, fmtTime(t.time))}`,
   )
 }
@@ -683,13 +685,13 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
     W,
     ROW_H,
     `${rowCrab(0, 26, costumeOf(a.type), false, a.status === 'running')}
-<text class="t" ${startText(TX, 24)} font-family="${FONT}" font-size="15.5" font-weight="650">${xml(fitText(a.description || a.type, 15.5, titleW))}</text>
+<text class="t" ${startText(TX, 24)} font-size="15.5" font-weight="650">${xml(fitText(a.description || a.type, 15.5, titleW))}</text>
 ${statusBadge(W, 8, a.status, color)}
-<text ${startText(TX, 46)} font-family="${FONT}" font-size="13"><tspan fill="${color}" font-weight="650">${xml(tier === 'other' ? a.type : tier)}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
+<text ${startText(TX, 46)} font-size="13"><tspan fill="${color}" font-weight="650">${xml(tier === 'other' ? a.type : tier)}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
 <rect class="k" x="${TX}" y="57" width="${barW}" height="9" rx="4.5"/><rect${progress === null ? ' class="m"' : ''} x="${TX}" y="57" width="${fillW}" height="9" rx="4.5"${progress === null ? '' : ` fill="${color}"`}/>
-<text class="t" ${endText(W, 66)} font-family="${FONT}" font-size="13" font-weight="650" font-variant-numeric="tabular-nums">${xml(count)}</text>
-${note && noteW > 40 ? `<text class="t" ${startText(TX, 86)} font-family="${FONT}" font-size="12.5">${xml(fitText(note, 12.5, noteW))}</text>` : ''}
-<text class="s" ${endText(W, 86)} font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${stats}</text>
+<text class="t" ${endText(W, 66)} font-size="13" font-weight="650" font-variant-numeric="tabular-nums">${xml(count)}</text>
+${note && noteW > 40 ? `<text class="t" ${startText(TX, 86)} font-size="12.5">${xml(fitText(note, 12.5, noteW))}</text>` : ''}
+<text class="s" ${endText(W, 86)} font-size="12.5" font-variant-numeric="tabular-nums">${stats}</text>
 <line class="ln" x1="0" y1="${ROW_H - 0.5}" x2="${W}" y2="${ROW_H - 0.5}"/>`,
   )
 }
@@ -704,9 +706,9 @@ const plannedSvg = (W: number, p: Planned): string => {
     W,
     PLAN_H,
     `${rowCrab(0, 12, tier, true)}
-<text class="s" ${startText(TX, 24)} font-family="${FONT}" font-size="14.5" font-weight="600">${xml(fitText(`${p.n}. ${p.title}`, 14.5, W - TX - badgeW - 8))}</text>
+<text class="s" ${startText(TX, 24)} font-size="14.5" font-weight="600">${xml(fitText(`${p.n}. ${p.title}`, 14.5, W - TX - badgeW - 8))}</text>
 ${statusBadge(W, 8, 'planned', color)}
-<text ${startText(TX, 46)} font-family="${FONT}" font-size="12.5"><tspan fill="${color}" font-weight="600">${xml(tier)}</tspan><tspan class="m">  ${xml(meta.filter(Boolean).join('  ·  '))}</tspan></text>
+<text ${startText(TX, 46)} font-size="12.5"><tspan fill="${color}" font-weight="600">${xml(tier)}</tspan><tspan class="m">  ${xml(meta.filter(Boolean).join('  ·  '))}</tspan></text>
 <line class="ln" x1="0" y1="${PLAN_H - 0.5}" x2="${W}" y2="${PLAN_H - 0.5}"/>`,
   )
 }
@@ -727,8 +729,8 @@ const compactSvg = (W: number, list: AgentRun[], planned: Planned[], t: ReturnTy
   return svg(
     W,
     32,
-    `${body}${more ? `<text class="s" ${startText(x, 21)} font-family="${FONT}" font-size="13">+${more}</text>` : ''}
-<text class="s" ${endText(W, 21)} font-family="${FONT}" font-size="13" font-variant-numeric="tabular-nums">≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}</text>`,
+    `${body}${more ? `<text class="s" ${startText(x, 21)} font-size="13">+${more}</text>` : ''}
+<text class="s" ${endText(W, 21)} font-size="13" font-variant-numeric="tabular-nums">≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}</text>`,
   )
 }
 
