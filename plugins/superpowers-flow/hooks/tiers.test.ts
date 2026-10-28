@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { CONFIG_DEFAULTS, effectiveOf, skillWithSettings, tierSettingsOf } from './tiers'
+import { CONFIG_DEFAULTS, effectiveOf, handoffWithProfiles, skillWithSettings, tierSettingsOf, withRunProfile } from './tiers'
 
 const SKILL = '# superpowers-flow\n\n## 1. Tier instead of model\n\nthe table\n\n## 2. Progress bar\n\nreport it'
 const describe = (t: string) => `Model-of-${t}`
@@ -92,4 +92,64 @@ test('tiers: the skill text passes through unchanged with default settings', asy
   on('skill.prompt', (_$, e) => ({ text: (e as { text: string }).text }))
   const out = await $.skill.prompt({ skill: 'superpowers-flow:superpowers-flow', text: SKILL } as never)
   expect((out as { text: string }).text).toBe(SKILL)
+})
+
+// superpowers 7's own handoff wording, cut down to the part the plugin changes.
+const HANDOFF = `## Execution Handoff
+
+**"Plan complete and saved to \`docs/superpowers/plans/<filename>.md\`. Please review the plan. Which execution approach would you prefer?**
+
+- **Subagent-driven** - A fresh subagent implements each task and a fresh reviewer checks it before the next one starts, then a whole-branch review at the end. Most thorough; costs a fresh context per task and per review.
+- **Native** - I implement every task myself in this session, the way this harness runs work, then one fresh reviewer on the most capable model checks the whole branch.
+
+**For this plan I recommend <one of the two>, because <one sentence>."**`
+
+test('tiers: the plan handoff offers one Subagent-driven option per profile, Native kept', () => {
+  const text = handoffWithProfiles(HANDOFF, {})
+  expect(text).not.toContain('- **Subagent-driven** - A fresh subagent')
+  expect(text).toContain('- **Subagent-driven · balanced** - one reviewer per task')
+  expect(text).toContain('- **Subagent-driven · fast** - no per-task reviews')
+  expect(text).toContain('- **Subagent-driven · thorough** - superpowers as it ships')
+  expect(text).toContain('- **Native** - I implement every task myself')
+  expect(text).toContain('I recommend <one of the options above>')
+  expect(text).toContain('- **thorough** when a shipped mistake is expensive')
+  expect(text).toContain('`profile: "<balanced|fast|thorough>"`')
+  expect(text).toContain("The user's saved profile is `thorough`.")
+})
+
+test('tiers: a handoff worded otherwise gets the profiles as a section after it', () => {
+  const text = handoffWithProfiles('# writing-plans\n\nAsk how to run it.', { profile: 'fast', runner: 'session' })
+  expect(text.startsWith('# writing-plans\n\nAsk how to run it.\n\n## superpowers-flow: execution profiles')).toBe(true)
+  expect(text).toContain("The user's saved profile is `fast`, so it is the default")
+  expect(text).toContain('Their runner is `session`')
+})
+
+test('tiers: a profile chosen for the run wins over the saved profile and knobs, not over models', () => {
+  const saved = { profile: 'thorough', taskReview: 'each', reviewerTier: 'heavy', coderTier: 'medium', lightModel: 'sonnet' }
+  const run = withRunProfile(saved, 'fast')
+  expect(effectiveOf(run)).toMatchObject({ taskReview: 'final', reviewerTier: 'light', coderTier: 'medium' })
+  expect(run.lightModel).toBe('sonnet')
+  expect(withRunProfile(saved, 'nonsense')).toBe(saved)
+})
+
+// Through the mod: the handoff is rewritten as superpowers loads it, and the profile the
+// first progress call names reaches the result and the superpowers-flow skill.
+test('tiers: the chosen profile comes back in the progress result and in the skill', async ($, on) => {
+  mock.clock(on)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('skill.prompt', (_$, e) => ({ text: (e as { text: string }).text }))
+  const plans = await $.skill.prompt({ skill: 'superpowers:writing-plans', text: HANDOFF } as never)
+  expect((plans as { text: string }).text).toContain('Subagent-driven · fast')
+
+  const out = await $.tool.call({ tool: 'mcp__superpowers-flow__progress', title: 'Ship it', total: 3, phase: 'delegate', profile: 'fast' } as never)
+  const result = String((out as { result?: string }).result)
+  expect(result).toContain('ok: Tasks 0/3')
+  expect(result).toContain('Profile fast for this run.')
+  expect(result).toContain('Task reviews are off for this run')
+
+  const skill = await $.skill.prompt({ skill: 'superpowers-flow:superpowers-flow', text: SKILL } as never)
+  expect((skill as { text: string }).text).toContain('profile `fast`')
+
+  const thorough = await $.tool.call({ tool: 'mcp__superpowers-flow__progress', title: 'Another', total: 1, profile: 'thorough' } as never)
+  expect(String((thorough as { result?: string }).result)).toContain('Profile thorough for this run. Superpowers runs as it ships.')
 })

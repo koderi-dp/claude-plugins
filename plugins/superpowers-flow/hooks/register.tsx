@@ -6,7 +6,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Flow, Panel, Phase, PlannedTask, SliceReport, SliceWorker } from '../types'
 import { MAX_CREW, askStop, bridgeRoot, currentBranch, logDirOf, logTail, pruneRuns, readRun, readRunSettings, runIdOf, segment, sliceRow, stopPath, workerRow, writeReport, writeRunSettings } from './bridge'
-import { CONFIG_DEFAULTS, WORKTREE_LINE, effectiveOf, fieldOf, parseConfigArgs, skillWithSettings, tierSettingsOf } from './tiers'
+import { CONFIG_DEFAULTS, PROFILE_NAMES, WORKTREE_LINE, effectiveOf, fieldOf, handoffWithProfiles, parseConfigArgs, settingsBlock, skillWithSettings, tierSettingsOf, withRunProfile } from './tiers'
 import type { TierSettings } from './tiers'
 import { pushOrToast, sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
 
@@ -54,6 +54,7 @@ type ProgressInput = {
   tasks?: { title?: string; tier?: string; after?: number[] }[]
   run?: string
   slice?: string
+  profile?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +144,7 @@ const merge = (prev: Flow | null, input: ProgressInput): Flow => {
     phase: input.finished ? 'close' : phase,
     isFinished: input.finished === true,
     tasks,
+    profile: PROFILE_NAMES.includes(input.profile as never) ? input.profile : base.profile,
   }
 }
 
@@ -838,8 +840,9 @@ const HEARTBEAT_MS = 30_000
 // In a slice session: the run's settings as the session that started it wrote them. A
 // slice runs its own tasks in place, so it never starts slices of its own.
 let sliceOptions: Record<string, string> | null = null
-const optionsFor = (opts: Record<string, unknown>): Record<string, unknown> =>
-  sliceOptions ? { ...opts, ...sliceOptions, runner: 'subagent', parallel: 'off' } : opts
+// `profile`: one chosen for this run at the plan's handoff.
+const optionsFor = (opts: Record<string, unknown>, profile?: string): Record<string, unknown> =>
+  sliceOptions ? { ...opts, ...sliceOptions, runner: 'subagent', parallel: 'off' } : withRunProfile(opts, profile)
 
 // In a slice session: the main loop's running turn, which a stop from the main session ends.
 let mainTurn: string | undefined
@@ -983,6 +986,7 @@ export const register: Register = (on, options) => {
           phase: { type: 'string', enum: [...PHASES] },
           finished: { type: 'boolean', description: 'True once the flow is closed.' },
           run: { type: 'string', description: 'Only in a slice session: the run id its brief gives.' },
+          profile: { type: 'string', enum: [...PROFILE_NAMES], description: 'The profile the user chose for this run at the plan handoff; the result carries its instructions.' },
           slice: { type: 'string', description: 'Only in a slice session: the slice name its brief gives. With run, this session reports to the session that started it.' },
           tasks: {
             type: 'array',
@@ -1057,9 +1061,15 @@ export const register: Register = (on, options) => {
   })
 
   on('skill.prompt', async ($, e, next) => {
+    // superpowers:writing-plans asks how to execute the plan: one Subagent-driven option per profile.
+    if (/(^|:)writing-plans$/.test(e.skill) && !sliceOptions) {
+      const computed = await next(e)
+      return { text: handoffWithProfiles(computed.text, opts) }
+    }
     if (!/(^|:)superpowers-flow$/.test(e.skill)) return next(e)
     const computed = await next(e)
-    return { text: skillWithSettings(computed.text, optionsFor(opts), tierSettings, tierModel) }
+    const f = await read($, flow)
+    return { text: skillWithSettings(computed.text, optionsFor(opts, f?.isFinished ? undefined : f?.profile), tierSettings, tierModel) }
   })
 
   on('command.run', { command: 'flow-config' }, async ($, e) => {
@@ -1145,7 +1155,8 @@ export const register: Register = (on, options) => {
     }
     let next = await update($, flow, p => merge(p, input))
     // Only slice sessions report under a run id, so only the session runner makes one.
-    const effective = effectiveOf(optionsFor(opts))
+    const runOptions = optionsFor(opts, next?.profile)
+    const effective = effectiveOf(runOptions)
     const isSessionRunner = effective.runner === 'session'
     if (next && !next.run && isSessionRunner && !(await read($, bridge))) {
       const id = runIdOf(await $.clock.now(), await currentBranch($), next.title)
@@ -1164,7 +1175,10 @@ export const register: Register = (on, options) => {
     // Slice sessions need the run id and the folder their logs go to; nobody else does.
     const root = next?.run && isSessionRunner ? await rootOf($) : null
     const where = root && next?.run ? ` · run ${next.run} · log folder ${logDirOf(root, next.run)}` : ''
-    return { result: `ok: ${label(next ?? blank())}${where}` }
+    // A profile chosen at the plan's handoff: its instructions, whenever the skill was loaded.
+    const chosen = input.profile && next?.profile === input.profile ? settingsBlock(runOptions, tierSettings, tierModel) : ''
+    const howTo = input.profile && next?.profile === input.profile ? `\n\nProfile ${input.profile} for this run.${chosen ? '\n\n' + chosen : ' Superpowers runs as it ships.'}` : ''
+    return { result: `ok: ${label(next ?? blank())}${where}${howTo}` }
   })
 
   // A worker's own progress: the call runs in the worker's loop, so agentId names it.

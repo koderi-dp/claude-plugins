@@ -128,6 +128,14 @@ export const skillWithSettings = (
   settings: TierSettings,
   describe: (tier: string) => string,
 ): string => {
+  const block = settingsBlock(options, settings, describe)
+  if (!block) return text
+  const at = text.indexOf('\n## 2.')
+  return at === -1 ? `${text}\n\n${block}` : `${text.slice(0, at)}\n\n${block}${text.slice(at)}`
+}
+
+// The "Settings from the user" section alone; '' when every setting is at its default.
+export const settingsBlock = (options: Record<string, unknown>, settings: TierSettings, describe: (tier: string) => string): string => {
   const effective = effectiveOf(options)
   const flow = Object.keys(KNOBS).flatMap(knob => KNOB_TEXT[knob]?.[effective[knob] ?? '']?.(effective) ?? [])
   const roles = ROLES.flatMap(([key, who]) => {
@@ -138,7 +146,7 @@ export const skillWithSettings = (
     const set = settings[t] ?? {}
     return set.model || set.effort ? [`- \`sp-${t}\` runs on ${describe(t)}.`] : []
   })
-  if (!flow.length && !roles.length && !tiers.length) return text
+  if (!flow.length && !roles.length && !tiers.length) return ''
   const lines = ['## Settings from the user', '']
   if (flow.length) {
     const profile = profileOf(options)
@@ -156,9 +164,51 @@ export const skillWithSettings = (
       '',
     )
   if (tiers.length) lines.push('The table\'s "Runs on" column is replaced for these tiers:', '', ...tiers, '')
-  const block = lines.join('\n')
-  const at = text.indexOf('\n## 2.')
-  return at === -1 ? `${text}\n\n${block}` : `${text.slice(0, at)}\n\n${block}${text.slice(at)}`
+  return lines.join('\n')
+}
+
+export const PROFILE_NAMES = Object.keys(PROFILES) as ProfileName[]
+
+// A profile chosen for one run (at the plan's handoff) wins over the saved profile and
+// over every knob and reviewer tier the user saved: they chose it for this run. The coder
+// tier and each tier's model and effort stay as saved.
+export const withRunProfile = (options: Record<string, unknown>, profile: string | undefined): Record<string, unknown> =>
+  profile && PROFILE_NAMES.includes(profile as ProfileName)
+    ? { ...options, profile, ...Object.fromEntries(Object.keys(KNOBS).map(k => [k, 'profile'])), reviewerTier: 'auto', finalReviewTier: 'auto' }
+    : options
+
+// superpowers:writing-plans ends by asking "Subagent-driven or Native?". Its Subagent-driven
+// option becomes one per profile, with a recommendation read from the spec and the plan, and
+// the chosen profile reaches this run through the first `progress` call. A wording this
+// does not find gets the same as a section after the skill's own text.
+const HANDOFF_OPTIONS = [
+  '- **Subagent-driven · balanced** - one reviewer per task, independent slices in parallel git worktrees, small mechanical tasks batched, targeted tests per task, final review on `sp-careful`. The everyday choice.',
+  '- **Subagent-driven · fast** - no per-task reviews, only the final whole-branch review against the plan; parallel slices and batching as balanced. Fastest and cheapest with subagents; for mechanical, well-specified plans.',
+  '- **Subagent-driven · thorough** - superpowers as it ships: a fresh reviewer after every task, one task at a time, final review on `sp-fable`. Most careful.',
+]
+
+export const handoffWithProfiles = (text: string, saved: Record<string, unknown>): string => {
+  const savedProfile = profileOf(saved)
+  const runner = effectiveOf(saved).runner
+  const rules = [
+    '## superpowers-flow: execution profiles',
+    '',
+    'The superpowers-flow plugin runs Subagent-driven execution at one of three profiles; offer them in place of the single Subagent-driven option, Native kept as superpowers words it. Ask with AskUserQuestion when you have it: the recommended option first, its label ending "(Recommended)".',
+    '',
+    ...HANDOFF_OPTIONS,
+    '',
+    'Recommend one from the spec and the plan, and say why in one sentence:',
+    '- **thorough** when a shipped mistake is expensive: security or authentication, payments or money, data migrations or deletes, concurrency, a public API or file format others depend on, unfamiliar or messy code, or little test coverage to catch a regression.',
+    '- **fast** when the plan carries the complete code to write, its tasks are mechanical (one or two files each, clear tests), and a mistake is cheap to fix.',
+    '- **balanced** otherwise, and when torn between two.',
+    '- **Native** as superpowers says, when the tasks are tightly coupled through each other\'s interfaces.',
+    `The user's saved profile is \`${savedProfile}\`${savedProfile === 'thorough' ? '' : ', so it is the default when the plan gives no reason for another'}. ${runner === 'session' ? 'Their runner is `session`: each slice runs in its own headless Claude Code session.' : 'When the plan splits into three or more large independent slices, mention that `/flow-config runner=session` would run each in its own session.'}`,
+    '',
+    '**If a Subagent-driven profile is chosen:** before the first dispatch, call `mcp__superpowers-flow__progress` with `profile: "<balanced|fast|thorough>"` along with the plan\'s title, total, tasks and phase `delegate`. Its result carries that profile\'s instructions for this run; they win over the superpowers-flow skill\'s settings section if it was loaded before. Then use superpowers:subagent-driven-development, as the plan says.',
+  ].join('\n')
+  const line = /^- \*\*Subagent-driven\*\*.*$/m
+  if (!line.test(text)) return `${text}\n\n${rules}`
+  return `${text.replace(line, HANDOFF_OPTIONS.join('\n')).replace('<one of the two>', '<one of the options above>')}\n\n${rules}`
 }
 
 // Each setting's default, as plugin.json declares it, for `/flow-config reset`.

@@ -21,6 +21,10 @@ One `profile` setting, plus one setting per knob. Every knob defaults to `profil
 
 Code: `hooks/tiers.ts` gains `PROFILES`, `effectiveOf(options)` and a skill section per knob; `plugin.json` declares the settings; `CONFIG_DEFAULTS` lists them for `/flow-config reset`.
 
+### Choosing a profile at the plan's handoff
+
+The mod rewrites superpowers:writing-plans as it loads (`skill.prompt`): its single Subagent-driven option becomes one per profile, with rules for recommending one from the spec and plan, and Native kept. The chosen profile goes in the first `progress` call (`profile`), which stores it on the flow for this run, answers with that profile's instructions, and makes the superpowers-flow skill load with it. A run profile wins over the saved profile, knobs and reviewer tiers; models, efforts and the coder tier stay as saved.
+
 ## 2. Runners
 
 - **subagent**: today's flow. With `parallel: independent`, tasks whose dependencies are accepted and whose files do not overlap are dispatched together.

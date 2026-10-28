@@ -63,6 +63,8 @@ Disable savvy-progress and session-band if they are installed: this plugin draws
 
 Every knob in the table defaults to `profile`, which follows the profile; set one and it wins: `/flow-config profile=fast taskReview=combined` is fast, with one reviewer per task. `thorough` with every knob at `profile` is superpowers exactly as it ships. For a single run you can also just say "skip task reviews" or "one reviewer per task".
 
+**Choosing at the plan's handoff.** When superpowers finishes writing a plan it asks how to run it. With this plugin its Subagent-driven option becomes one per profile, **Subagent-driven · balanced**, **· fast** and **· thorough** (Native stays), and Claude recommends one from the spec and the plan: `thorough` for security, money, migrations, concurrency, public APIs, unfamiliar code or thin tests; `fast` when the plan carries the complete code and the tasks are mechanical; `balanced` otherwise. The choice applies to that run only, over the saved profile and knobs (models and the coder tier stay as saved).
+
 **Runners.** A slice is a chain of tasks that depend on each other; slices that do not depend on each other can run at the same time.
 
 - `subagent`: workers in this session, all in one folder. With `parallel: independent`, tasks whose files do not overlap run together.

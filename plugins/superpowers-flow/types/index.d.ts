@@ -16,6 +16,8 @@ export type Flow = {
   tasks: PlannedTask[]
   /** The run id slices report under, made by the first `progress` call with a title. */
   run?: string
+  /** A profile chosen for this run at the plan's handoff, over the saved one. */
+  profile?: string
 }
 
 export type AgentStatus = 'running' | 'done' | 'failed'
