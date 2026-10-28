@@ -55,7 +55,7 @@ Disable savvy-progress and session-band if they are installed: this plugin draws
 
 | | `thorough` (default) | `balanced` | `fast` |
 | --- | --- | --- | --- |
-| `taskReview`: reviews after each task | `each`: spec, then quality | `combined`: one reviewer | `final`: none, only the final review |
+| `taskReview`: reviews after each task | `each`: as superpowers ships | `combined`: one reviewer (superpowers 7 already does) | `final`: none, only the final review |
 | `parallel`: independent tasks at once | `off` | `independent` | `independent` |
 | `batchTasks`: mechanical tasks to one worker | `off` | `small` | `small` |
 | `reReview`: who checks a small fix | `always` a reviewer | `self`: Claude | `self`: Claude |
@@ -68,7 +68,7 @@ Every knob in the table defaults to `profile`, which follows the profile; set on
 **Runners.** A slice is a chain of tasks that depend on each other; slices that do not depend on each other can run at the same time.
 
 - `subagent`: workers in this session, all in one folder. With `parallel: independent`, tasks whose files do not overlap run together.
-- `worktree`: workers in this session, one git worktree and branch per slice (`../<repo>-wt-<slice>`), merged back into the feature branch when the slice is done; the final review runs on the merged branch. Claude puts `Worktree: <path>` in each brief and the mod starts the worker in that folder.
+- `worktree`: workers in this session, one git worktree and branch per slice (`.worktrees/<slice>`, git-ignored, as superpowers keeps them), merged back into the feature branch when the slice is done; the final review runs on the merged branch. Claude puts `Worktree: <path>` in each brief and the mod starts the worker in that folder.
 - `session`: one headless Claude Code session (`claude -p`) per slice, started in the background in its worktree. Each reports its progress to a file in `.git/superpowers-flow/<run>/`, and the panel and `/flow-status` show one row per slice: tasks done, its current step, cost, context and time (a slice silent for 5 minutes shows as failed). The run folder sits in the repository's shared `.git` folder, so every worktree and branch sees it and it is never committed; finished runs are removed 3 days later. A headless session cannot ask for permission: Claude starts them in this session's mode when it is `acceptEdits`, `auto`, `dontAsk` or `bypassPermissions`, and asks you first otherwise. No profile picks `session`; set `runner=session` yourself.
 
 **Roles and tiers.** `coderTier`, `reviewerTier` and `finalReviewTier` fix the tier each role runs on: `auto` (default) lets the skill choose by task difficulty, or one of `light`, `medium`, `careful`, `heavy`, `fable`. A fixed coder tier is the starting tier; a stuck coder is still re-dispatched one tier up. `<tier>Model` (`haiku`, `sonnet`, `opus`, `fable`) and `<tier>Effort` (`low` … `max`) change what a tier runs on; `default` keeps the agent file's. The mod applies them when each worker starts, and the panel shows them on planned rows. Settings are read when a session starts.

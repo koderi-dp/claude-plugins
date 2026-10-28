@@ -5,7 +5,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Flow, Panel, Phase, PlannedTask, SliceReport } from '../types'
-import { bridgeRoot, currentBranch, pruneRuns, readRun, runIdOf, segment, sliceRow, writeReport } from './bridge'
+import { bridgeRoot, currentBranch, pruneRuns, readRun, readRunSettings, runIdOf, segment, sliceRow, writeReport, writeRunSettings } from './bridge'
 import { CONFIG_DEFAULTS, WORKTREE_LINE, effectiveOf, fieldOf, parseConfigArgs, skillWithSettings, tierSettingsOf } from './tiers'
 import type { TierSettings } from './tiers'
 import { pushOrToast, sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
@@ -919,6 +919,23 @@ const seen = new Map<string, number>()
 let lastReport = ''
 let lastWriteAt = 0
 const HEARTBEAT_MS = 30_000
+// In a slice session: the run's settings as the session that started it wrote them. A
+// slice runs its own tasks in place, so it never starts slices of its own.
+let sliceOptions: Record<string, string> | null = null
+const optionsFor = (opts: Record<string, unknown>): Record<string, unknown> =>
+  sliceOptions ? { ...opts, ...sliceOptions, runner: 'subagent', parallel: 'off' } : opts
+
+// A session started with the slice environment reports as that slice from its start.
+async function joinRun($: EngineInterface): Promise<void> {
+  // The environment the slice's launch line sets (the skill's session runner text).
+  const run = segment(await $.env.get('SUPERPOWERS_FLOW_RUN').catch(() => undefined))
+  const slice = segment(await $.env.get('SUPERPOWERS_FLOW_SLICE').catch(() => undefined))
+  if (!run || !slice) return
+  const root = await rootOf($)
+  sliceOptions = root ? await readRunSettings($, root, run) : {}
+  const at = await $.clock.now()
+  await update($, bridge, b => (b?.run === run && b.slice === slice ? b : { run, slice, startedAt: at }))
+}
 
 // In a slice's own session: rewrites its report when it changed, when `force` asks (a
 // `progress` call, so a finish lands before the headless session exits), or as a heartbeat.
@@ -981,6 +998,7 @@ export const register: Register = (on, options) => {
   sessionHooks(on)
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    await joinRun($).catch(() => undefined)
     // Old finished runs' slice folders go; not awaited, so the session starts at once.
     void (async () => {
       const root = await rootOf($)
@@ -1080,7 +1098,7 @@ export const register: Register = (on, options) => {
   on('skill.prompt', async ($, e, next) => {
     if (!/(^|:)superpowers-flow$/.test(e.skill)) return next(e)
     const computed = await next(e)
-    return { text: skillWithSettings(computed.text, opts, tierSettings, tierModel) }
+    return { text: skillWithSettings(computed.text, optionsFor(opts), tierSettings, tierModel) }
   })
 
   on('command.run', { command: 'flow-config' }, async ($, e) => {
@@ -1167,10 +1185,14 @@ export const register: Register = (on, options) => {
     }
     let next = await update($, flow, p => merge(p, input))
     // Only slice sessions report under a run id, so only the session runner makes one.
-    const isSessionRunner = effectiveOf(opts).runner === 'session'
+    const effective = effectiveOf(optionsFor(opts))
+    const isSessionRunner = effective.runner === 'session'
     if (next && !next.run && isSessionRunner && !(await read($, bridge))) {
       const id = runIdOf(await $.clock.now(), await currentBranch($), next.title)
       next = await update($, flow, p => (p ? { ...p, run: id } : p))
+      // Every slice session of the run reads these, so all follow this session's profile.
+      const root = await rootOf($)
+      if (root) await writeRunSettings($, root, id, effective).catch(() => undefined)
     }
     if (await read($, bridge)) await syncSlice($, true)
     if (next && input.tasks?.length) await autoOpen($, next.title)

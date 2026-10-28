@@ -74,18 +74,18 @@ export const WORKTREE_LINE = /^Worktree: (\S.*?)\s*$/m
 const KNOB_TEXT: Record<string, Record<string, (e: Record<string, string>) => string[]>> = {
   taskReview: {
     combined: () => [
-      "**Task reviews are combined.** After each implementer reports DONE, dispatch **one** reviewer that checks spec compliance and code quality in a single pass (both templates' checklists in one brief), instead of the spec reviewer followed by the quality reviewer. Its fix rounds and re-review work as superpowers says.",
+      "**One reviewer per task.** After each implementer reports DONE, dispatch **one** reviewer that checks spec compliance and code quality in a single pass. Superpowers 7's task reviewer already does; a superpowers that sends a spec reviewer and then a quality reviewer gets one reviewer with both checklists in one brief instead. Its fix rounds and re-review work as superpowers says.",
     ],
     final: () => [
-      '**Task reviews are off for this run.** After each implementer reports DONE, check its tests pass and its self-review raised nothing open, mark the task accepted and dispatch the next one. No spec or quality reviewer runs per task.',
+      "**Task reviews are off for this run.** After each implementer reports DONE, check its tests pass and its self-review raised nothing open, mark the task accepted (`Task <N>: complete (commits <base7>..<head7>, task review off by setting)`) and dispatch the next one. No task reviewer runs. This overrides superpowers' rule never to skip the task review, for this run only: the user chose it.",
       "The final whole-branch review still runs, and runs against the plan as the spec: it checks every task's requirements as well as code quality. Its findings go to one fixer and a re-review, as superpowers says. A task that comes back BLOCKED or DONE_WITH_CONCERNS still gets its usual handling.",
     ],
   },
   parallel: {
     independent: e => [
       e.runner === 'subagent'
-        ? "**Independent tasks run at once.** A task is ready when every task in its `after` list is accepted. Dispatch all ready tasks in one message, in the background, as long as the files their task texts name do not overlap: a task that shares a file with a running one waits for it. Review each as it reports; accept them in any order. This overrides superpowers' rule of one implementer at a time, for tasks whose files are apart."
-        : '**Independent slices run at once**, each in its own worktree (below): a slice starts as soon as the slices it depends on are merged, whether or not its files overlap with another running slice. Overlaps are resolved at merge.',
+        ? "**Independent tasks run at once.** A task is ready when every task it depends on is accepted. Dispatch all ready tasks in one message, in the background, as long as the files their task texts name do not overlap: a task that shares a file with a running one waits for it. Record each one's BASE separately, review each as it reports, accept them in any order. This overrides superpowers' rule never to dispatch implementers in parallel, for tasks whose files are apart."
+        : "**Independent slices run at once**, each in its own worktree (below): a slice starts as soon as the slices it depends on are merged, whether or not its files overlap with another running slice; overlaps are resolved at merge. This overrides superpowers' rule never to dispatch implementers in parallel: their worktrees keep them apart.",
     ],
   },
   batchTasks: {
@@ -95,7 +95,7 @@ const KNOB_TEXT: Record<string, Record<string, (e: Record<string, string>) => st
   },
   reReview: {
     self: () => [
-      "**Small fixes are checked by you, not a re-review.** When every finding of a review is small and local (a rename, a missing check, a typo, a test assertion), read the fixer's diff yourself and accept when it answers each finding. Anything larger, and any spec gap, still gets a re-review.",
+      "**Small fixes are checked by you, not a re-review.** When every finding of a review is small and local (a rename, a missing check, a typo, a test assertion), read the fix round's diff yourself and close the round when it answers each finding; its ledger line says `self-checked`. Anything larger, and any spec gap, still gets superpowers' scoped re-review. This replaces the re-review only for those small rounds.",
     ],
   },
   testScope: {
@@ -105,15 +105,15 @@ const KNOB_TEXT: Record<string, Record<string, (e: Record<string, string>) => st
   },
   runner: {
     worktree: () => [
-      '**Slices run in worktrees.** Before the first dispatch, group the tasks into slices: a slice is a chain of tasks each depending on the one before; a small task that depends on nothing may join a neighbouring slice. For each slice, from the feature branch: `git worktree add ../<repo folder>-wt-<slice> -b <feature branch>-<slice>`. Put the line `Worktree: <absolute path of that worktree>` on a line of its own in every implementer, reviewer and fixer brief for the slice: the plugin starts that worker in the worktree.',
+      '**Slices run in worktrees.** Before the first dispatch, group the tasks into slices: a slice is a chain of tasks each depending on the one before; a small task that depends on nothing may join a neighbouring slice. For each slice, from the feature branch: `git worktree add .worktrees/<slice> -b <feature branch>-<slice>`, under `.worktrees/` at the repository root as superpowers:using-git-worktrees keeps it (git-ignored: check with `git check-ignore -q .worktrees`, and add it to `.gitignore` and commit if not). Put the line `Worktree: <absolute path of that worktree>` on a line of its own in every implementer, reviewer and fixer brief for the slice: the plugin starts that worker in the worktree.',
       'Slices whose dependencies are merged run at the same time; tasks inside a slice run in order. When a slice\'s last task is accepted, merge its branch into the feature branch (`git merge --no-ff`; resolve conflicts yourself, or with an `sp-careful` fixer when they touch logic), then `git worktree remove` it and delete its branch. The final review runs on the feature branch once every slice is merged.',
     ],
     session: () => [
-      '**Slices run in their own Claude Code sessions.** Group the tasks into slices and make one worktree and branch per slice: a slice is a chain of tasks each depending on the one before; from the feature branch, `git worktree add ../<repo folder>-wt-<slice> -b <feature branch>-<slice>`. The first `progress` call\'s result names the run id and the bridge folder.',
+      '**Slices run in their own Claude Code sessions.** Group the tasks into slices and make one worktree and branch per slice: a slice is a chain of tasks each depending on the one before; from the feature branch, `git worktree add .worktrees/<slice> -b <feature branch>-<slice>` (git-ignored, as superpowers:using-git-worktrees keeps `.worktrees/`). The first `progress` call\'s result names the run id and the bridge folder.',
       'For each slice whose dependencies are merged, start a headless session in its worktree, in the background (Bash with `run_in_background`):',
-      '```\ncd <worktree> && claude -p "<slice brief>" --permission-mode <mode> --output-format json > <bridge folder>/<slice>.log 2>&1\n```',
-      'A headless session cannot ask for permission. `<mode>` is this session\'s own mode when it is `acceptEdits`, `auto`, `dontAsk` or `bypassPermissions`; otherwise ask the user once which mode the slice sessions may run in before starting any. The slice brief:',
-      '> You run slice "<slice>" of the plan <plan file> (run <run id>), in this worktree, on branch <slice branch>. Implement only tasks <numbers and titles>, with superpowers subagent-driven-development and the superpowers-flow skill, with runner `subagent`: start no other sessions and no worktrees. Before the first dispatch call `mcp__superpowers-flow__progress` with `run: "<run id>"`, `slice: "<slice>"`, the title, total, tasks and phase; then `done` as each task is accepted, and `finished: true` at the end. Commit on your branch; do not merge, push or switch branches. End with: tasks done, commits, test result.',
+      '```\ncd <worktree> && SUPERPOWERS_FLOW_RUN=<run id> SUPERPOWERS_FLOW_SLICE=<slice> claude -p "<slice brief>" --permission-mode <mode> --output-format json > <bridge folder>/<slice>.log 2>&1\n```',
+      'The two variables make the session report as that slice and follow this run\'s settings. A headless session cannot ask for permission: it runs on the same settings files and permission rules as this one, and whatever those do not allow is refused, not asked. `<mode>` is this session\'s own mode when it is `acceptEdits`, `auto`, `dontAsk` or `bypassPermissions`; when it is another, or you have had to ask the user for permissions in this run, ask the user once, before starting any, which mode the slice sessions may use. The slice brief:',
+      '> You run slice "<slice>" of the plan <plan file> (run <run id>), in this worktree, on branch <slice branch>. Implement only tasks <numbers and titles>, with superpowers subagent-driven-development and the superpowers-flow skill: start no other sessions and no worktrees. Before the first dispatch call `mcp__superpowers-flow__progress` with `run: "<run id>"`, `slice: "<slice>"`, the title, total, tasks and phase; then `done` as each task is accepted, and `finished: true` at the end. Commit on your branch; do not merge, push or switch branches. End with: tasks done, commits, test result.',
       'The panel shows each slice from its own reports. When a slice\'s background command exits, read the end of its log, run the slice\'s tests on its branch, merge it into the feature branch (`git merge --no-ff`, then `git worktree remove` and delete its branch) and report its tasks as `done`. A slice that failed: read its log and finish its tasks yourself with workers whose briefs carry `Worktree: <its worktree>`. The final review runs on the feature branch once every slice is merged.',
     ],
   },

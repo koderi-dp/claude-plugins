@@ -86,6 +86,27 @@ export const parseReport = (text: string, run: string, slice: string): SliceRepo
   }
 }
 
+// The run's own settings, written by the session that starts the slices and read by each
+// slice session, so every slice follows the same profile. Its name can be no slice's: a
+// slice name is a slug, and a slug never starts with `_`.
+export const RUN_FILE = '_run.json'
+
+export async function writeRunSettings($: EngineInterface, root: string, run: string, options: Record<string, string>): Promise<void> {
+  await $.fs.write(`${root}/${run}/${RUN_FILE}`, JSON.stringify({ options }))
+}
+
+// Only the settings `tiers.ts` knows, each a short word: another process wrote the file.
+export async function readRunSettings($: EngineInterface, root: string, run: string): Promise<Record<string, string>> {
+  try {
+    const raw = JSON.parse(await $.fs.read(`${root}/${run}/${RUN_FILE}`)) as { options?: Record<string, unknown> }
+    return Object.fromEntries(
+      Object.entries(raw.options ?? {}).filter((kv): kv is [string, string] => /^[A-Za-z]{1,30}$/.test(kv[0]) && typeof kv[1] === 'string' && /^[a-z]{1,20}$/.test(kv[1])),
+    )
+  } catch {
+    return {}
+  }
+}
+
 export async function writeReport($: EngineInterface, root: string, report: SliceReport): Promise<void> {
   await $.fs.write(`${root}/${report.run}/${report.slice}.json`, JSON.stringify(report))
 }
@@ -100,7 +121,7 @@ export async function readRun(
   prev: SliceReport[],
 ): Promise<SliceReport[] | null> {
   const entries = await $.fs.list(`${root}/${run}`).catch(() => [])
-  const files = entries.filter(f => f.kind === 'file' && f.name.endsWith('.json')).slice(0, MAX_SLICES)
+  const files = entries.filter(f => f.kind === 'file' && f.name.endsWith('.json') && f.name !== RUN_FILE).slice(0, MAX_SLICES)
   let changed = files.length !== prev.length
   const out: SliceReport[] = []
   for (const f of files) {
@@ -128,7 +149,7 @@ export async function pruneRuns($: EngineInterface, root: string, at: number, ma
   const removed: string[] = []
   for (const dir of runs) {
     const files = (await $.fs.list(`${root}/${dir.name}`).catch(() => [])).filter(f => f.kind === 'file')
-    const reports = files.filter(f => f.name.endsWith('.json'))
+    const reports = files.filter(f => f.name.endsWith('.json') && f.name !== RUN_FILE)
     if (!reports.length || files.some(f => at - f.mtimeMs < maxAge)) continue
     let isDone = true
     for (const f of reports) {

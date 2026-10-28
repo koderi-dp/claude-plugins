@@ -24,7 +24,7 @@ Code: `hooks/tiers.ts` gains `PROFILES`, `effectiveOf(options)` and a skill sect
 ## 2. Runners
 
 - **subagent**: today's flow. With `parallel: independent`, tasks whose dependencies are accepted and whose files do not overlap are dispatched together.
-- **worktree**: the controller groups tasks into slices (a chain of dependent tasks), makes one git worktree and branch per slice (`git worktree add`), and puts `Worktree: <absolute path>` in every brief for that slice. The mod's `agent.spawn` hook reads that line and starts the worker in that directory (`cwd`). Slices without unaccepted dependencies run at once; each finished slice is merged into the feature branch, then the final review runs on the merged branch.
+- **worktree**: the controller groups tasks into slices (a chain of dependent tasks), makes one git worktree and branch per slice (`git worktree add .worktrees/<slice>`), and puts `Worktree: <absolute path>` in every brief for that slice. The mod's `agent.spawn` hook reads that line and starts the worker in that directory (`cwd`). Slices without unaccepted dependencies run at once; each finished slice is merged into the feature branch, then the final review runs on the merged branch.
 - **session**: as worktree, but each slice is a headless `claude -p` process started in its worktree, in the background. It runs the slice's tasks with subagents and reports through the bridge. The child is told not to start sessions of its own.
 
 ## 3. The slice bridge

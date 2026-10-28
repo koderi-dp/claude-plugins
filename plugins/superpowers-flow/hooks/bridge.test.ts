@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { parseReport, runIdOf, segment, slug } from './bridge'
 
 const PROGRESS = 'mcp__superpowers-flow__progress'
+const SKILL = '# superpowers-flow\n\n## 1. Tier instead of model\n\n## 2. Progress bar\n'
 const ROOT = '/repo/.git/superpowers-flow'
 const spawn = { tool_use_id: 't1', provider: 'engine', parentModel: 'claude-opus-5-5', background: false, fork: false } as const
 
@@ -163,6 +164,49 @@ test('bridge: with runner session the progress result names the run and folder',
   await sessionRunner($)
   const out = await $.tool.call({ tool: PROGRESS, title: 'Todo app', phase: 'delegate', total: 2 } as never)
   expect(String((out as { result?: string }).result)).toContain(`run 2026-10-28-feature-login-todo-app · bridge folder ${ROOT}/2026-10-28-feature-login-todo-app`)
+})
+
+// A session started with the slice environment reports as that slice and follows the
+// run's settings, never the session runner itself.
+test('bridge: a slice session joins its run from the environment and takes its settings', async ($, on) => {
+  mock.clock(on, { now: 1000 })
+  const files = new Map<string, { text: string; mtimeMs: number }>()
+  host(on, files)
+  mock.env(on, { LANG: 'en_US.UTF-8', SUPERPOWERS_FLOW_RUN: 'run-9', SUPERPOWERS_FLOW_SLICE: 'b' })
+  files.set(`${ROOT}/run-9/_run.json`, { text: JSON.stringify({ options: { taskReview: 'final', runner: 'session', parallel: 'independent', reviewerTier: 'light', evil: 'x y' } }), mtimeMs: 1 })
+  on('session.start', async () => ({ cwd: '/repo' }) as never)
+  on('skill.prompt', (_$, e) => ({ text: (e as { text: string }).text }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.session.start({ source: 'startup', cwd: '/wt/b', surface: 'terminal', isInteractive: false } as never)
+
+  const skill = String(((await $.skill.prompt({ skill: 'superpowers-flow:superpowers-flow', text: SKILL } as never)) as { text: string }).text)
+  expect(skill).toContain('Task reviews are off')
+  expect(skill).toContain('- Task reviewers and re-reviewers: `sp-light`.')
+  expect(skill).not.toContain('own Claude Code sessions')
+  expect(skill).not.toContain('run at once')
+
+  // No run or slice in the call: the environment already said which.
+  await $.tool.call({ tool: PROGRESS, title: 'Slice B', phase: 'delegate', total: 1 } as never)
+  expect(JSON.parse(files.get(`${ROOT}/run-9/b.json`)?.text ?? '{}')).toMatchObject({ run: 'run-9', slice: 'b', title: 'Slice B', total: 1 })
+})
+
+// The parent writes the run's settings beside the slices, and reads it as no slice.
+test('bridge: the parent writes the run settings, which are not a slice', async ($, on) => {
+  const clock = mock.clock(on, { now: Date.UTC(2026, 9, 28, 10) })
+  const files = new Map<string, { text: string; mtimeMs: number }>()
+  host(on, files)
+  configHooks(on)
+  mock.env(on, { LANG: 'en_US.UTF-8' })
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', async () => ({ cwd: '/repo' }) as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
+  await sessionRunner($)
+  await $.tool.call({ tool: PROGRESS, title: 'Calc', phase: 'delegate', total: 2 } as never)
+  const run = `${ROOT}/2026-10-28-feature-login-calc`
+  expect(JSON.parse(files.get(`${run}/_run.json`)?.text ?? '{}').options).toMatchObject({ runner: 'session', taskReview: 'each' })
+  await clock.advance(2100)
+  const text = String(((await $.command.run({ command: 'flow-status', args: '' } as never)) as { text?: string }).text)
+  expect(text).toBe('```\nCalc · Tasks 0/2 · 0%\n```')
 })
 
 // Session start removes runs whose slices all finished and that sat for three days, nothing else.
