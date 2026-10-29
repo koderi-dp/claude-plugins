@@ -1,6 +1,6 @@
 {
   "name": "superpowers-flow",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers (Fable / Opus at set efforts) that superpowers dispatches instead of general-purpose. Speed profiles (thorough, balanced, fast) over per-task review, parallel slices, batching and runners (subagent, worktree, headless session per slice, shown in the panel); roles (coder, reviewer, final reviewer) and each tier's model and effort are settings. Adapted from savvy-flow, savvy-progress and session-band.",
   "author": {
     "name": "Danijel Peric"
