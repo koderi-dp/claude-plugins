@@ -8,8 +8,6 @@ Claude Code plugins for faster, quieter sessions. This repository is a plugin ma
 | [output-trim](plugins/output-trim) | Trims noisy build, test and log output to errors, failures and summaries | Windows |
 | [code-outline](plugins/code-outline) | Symbol outlines and single-symbol reads via tree-sitter for Rust, TypeScript, JavaScript, Python and C# | Windows |
 | [ssh-remote](plugins/ssh-remote) | Runs commands and downloads files over SSH, with credentials read from files Claude never sees | Windows |
-| [shipright](plugins/shipright) | Builds a feature in one session: spec, lean plan, branch, task-by-task build with reviews on models you pick, and a live progress pane | Any |
-| [fable-team](plugins/fable-team) | `/fable-team:init` gives a project research (Sonnet), builder (Opus) and reviewer (Opus) subagents in `.claude/agents` plus the routing rule in `CLAUDE.md`; registers no agents itself | Any |
 | [superpowers-flow](plugins/superpowers-flow) | Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered `sp-*` workers superpowers dispatches instead of `general-purpose` | Any |
 
 ## Install
