@@ -1,9 +1,0 @@
-{
-  "name": "notes-cli",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node --test",
-    "check:release": "node --test"
-  }
-}
