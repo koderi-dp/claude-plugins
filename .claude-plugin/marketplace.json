@@ -1,7 +1,9 @@
 {
   "name": "code101-plugins",
-  "owner": { "name": "Danijel Peric" },
-  "description": "Claude Code plugins for faster, quieter sessions: file lookup, output trimming, code outlines, SSH, and a one-session feature pipeline.",
+  "owner": {
+    "name": "Danijel Peric"
+  },
+  "description": "Claude Code plugins for faster, quieter sessions: file lookup, output trimming, code outlines, SSH, and speed profiles with a live panel for superpowers plan runs.",
   "plugins": [
     {
       "name": "everything-find",
@@ -24,19 +26,9 @@
       "description": "Run commands and download files over SSH, with credentials read from files Claude never sees."
     },
     {
-      "name": "shipright",
-      "source": "./plugins/shipright",
-      "description": "Build a feature in one session: spec, lean plan, branch, task-by-task build with reviews on models you pick, and a live progress pane."
-    },
-    {
-      "name": "fable-team",
-      "source": "./plugins/fable-team",
-      "description": "/fable-team:init gives a project the Fable subagent team: research (Sonnet), builder (Opus) and reviewer (Opus) in .claude/agents plus the Subagent routing section in CLAUDE.md. The plugin registers no agents of its own."
-    },
-    {
       "name": "superpowers-flow",
       "source": "./plugins/superpowers-flow",
-      "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers superpowers dispatches instead of general-purpose."
+      "description": "Speed profiles (thorough, balanced, fast) for superpowers plan runs, chosen at the plan's handoff with the models per role; parallel slices in git worktrees or headless sessions; a live progress bar and agents panel; tiered sp-* workers; and a handoff that builds an approved EGM design."
     }
   ]
 }
