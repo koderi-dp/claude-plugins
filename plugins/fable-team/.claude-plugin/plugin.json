@@ -1,6 +1,0 @@
-{
-  "name": "fable-team",
-  "version": "0.3.1",
-  "description": "/fable-team:init gives a project the Fable subagent team: research (Sonnet), builder (Opus) and reviewer (Opus) in .claude/agents plus the Subagent routing section in CLAUDE.md. The plugin registers no agents of its own.",
-  "author": { "name": "Danijel Peric" }
-}
