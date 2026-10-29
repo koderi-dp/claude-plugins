@@ -6,7 +6,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Flow, Panel, Phase, PlannedTask, Role, RoleModels, SliceReport, SliceWorker } from '../types'
 import { MAX_CREW, askStop, bridgeRoot, currentBranch, logDirOf, logTail, pruneRuns, readRun, readRunModels, readRunSettings, runIdOf, segment, sliceRow, stopPath, workerRow, writeReport, writeRunSettings } from './bridge'
-import { CONFIG_DEFAULTS, PROFILE_NAMES, ROLE_LINE, WORKTREE_LINE, cleanRoleModels, effectiveOf, roleModelsText, fieldOf, handoffWithProfiles, parseConfigArgs, settingsBlock, skillWithSettings, tierSettingsOf, withRunProfile } from './tiers'
+import { CONFIG_DEFAULTS, PROFILE_NAMES, ROLE_LINE, WORKTREE_LINE, cleanRoleModels, effectiveOf, egmReviewWithBuild, roleModelsText, fieldOf, handoffWithProfiles, parseConfigArgs, settingsBlock, skillWithSettings, tierSettingsOf, withRunProfile } from './tiers'
 import type { TierSettings } from './tiers'
 import { pushOrToast, sessionComplete, sessionHooks, sessionRow, sessionStart, sessionStep } from './session'
 
@@ -1107,6 +1107,11 @@ export const register: Register = (on, options) => {
     if (/(^|:)writing-plans$/.test(e.skill) && !sliceOptions) {
       const computed = await next(e)
       return { text: handoffWithProfiles(computed.text, opts) }
+    }
+    // EGM's design review: once the design is approved, offer to build it with superpowers.
+    if (/(^|:)egm-review$/.test(e.skill) && !sliceOptions) {
+      const computed = await next(e)
+      return { text: egmReviewWithBuild(computed.text) }
     }
     if (!/(^|:)superpowers-flow$/.test(e.skill)) return next(e)
     const computed = await next(e)

@@ -257,6 +257,8 @@ export const handoffWithProfiles = (text: string, saved: Record<string, unknown>
     `- **Strong** - ${describeRoleModels(MODEL_PRESETS.strong ?? {})}. For hard or risky code.`,
     'The user may answer in their own words instead ("coders sonnet medium, final fable"): take the model (haiku, sonnet, opus, fable) and effort (low, medium, high, xhigh, max) they name per role; a role they leave out stays auto. Recommend Auto unless the spec makes a case: Strong beside thorough for risky code, Economy beside fast for a mechanical plan.',
     '',
+    EGM_SPEC_RULE,
+    '',
     '**If a Subagent-driven profile is chosen:** before the first dispatch, call `mcp__superpowers-flow__progress` with `profile: "<balanced|fast|thorough>"` along with the plan\'s title, total, tasks and phase `delegate`, and, unless models are Auto, `models`: `\"economy\"`, `\"strong\"`, or `{ coder, reviewer, final }` with each `{ model, effort }`. Its result carries that profile\'s instructions and how to mark the briefs for the models; they win over the superpowers-flow skill\'s settings section if it was loaded before. Then use superpowers:subagent-driven-development, as the plan says.',
   ].join('\n')
   const line = /^- \*\*Subagent-driven\*\*.*$/m
@@ -290,3 +292,25 @@ export const parseConfigArgs = (args: string): { pairs: [key: string, value: str
 
 // `superpowers-flow.coderTier`, or with the marketplace, to `coderTier`; null for another plugin's row.
 export const fieldOf = (key: string): string | null => /^superpowers-flow(?:@[^.]+)?\.([A-Za-z]+)$/.exec(key)?.[1] ?? null
+
+// The Elephant-Goldfish Model (google/elephant-goldfish-model) designs and reviews a spec and
+// stops there. Its review gets a last step that offers to build the approved design with
+// superpowers; writing-plans (above) turns the design into tasks.
+export const EGM_SPEC_RULE =
+  '**A spec from EGM** (a design document with a `Detailed Implementation Plan`, `Implementation Plan`, `Work Breakdown` or `Implementation Steps` section, as `/egm-draft` writes it and `/egm-review` checks it): its decisions are reviewed and final, so do not reopen them or ask again what it settles. Build the tasks from its implementation plan: its phases become groups of tasks, and slices where they do not depend on each other; every file it lists lands in exactly one task; its test plan becomes the tasks\' failing tests. EGM plans carry no code: write the code into each task as superpowers asks. A design that passed EGM\'s Implementation Readiness stage with no open findings is the case for recommending `fast`.'
+
+export const egmReviewWithBuild = (text: string): string =>
+  [
+    text,
+    '',
+    '## superpowers-flow: build the approved design',
+    '',
+    'EGM ends with an approved design; superpowers can build it. When the review is over and the design final (the user chose "Conclude review and finalize document" after Stage 9, the consolidated report is written, or a feature-spec-only review concluded after Stage 8), ask one more AskUserQuestion, after EGM\'s own gates, never inside one:',
+    '',
+    '- **Build this design with superpowers?** Options: **fast** (no per-task reviews: recommend it when Implementation Readiness passed with no open findings), **balanced** (one reviewer per task: recommend it when findings were resolved or a stage was skipped), **thorough** (superpowers as it ships: for designs whose review raised risk the user accepted), **Not now**.',
+    '- In the same call, **Models for this run**: Auto (recommended), Economy, Strong, as the superpowers-flow plan handoff describes.',
+    '',
+    'A feature-spec-only review leaves no implementation plan: say the plan will be written from the design, and do not recommend `fast`.',
+    '',
+    'If they choose a profile: use superpowers:writing-plans with the design document as the plan\'s `**Spec:**`, telling it the execution method is already chosen (Subagent-driven · <profile>, models <choice>), so its handoff only asks the user to review the plan. Then run it with superpowers:subagent-driven-development, the first `mcp__superpowers-flow__progress` call carrying `profile` and, unless Auto, `models`. Skip superpowers:brainstorming: EGM did that work. Once it is built, `/egm:egm-drift-report` checks the code against the design.',
+  ].join('\n')

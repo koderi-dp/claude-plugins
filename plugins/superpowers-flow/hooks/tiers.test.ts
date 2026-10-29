@@ -201,3 +201,23 @@ test('tiers: models chosen for the run reach each worker by the role its brief n
   }
   expect(efforts).toEqual(['medium', 'low', 'high'])
 })
+
+// EGM (google/elephant-goldfish-model) designs and reviews; superpowers builds what it approved.
+test('tiers: an EGM review ends by offering to build the design with superpowers', async ($, on) => {
+  on('skill.prompt', (_$, e) => ({ text: (e as { text: string }).text }))
+  const review = String(((await $.skill.prompt({ skill: 'egm:egm-review', text: '# Review' } as never)) as { text: string }).text)
+  expect(review.startsWith('# Review\n\n## superpowers-flow: build the approved design')).toBe(true)
+  expect(review).toContain('**Build this design with superpowers?**')
+  expect(review).toContain('use superpowers:writing-plans with the design document as the plan\'s `**Spec:**`')
+  expect(review).toContain('Skip superpowers:brainstorming')
+  // Its sub-skill and other skills are left alone.
+  const loop = await $.skill.prompt({ skill: 'egm:egm-review-loop', text: '# Loop' } as never)
+  expect((loop as { text: string }).text).toBe('# Loop')
+})
+
+test('tiers: writing-plans keeps an EGM design\'s decisions and builds tasks from its implementation plan', () => {
+  const text = handoffWithProfiles(HANDOFF, {})
+  expect(text).toContain('**A spec from EGM**')
+  expect(text).toContain('do not reopen them')
+  expect(text).toContain('every file it lists lands in exactly one task')
+})
