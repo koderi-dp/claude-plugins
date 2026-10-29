@@ -310,7 +310,7 @@ export const egmReviewWithBuild = (text: string): string =>
     '- **Build this design with superpowers?** Options: **fast** (no per-task reviews: recommend it when Implementation Readiness passed with no open findings), **balanced** (one reviewer per task: recommend it when findings were resolved or a stage was skipped), **thorough** (superpowers as it ships: for designs whose review raised risk the user accepted), **Not now**.',
     '- In the same call, **Models for this run**: Auto (recommended), Economy, Strong, as the superpowers-flow plan handoff describes.',
     '',
-    'A feature-spec-only review leaves no implementation plan: say the plan will be written from the design, and do not recommend `fast`.',
+    'When Blocker or Major findings are still open (an uninterrupted review fixes nothing), add a first option, **Resolve the open findings first** (`egm-resolve`, then ask again), and recommend it: a build only carries out the design as written. A feature-spec-only review leaves no implementation plan: say the plan will be written from the design, and do not recommend `fast`.',
     '',
     'If they choose a profile: use superpowers:writing-plans with the design document as the plan\'s `**Spec:**`, telling it the execution method is already chosen (Subagent-driven · <profile>, models <choice>), so its handoff only asks the user to review the plan. Then run it with superpowers:subagent-driven-development, the first `mcp__superpowers-flow__progress` call carrying `profile` and, unless Auto, `models`. Skip superpowers:brainstorming: EGM did that work. Once it is built, `/egm:egm-drift-report` checks the code against the design.',
   ].join('\n')

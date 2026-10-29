@@ -210,6 +210,7 @@ test('tiers: an EGM review ends by offering to build the design with superpowers
   expect(review).toContain('**Build this design with superpowers?**')
   expect(review).toContain('use superpowers:writing-plans with the design document as the plan\'s `**Spec:**`')
   expect(review).toContain('Skip superpowers:brainstorming')
+  expect(review).toContain('**Resolve the open findings first**')
   // Its sub-skill and other skills are left alone.
   const loop = await $.skill.prompt({ skill: 'egm:egm-review-loop', text: '# Loop' } as never)
   expect((loop as { text: string }).text).toBe('# Loop')
