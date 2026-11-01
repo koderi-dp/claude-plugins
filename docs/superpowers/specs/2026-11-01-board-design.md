@@ -30,7 +30,7 @@ Who it is for: the user running MVPs with superpowers across several sessions an
 - The home view is the overview of every milestone; a milestone opens in place. The active milestone's detail is one click away, not the home.
 - Live state that does not belong in git (which session works on what, with which agents) goes in a shared file in the git common directory. Sessions see each other through it; no server, no app API.
 - The mod never guesses status. The skill records at task boundaries; the init reconstructs once from what the project has and marks the unsure items backlog with a note.
-- Built on the same function-hooks API as superpowers-flow (an early-access API that may change), with `$.fs.read`, `$.fs.write`, `$.fs.stat` and `$.fs.ancestors`. Agent tracking is cribbed from superpowers-flow's `agent.spawn`, `turn.step` and `turn.complete` handlers.
+- Built on the same function-hooks API as superpowers-flow (an early-access API that may change), with `$.fs.read`, `$.fs.write`, `$.fs.stat` and `$.session.repo()`. Agent tracking is cribbed from superpowers-flow's `agent.spawn`, `turn.step` and `turn.complete` handlers.
 
 ## 3. The board file
 
@@ -76,7 +76,7 @@ Who it is for: the user running MVPs with superpowers across several sessions an
 
 Unknown fields are kept on read and written back, so a later version can add fields without breaking an older plugin.
 
-**Finding the file.** The mod resolves the project root once per session: the git common directory through `$.fs.ancestors` on `.git` (a file with `gitdir:` in a worktree points at `<main>/.git/worktrees/<name>`, whose parent's parent is the main checkout), else the working directory. The board path is `<main checkout>/docs/superpowers/board.json`. A worktree session reads and writes that file, not its own branch's copy, and the skill never commits it from a worktree.
+**Finding the file.** The mod resolves the project root once per session: `$.session.repo()` answers `root`, the main working tree's root even from a worktree; without a repository the session's root (`$.session.root()`) stands in. The board path is `<main checkout>/docs/superpowers/board.json`. A worktree session reads and writes that file, not its own branch's copy, and the skill never commits it from a worktree.
 
 ## 4. The live file
 
@@ -168,7 +168,7 @@ Language: English only. Colours follow superpowers-flow's palette so the two pan
 - A `ref` that does not exist is kept and drawn without a link.
 - Two sessions writing the board in the same second: the last writer wins per field; the re-read before each write keeps losses to the fields changed in that second. Noted in the README; not solved.
 - A live file that fails to parse is replaced by this session's entry alone; the others rewrite theirs on their next heartbeat.
-- A worktree whose main checkout cannot be resolved (bare repository, `.git` file without `gitdir`) falls back to its own `docs/superpowers/board.json` and the panel says so in one dim line.
+- A session without a repository (`$.session.repo()` is null) keeps the board under its own root, `docs/superpowers/board.json`, and the live file under `~/.claude/board/`.
 - The engine may rename hook events between releases: the README names the version the plugin was tested on, as superpowers-flow's does.
 
 ## 9. Layout and testing
