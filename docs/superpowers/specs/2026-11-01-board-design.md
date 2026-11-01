@@ -99,7 +99,9 @@ One panel, pane id `board`. `/board` toggles it, `/board open` brings it forward
 **Board section** (top):
 
 - The active milestone: title, `done/total`, a thin bar. Items grouped in this order: in_progress, blocked, next, then done folded to one line with its count (`/board done` unfolds). Each item: status mark, title, note in dimmer text, elapsed since `updatedAt` for in_progress and blocked.
-- Other milestones one line each: mark, title, `done/total`.
+- Other milestones below it, one line each: mark (planned, active, done), title, `done/total`. The next 3 planned draw; the rest fold to "and N more", unfolded by a click or `/board milestones`. A project with one plan sees no fold.
+- Any milestone opens in place: click its line, or `/board show <id>`, and its items draw under it in the same groups as the active one, done included. Click again, or `/board show`, collapses it. The active milestone stays on top.
+- `/board find <text>` lists the items whose title or note matches, each with its milestone, for a project with 25 queued slices.
 - No file: "No board. /board init reads the plans and the ledger." Broken file: the parse error and the line.
 
 **Now section** (bottom):
@@ -108,7 +110,7 @@ One panel, pane id `board`. `/board` toggles it, `/board open` brings it forward
 - Subagents, running first: name (the Agent call's `description`), model, elapsed, and **what it is doing now** in words, derived from its latest `tool.call` (the events carry `agentId`): `editing src/catalog/grid.tsx`, `running npm run check:fast`, `reading progress.md`, `searching "import_run"`, `waiting on a browser page`. A long command keeps its first word and the script name. Finished agents: one line with name, duration, tool-call count and done or failed. The latest 8 finished draw; a count stands for the rest. No per-command history: that is what the Background tasks pane already does badly.
 - Step reports through superpowers-flow's `step` tool are not read here; this plugin has no step tool. The activity line is enough.
 
-`/board status` prints both sections as text in the conversation, so the phone and an SSH session see the same.
+`/board status` prints both sections as text in the conversation, so the phone and an SSH session see the same. `/board status all` prints every milestone with every item, done included; `/board status <id>` one milestone in full.
 
 Language: English only. Colours follow superpowers-flow's palette so the two panels match when both are installed; superpowers-flow is not required.
 
