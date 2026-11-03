@@ -6,7 +6,7 @@ export type Parsed = { ok: true; board: Board } | { ok: false; error: string }
 
 export type Update = {
   goal?: Goal
-  milestones?: Array<Partial<Milestone> & { id: string; after?: string; items?: Array<Partial<Item> & { id: string; after?: string }> }>
+  milestones?: Array<Omit<Partial<Milestone>, 'items'> & { id: string; after?: string; items?: Array<Partial<Item> & { id: string; after?: string }> }>
   remove?: string[]
 }
 
@@ -21,7 +21,7 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 function jsonErrorAt(text: string): number {
   let i = 0
   const ws = () => {
-    while (i < text.length && ' \t\r\n'.includes(text[i])) i++
+    while (i < text.length && ' \t\r\n'.includes(text[i]!)) i++
   }
   const fail = (): never => {
     throw i
@@ -176,7 +176,7 @@ export function importPlan(board: Board, input: ImportInput): Imported {
   const text = input.text.replace(/\r/g, '')
   const tasks = [...text.matchAll(/^### Task (\d+):[ \t]*(.+?)[ \t]*$/gm)].map(([, n, title]) => ({
     id: `t${n}`,
-    title,
+    title: String(title),
     ref: `${input.plan}#${anchorOf(`Task ${n}: ${title}`)}`,
   }))
   if (!tasks.length) return { ok: false, error: `no "### Task N:" headings in ${input.plan}` }
@@ -208,7 +208,7 @@ export const elapsed = (ms: number): string => {
   return `${Math.floor(h / 24)}d`
 }
 
-export const shortModel = (model: string): string => /(fable|mythos|opus|sonnet|haiku)/i.exec(model)?.[1].toLowerCase() ?? model
+export const shortModel = (model: string): string => /(fable|mythos|opus|sonnet|haiku)/i.exec(model)?.[1]?.toLowerCase() ?? model
 
 const doneOf = (m: Milestone) => m.items.filter(i => i.status === 'done').length
 
@@ -221,10 +221,10 @@ const since = (iso: string | undefined, at: number) => {
 
 export function attention(m: Milestone, live: Live, at: number = Date.now()): { kind: 'blocked' | 'in_progress' | 'next' | 'none'; count: number; text: string } {
   const blocked = m.items.filter(i => i.status === 'blocked')
-  if (blocked.length) return { kind: 'blocked', count: blocked.length, text: `${blocked.length} blocked: ${blocked[0].note || blocked[0].title}` }
+  if (blocked.length) return { kind: 'blocked', count: blocked.length, text: `${blocked.length} blocked: ${blocked[0]!.note || blocked[0]!.title}` }
   const going = m.items.filter(i => i.status === 'in_progress')
   if (going.length) {
-    const first = going[0]
+    const first = going[0]!
     const holder = Object.values(live.sessions).find(s => s.item === `${m.id}/${first.id}`)
     const agent = holder?.agents[0]
     const tail = agent ? ` · ${shortModel(agent.model)} · ${since(agent.startedAt, at)}` : ''
@@ -323,7 +323,7 @@ export function statusText(board: Board | null, error: string | null, live: Live
     if (done.length) {
       lines.push('Done')
       if (isAll || done.length === 1) lines.push(...done.flatMap(withItems))
-      else lines.push(`  ✓ ${done.length} milestones, latest: ${done[done.length - 1].title}`)
+      else lines.push(`  ✓ ${done.length} milestones, latest: ${done[done.length - 1]!.title}`)
     }
   }
   return [...lines, ...nowLines(live, agents, tasks, at)].join('\n')
@@ -346,10 +346,10 @@ const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` 
 /** The command a shell call runs, in its first three words: env assignments, `export`, `timeout`, `time` left out. */
 function commandWords(command: string): string {
   const segment = command.split(/&&|;|\|\|/).map(s => s.trim()).filter(s => s && !/^export\s/.test(s) && !/^cd\s/.test(s)).pop() ?? ''
-  const words = segment.split('|')[0].trim().match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
+  const words = (segment.split('|')[0] ?? '').trim().match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
   let i = 0
   while (i < words.length) {
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!)) i++
     else if (words[i] === 'time' || words[i] === 'env') i++
     else if (words[i] === 'timeout' && /^\d/.test(words[i + 1] ?? '')) i += 2
     else break

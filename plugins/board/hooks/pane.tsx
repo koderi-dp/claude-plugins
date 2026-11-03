@@ -1,13 +1,16 @@
 // The panel's views, drawn from plain data with the surface's own elements.
 // One tree for terminal and desktop: Box, Text and Button only.
-import type { EngineInterface } from 'claude-code'
+import type { EngineInterface, RenderElement } from 'claude-code'
 
 import type { AgentRun, Board, Item, Live, Milestone, NativeTask } from '../types'
 import { attention, elapsed, queueText, shortModel } from './board'
 import type { Others } from './live'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
-type Element = ReturnType<typeof h>
+type Element = RenderElement
+// The surface's elements as plain components: the tables differ per surface, the props used here do not.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Comp = (p: Record<string, any>) => Element
 
 export const RUNNING = '#8f8cf4'
 export const DONE = '#5fbf8f'
@@ -21,7 +24,7 @@ export type NowFilter = { id: string; titles: string[] }
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 
 export function renderNow(ui: Ui, d: { agents: AgentRun[]; tasks: NativeTask[]; others: Others; at: number; filter?: NowFilter }): Element {
-  const { Box, Text } = ui as unknown as { Box: (p: object) => Element; Text: (p: object) => Element }
+  const { Box, Text } = ui as unknown as { Box: Comp; Text: Comp }
   const f = d.filter
   const agents = f ? d.agents.filter(a => f.titles.some(t => t && a.name.includes(t))) : d.agents
   const others = f ? d.others.filter(o => o.item?.startsWith(`${f.id}/`)) : d.others
@@ -102,7 +105,7 @@ export function barText(done: number, total: number, width = 20): string {
 const doneOf = (m: Milestone) => m.items.filter(i => i.status === 'done').length
 const MILESTONE_GLYPH: Record<string, string> = { active: '●', planned: '○', done: '✓' }
 
-type Els = { Box: (p: object) => Element; Text: (p: object) => Element; Button: (p: object) => Element }
+type Els = { Box: Comp; Text: Comp; Button: Comp }
 
 export function renderHome(
   ui: Ui,
@@ -180,7 +183,7 @@ export function renderHome(
         <Button key="more" plain label={d.isMoreShown ? 'Show fewer' : `… and ${planned.length - PLANNED_SHOWN} more planned`} onPress={d.onMore} />
       )}
       {finished.length > 0 && head('Done')}
-      {finished.length === 1 ? finished.map(row) : finished.length > 1 && <Text dimColor>{`✓ ${finished.length} done, latest: ${finished[finished.length - 1].title}`}</Text>}
+      {finished.length === 1 ? finished.map(row) : finished.length > 1 && <Text dimColor>{`✓ ${finished.length} done, latest: ${finished[finished.length - 1]!.title}`}</Text>}
       {nowButton}
     </Box>
   )

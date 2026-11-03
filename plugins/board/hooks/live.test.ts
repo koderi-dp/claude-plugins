@@ -24,7 +24,7 @@ test('others marks quiet after 3 minutes and leaves self out', () => {
   const live: Live = { sessions: { self: entry(at(0)), other: entry(at(4 * 60_000), 'Other'), fresh: entry(at(10_000), 'Fresh') } }
   const r = others(live, 'self', NOW)
   expect(r.map(o => o.id)).toEqual(['fresh', 'other'])
-  expect(r[0].isQuiet).toBe(false)
+  expect(r[0]!.isQuiet).toBe(false)
   expect(r[1]).toMatchObject({ id: 'other', title: 'Other', isQuiet: true })
   expect(QUIET_MS).toBe(3 * 60_000)
 })

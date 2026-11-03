@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { AgentRun, Board, Live, LiveSession, NativeTask, Panel } from '../types'
 import { renderHome, renderMilestone, renderNow } from './pane'
@@ -21,6 +21,21 @@ const live = atom({ plugin: 'board', key: 'live' } as const, { sessions: {} } as
 const panel = atom({ plugin: 'board', key: 'panel' } as const, { view: { kind: 'home' }, isMoreShown: false, autoOpenedFor: '' } as Panel)
 
 const PANE = 'board'
+
+/** Rule 6 of the skill, handed to the model by `/board init`. */
+const INIT_PROMPT = [
+  'Build the project board with the mcp__board__board tool, following the board skill\'s init rule. Read, in this order:',
+  '1. Every plan in docs/superpowers/plans/: call the tool with action "import" for each, for the skeleton.',
+  '2. Any ledger the plans or CLAUDE.md name (.superpowers/sdd/progress.md, .superpowers/sdd/*/progress.md and the like): a "Task N: complete" line, or prose saying a task was accepted, makes that item done with the commit range as its note.',
+  '3. CLAUDE.md sections that track status or a queue: an "MVP status" table gives goal (rows done out of all) and each milestone\'s closes list; an "MVP queue" gives one planned milestone per entry with needs and size from its text and one backlog item each until a plan exists; the rows already done become one done milestone "On main".',
+  '4. git log and the branches as a cross-check: commits on the main branch make a task done; a branch with work makes it in_progress or blocked.',
+  'Where the sources disagree or say nothing, set the item to backlog with a note naming what you read. Never guess a status you cannot point at. Write everything through the tool with action "update"; never edit board.json directly.',
+  'Then answer with the /board status text and one sentence asking the user for corrections.',
+].join('\n')
+
+const REFRESH_PROMPT =
+  'A board exists. Refresh it with the mcp__board__board tool: import every plan in docs/superpowers/plans/ again (titles and refs refresh, statuses stay), update the queue fields (needs, size, closes) from CLAUDE.md, and change a status only where git proves it. Then answer with the /board status text.\n\n' +
+  INIT_PROMPT
 const USAGE = 'board: status | status all | status <id> | show <id> | find <text> | init | open'
 
 /** The `autoOpen` setting as this load of the module received it. */
@@ -456,7 +471,7 @@ export const register: Register = (on, options) => {
       try {
         const at = await $.clock.now()
         await update($, agents, list =>
-          list.map(a => (a.agentId === agentId && a.status === 'running' ? { ...a, status: e.reason === 'answer' ? 'done' : 'failed', endedAt: at } : a)),
+          list.map((a): AgentRun => (a.agentId === agentId && a.status === 'running' ? { ...a, status: e.reason === 'answer' ? 'done' : 'failed', endedAt: at } : a)),
         )
         await update($, now, () => at)
       } catch {}
@@ -484,7 +499,7 @@ export const register: Register = (on, options) => {
       }
       if (sub === '') {
         // Back to the overview each time it opens.
-        await update($, panel, prev => ({ ...prev, view: { kind: 'home' } }))
+        await update($, panel, (prev): Panel => ({ ...prev, view: { kind: 'home' } }))
         const isOpen = await togglePane($)
         return { text: isOpen ? 'Board panel opened.' : 'Board panel closed.' }
       }
@@ -500,9 +515,16 @@ export const register: Register = (on, options) => {
         const b = await read($, board)
         const m = b?.milestones.find(x => x.id === arg)
         if (!m) return { text: `No milestone ${arg}. Ids: ${b?.milestones.map(x => x.id).join(', ') || 'none'}` }
-        await update($, panel, prev => ({ ...prev, view: { kind: 'milestone', id: m.id } }))
+        await update($, panel, (prev): Panel => ({ ...prev, view: { kind: 'milestone', id: m.id } }))
         await openPane($)
         return { text: `Board panel shows ${m.id}.` }
+      }
+      if (sub === 'init') {
+        await loadBoard($)
+        const exists = (await read($, board)) !== null || (await read($, boardError)) !== null
+        return exists
+          ? { text: 'A board exists; init refreshes titles, refs and queue fields and only proves statuses from git.', context: [REFRESH_PROMPT] }
+          : { text: 'Reading the plans, the ledger and git to build the board…', context: [INIT_PROMPT] }
       }
       if (sub === 'find' && arg) {
         await loadBoard($)
@@ -517,7 +539,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
-    const { Box, Button } = ui as unknown as { Box: (p: object) => ReturnType<typeof h>; Button: (p: object) => ReturnType<typeof h> }
+    const { Box, Button } = ui as unknown as { Box: (p: Record<string, unknown>) => RenderElement; Button: (p: Record<string, unknown>) => RenderElement }
     const at = Math.max(await read($, now), await $.clock.now())
     let selfId = ''
     try {
@@ -528,7 +550,7 @@ export const register: Register = (on, options) => {
     const b = await read($, board)
     const error = await read($, boardError)
     const p = await read($, panel)
-    const show = (view: Panel['view']) => void update($, panel, prev => ({ ...prev, view }))
+    const show = (view: Panel['view']) => void update($, panel, (prev): Panel => ({ ...prev, view }))
     if (!b && !error) return renderNow(ui, d)
     if (p.view.kind === 'milestone' && b) {
       const id = p.view.id

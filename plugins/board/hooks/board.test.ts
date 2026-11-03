@@ -43,10 +43,10 @@ test('applyUpdate merges by id, stamps updatedAt on a status change and keeps un
     '2026-11-02T10:00:00Z',
   )
   expect(r.milestones[0]).toMatchObject({ extra: 1 })
-  expect(r.milestones[0].items[0]).toMatchObject({ colour: 'red', status: 'in_progress', note: 'go', updatedAt: '2026-11-02T10:00:00Z' })
-  expect(r.milestones[0].items.map(i => i.id)).toEqual(['t1', 't2'])
-  expect(r.milestones[0].items[1]).not.toHaveProperty('after')
-  expect(b.milestones[0].items[0].status).toBe('backlog')
+  expect(r.milestones[0]!.items[0]!).toMatchObject({ colour: 'red', status: 'in_progress', note: 'go', updatedAt: '2026-11-02T10:00:00Z' })
+  expect(r.milestones[0]!.items.map(i => i.id)).toEqual(['t1', 't2'])
+  expect(r.milestones[0]!.items[1]!).not.toHaveProperty('after')
+  expect(b.milestones[0]!.items[0]!.status).toBe('backlog')
 })
 
 test('applyUpdate leaves updatedAt alone when only the note changes, and remove drops ids', () => {
@@ -55,8 +55,8 @@ test('applyUpdate leaves updatedAt alone when only the note changes, and remove 
     milestones: [ms('m', 'active', [{ id: 't1', title: 'A', status: 'done', updatedAt: 'old' }, { id: 't2', title: 'B', status: 'next' }])],
   }
   const r = applyUpdate(b, { milestones: [{ id: 'm', items: [{ id: 't1', status: 'done', note: 'a1..b2' }] }] }, 'new')
-  expect(r.milestones[0].items[0]).toMatchObject({ updatedAt: 'old', note: 'a1..b2' })
-  expect(applyUpdate(r, { remove: ['t2'] }, 'new').milestones[0].items.map(i => i.id)).toEqual(['t1'])
+  expect(r.milestones[0]!.items[0]!).toMatchObject({ updatedAt: 'old', note: 'a1..b2' })
+  expect(applyUpdate(r, { remove: ['t2'] }, 'new').milestones[0]!.items.map(i => i.id)).toEqual(['t1'])
   expect(applyUpdate(r, { remove: ['m'] }, 'new').milestones).toEqual([])
 })
 
@@ -72,18 +72,18 @@ test("importPlan reads catalo's nine tasks from CRLF text and keeps existing sta
   const first = importPlan(emptyBoard(), { plan: PLAN, text: CATALO_PLAN })
   expect(first).toMatchObject({ ok: true, milestoneId: 'phase1-foundation', count: 9 })
   const b = (first as { board: Board }).board
-  expect(b.milestones[0]).toMatchObject({ status: 'active', title: 'Phase 1, Plan 1: Foundation Implementation Plan', ref: PLAN })
-  expect(b.milestones[0].items).toHaveLength(9)
-  expect(b.milestones[0].items[2]).toMatchObject({
+  expect(b.milestones[0]!).toMatchObject({ status: 'active', title: 'Phase 1, Plan 1: Foundation Implementation Plan', ref: PLAN })
+  expect(b.milestones[0]!.items).toHaveLength(9)
+  expect(b.milestones[0]!.items[2]!).toMatchObject({
     id: 't3',
     title: 'Croatian and English UI with Paraglide',
     status: 'backlog',
     ref: `${PLAN}#task-3-croatian-and-english-ui-with-paraglide`,
   })
-  expect(b.milestones[0].items.every(i => !/\s$/.test(i.title))).toBe(true)
+  expect(b.milestones[0]!.items.every(i => !/\s$/.test(i.title))).toBe(true)
   const marked = applyUpdate(b, { milestones: [{ id: 'phase1-foundation', items: [{ id: 't3', status: 'done', note: 'a..b' }] }] }, '2026-11-02T10:00:00Z')
   const again = importPlan(marked, { plan: PLAN, text: CATALO_PLAN.replace('Croatian and English UI', 'Croatian + English UI') })
-  expect((again as { board: Board }).board.milestones[0].items[2]).toMatchObject({ status: 'done', note: 'a..b', title: 'Croatian + English UI with Paraglide' })
+  expect((again as { board: Board }).board.milestones[0]!.items[2]!).toMatchObject({ status: 'done', note: 'a..b', title: 'Croatian + English UI with Paraglide' })
 })
 
 test('importPlan adds a second plan as planned with the queue fields given', () => {
