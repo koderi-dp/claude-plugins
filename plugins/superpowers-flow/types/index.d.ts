@@ -14,7 +14,16 @@ export type Flow = {
   phase: Phase
   isFinished: boolean
   tasks: PlannedTask[]
+  /** The run id slices report under, made by the first `progress` call with a title. */
+  run?: string
+  /** A profile chosen for this run at the plan's handoff, over the saved one. */
+  profile?: string
+  /** Models and efforts chosen for this run's roles at the handoff; a role left out is auto. */
+  models?: RoleModels
 }
+
+export type Role = 'coder' | 'reviewer' | 'final'
+export type RoleModels = Partial<Record<Role, { model?: string; effort?: string }>>
 
 export type AgentStatus = 'running' | 'done' | 'failed'
 
@@ -34,10 +43,61 @@ export type AgentRun = {
   costUsd: number
   steps: number
   round: number
+  /** The effort its role was given for this run, over its tier's. */
+  roleEffort?: string
   /** Self-reported by the worker through the `step` tool. */
   stepDone?: number
   stepTotal?: number
   stepNote?: string
+}
+
+/** What a slice running in its own session last wrote to the bridge. */
+export type SliceReport = {
+  run: string
+  slice: string
+  title: string
+  done: number
+  total: number
+  phase: string
+  isFinished: boolean
+  note?: string
+  model: string
+  costUsd: number
+  contextTokens: number
+  contextMax: number
+  /** The workers the slice session runs, newest last, and how many run now. */
+  crew: SliceWorker[]
+  running: number
+  /** The session ended because the main session asked it to stop. */
+  isStopped: boolean
+  startedAt: number
+  updatedAt: number
+  /** The titles of the slice's tasks, so the parent does not list them as planned. */
+  tasks: string[]
+}
+
+/** One worker of a slice session, as its panel row would show it. */
+export type SliceWorker = {
+  description: string
+  type: string
+  model: string
+  effort?: string
+  status: AgentStatus
+  stepDone?: number
+  stepTotal?: number
+  stepNote?: string
+  costUsd: number
+  contextTokens: number
+  contextMax: number
+  startedAt: number
+  endedAt?: number
+}
+
+/** Set in a slice's own session by `progress({ run, slice })`: where it reports. */
+export type Bridge = {
+  run: string
+  slice: string
+  startedAt: number
 }
 
 export type Panel = {
@@ -60,6 +120,8 @@ declare module 'claude-code' {
       isHidden: boolean
       isBusy: boolean
       warned: number
+      slices: SliceReport[]
+      bridge: Bridge | null
     }
   }
 }

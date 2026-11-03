@@ -8,9 +8,7 @@ Claude Code plugins for faster, quieter sessions. This repository is a plugin ma
 | [output-trim](plugins/output-trim) | Trims noisy build, test and log output to errors, failures and summaries | Windows |
 | [code-outline](plugins/code-outline) | Symbol outlines and single-symbol reads via tree-sitter for Rust, TypeScript, JavaScript, Python and C# | Windows |
 | [ssh-remote](plugins/ssh-remote) | Runs commands and downloads files over SSH, with credentials read from files Claude never sees | Windows |
-| [shipright](plugins/shipright) | Builds a feature in one session: spec, lean plan, branch, task-by-task build with reviews on models you pick, and a live progress pane | Any |
-| [fable-team](plugins/fable-team) | `/fable-team:init` gives a project research (Sonnet), builder (Opus) and reviewer (Opus) subagents in `.claude/agents` plus the routing rule in `CLAUDE.md`; registers no agents itself | Any |
-| [superpowers-flow](plugins/superpowers-flow) | Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered `sp-*` workers superpowers dispatches instead of `general-purpose` | Any |
+| [superpowers-flow](plugins/superpowers-flow) | Speed profiles (thorough, balanced, fast) and models per role for [superpowers](https://github.com/obra/superpowers) plan runs, chosen at the plan's handoff; parallel slices in git worktrees or their own headless sessions; a live progress bar and agents panel; and a handoff that builds an approved [EGM](https://github.com/google/elephant-goldfish-model) design | Any |
 | [board](plugins/board) | A panel of this session's tasks, subagents (what each is doing, in words) and sibling sessions, plus a project board of milestones and tasks Claude keeps in `docs/superpowers/board.json` | Any |
 
 ## Install
@@ -18,16 +16,16 @@ Claude Code plugins for faster, quieter sessions. This repository is a plugin ma
 At the prompt of a terminal session, one plugin at a time:
 
 ```
-/plugin install shipright --marketplace koderi-dp/claude-plugins
+/plugin install superpowers-flow --marketplace koderi-dp/claude-plugins
 ```
 
 From a shell:
 
 ```bash
-claude plugin install shipright --marketplace koderi-dp/claude-plugins
+claude plugin install superpowers-flow --marketplace koderi-dp/claude-plugins
 ```
 
-Replace `shipright` with any plugin name from the table. The first install asks to add the marketplace; answer `y`.
+Replace `superpowers-flow` with any plugin name from the table. The first install asks to add the marketplace; answer `y`.
 
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
 
@@ -59,7 +57,7 @@ just release output-trim        # release-build one plugin into plugins/<name>/b
 just publish output-trim 0.1.1  # bump, test, release, commit, tag, push, update the local install
 ```
 
-shipright has no build step. Its tests run with `claude plugin test plugins/shipright`.
+superpowers-flow has no build step. Its tests run with `claude plugin test plugins/superpowers-flow`.
 
 ## License
 

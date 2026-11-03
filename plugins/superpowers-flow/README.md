@@ -1,12 +1,160 @@
 # superpowers-flow
 
-Live status for [superpowers](https://github.com/obra/superpowers) plan runs, adapted from johnnyvizz's [savvy-flow](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-flow), [savvy-progress](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress) and [session-band](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/session-band) (MIT, [LICENSE-savvy](LICENSE-savvy)). Superpowers stays in charge of the flow; this plugin adds what you see while it runs and the workers it runs on.
+Faster, visible [superpowers](https://github.com/obra/superpowers) plan runs. Superpowers stays in charge of the flow; this plugin adds:
 
-- **Progress bar** above the prompt: the plan's name, phase, accepted tasks out of planned, and a crew button that opens the panel.
-- **Session row** beneath it, from the first turn on: turn number, output speed of the last response, cost of the last turn and of the session, a countdown of the 1-hour prompt cache, and context fill. The row gets an amber frame 20 minutes before the cache expires and a red one at 10, and a notification (or a toast) at 10 and 5 minutes. `×` hides it for the session; `/flow-session` shows or hides it, `/flow-session demo <minutes>` previews the warning. Drawn by the same mod as the progress bar, so the two never cover each other.
-- **On the phone**: a device attached over Remote Control sees the conversation, not the bar or the panel, so three things carry the run there. The skill writes one status line per accepted task (`Tasks 4/6 · next: Task 5 (sp-light)`); `/flow-status` answers with the panel as text, from any device; and with notifications on (`/flow-notify on`, or the `notify` setting), a push notification (or a toast when it cannot be delivered) at each accepted task, a failed worker and the finish. Pushes reach the phone when **Push when Claude decides** is on in `/config`.
-- **Agents panel** (`/flow-agents` toggles it; `/flow-agents open` brings it forward): running, finished and planned subagents with model, effort, their own step progress, context, estimated cost and time. On the desktop it draws every running agent, the latest 8 finished (Show more: 24) and the next 8 planned, and counts the rest, so a long run keeps drawing; `/flow-status` lists all of them. Every subagent brief gets a one-line request to report its steps, so superpowers' implementers and reviewers draw a progress bar of their own instead of a grey context bar.
-- **Five tiered workers** that superpowers dispatches in place of `general-purpose` plus a model. The skill maps superpowers' Model Selection onto them:
+- **Speed profiles**: `thorough` (superpowers as it ships), `balanced` and `fast`, plus the models per role, chosen when superpowers asks how to run a plan.
+- **Parallel slices**: independent parts of a plan run at the same time, in git worktrees or in their own Claude Code sessions.
+- **A live view**: a progress bar above the prompt, a session row (turn, speed, cost, cache countdown, context) and an agents panel with every worker's model, steps, cost and time.
+- **EGM handoff**: an approved [Elephant-Goldfish Model](https://github.com/google/elephant-goldfish-model) design goes straight to a superpowers build.
+
+## Install
+
+Needs Claude Code v2.1.287 or later (`claude --version`; `claude update` updates it) and the superpowers plugin.
+
+```bash
+claude plugin install superpowers-flow --marketplace koderi-dp/claude-plugins
+```
+
+At a terminal session's prompt: `/plugin install superpowers-flow --marketplace koderi-dp/claude-plugins`. In the desktop app: + next to the prompt box, Plugins, Add marketplace `koderi-dp/claude-plugins`, then Add plugin.
+
+If savvy-progress or session-band is installed, disable it: this plugin draws what both do.
+
+## Update
+
+```bash
+claude plugin marketplace update code101-plugins
+claude plugin update superpowers-flow@code101-plugins
+```
+
+Then start a new session (or run `/reload-plugins`). `claude plugin list` shows the installed version. In the desktop app, update from the Plugins menu.
+
+## How to use it
+
+### Plan and build a feature
+
+```text
+I want to add CSV export to the todo CLI. Let's brainstorm it with superpowers.
+```
+
+Superpowers brainstorms, writes a spec and a plan, then asks how to run it. With this plugin the question is:
+
+> **Which execution approach?**
+> - Subagent-driven · balanced (Recommended): one reviewer per task, independent slices in parallel worktrees
+> - Subagent-driven · fast: no per-task reviews, only the final review
+> - Subagent-driven · thorough: superpowers as it ships
+> - Native: Claude implements everything in this session
+>
+> **Models for this run?** Auto (Recommended) · Economy · Strong · or say your own
+
+Pick one; the run starts and the panel opens.
+
+### Run a plan you already have
+
+```text
+Execute docs/superpowers/plans/2026-10-28-csv-export.md with subagents.
+Run it fast, with Economy models.
+```
+
+```text
+Run this plan balanced; coders on sonnet medium, final review on fable high.
+```
+
+```text
+Skip task reviews for this run.          (fast for this run only)
+Continue the plan from where it stopped.  (superpowers resumes from its ledger)
+```
+
+### Design with EGM first
+
+For features with real design decisions (APIs, data models, anything others depend on), install EGM (`claude plugin install egm@egm`) and run its steps:
+
+```text
+/egm:egm-brainstorm Add webhook delivery to this project.
+/egm:egm-draft
+/egm:egm-review docs/designs/webhooks.md
+```
+
+When the review ends, Claude asks **Build this design with superpowers?** (fast, balanced, thorough, or resolve the open findings first) and the models. Superpowers plans the build from the design without reopening its decisions. Afterwards, `/egm:egm-drift-report` checks the code still matches the design. Small, clear features need no EGM.
+
+### Run each slice in its own session
+
+```text
+/flow-config runner=session
+```
+
+The next run starts one headless Claude Code session per independent slice. The panel shows each one with its tasks, current step and workers, and **■ Stop** and **Log** buttons. From any device:
+
+```text
+/flow-log email      the end of slice "email"'s log
+/flow-stop email     stop it; its branch and commits stay
+```
+
+### Watch and control
+
+| Command | Does |
+| --- | --- |
+| `/flow-agents` | Opens or closes the agents panel (`/flow-agents open` brings it forward) |
+| `/flow-status` | The panel as text: works on a phone over Remote Control |
+| `/flow-notify on` | A push notification at each accepted task, a failed worker and the finish |
+| `/flow-session` | Shows or hides the session row (`/flow-session demo 12` previews the cache warning) |
+| `/flow-config` | Lists and changes every setting (below) |
+
+## Speed profiles
+
+| | `thorough` (default) | `balanced` | `fast` |
+| --- | --- | --- | --- |
+| Reviews after each task | superpowers' own | one reviewer | none: only the final review |
+| Independent tasks | one at a time | in parallel worktrees | in parallel worktrees |
+| Small mechanical tasks | one worker each | batched | batched |
+| Small fixes checked by | a reviewer | Claude | Claude |
+| Tests per task | full suite | the task's own, full suite at the end | the task's own, full suite at the end |
+| Final review on | `sp-fable` | `sp-careful` | `sp-careful` |
+| Use it for | risky code: security, money, migrations, public APIs | everyday work | mechanical, well-specified plans |
+
+On a 4-task test plan, `fast` finished in 3.6 minutes against 11.7 for `thorough`, at less than half the cost.
+
+## Settings
+
+Change them with `/flow-config` (desktop, terminal, SSH or phone) or the plugin's Settings tab:
+
+```text
+/flow-config                                  list every setting, its value and choices
+/flow-config profile=balanced                 the default profile
+/flow-config profile=fast taskReview=combined fast, but one reviewer per task
+/flow-config lightModel=sonnet mediumEffort=high
+/flow-config reset                            back to the defaults
+```
+
+| Setting | Values |
+| --- | --- |
+| `profile` | `thorough` (default), `balanced`, `fast` |
+| `taskReview`, `parallel`, `batchTasks`, `reReview`, `testScope` | the profile's single knobs; `profile` (default) follows it, any other value wins |
+| `runner` | `subagent`, `worktree` (balanced and fast), `session` (set it yourself) |
+| `coderTier`, `reviewerTier`, `finalReviewTier` | `auto` (default) or a tier: `light`, `medium`, `careful`, `heavy`, `fable` |
+| `<tier>Model`, `<tier>Effort` | `haiku`, `sonnet`, `opus`, `fable`; `low` … `max`; `default` keeps the agent file's |
+| `notify` | `off` (default), `milestones` |
+| `autoOpen` | `tier` (default) opens the panel for `sp-*` workers; `any` for any subagent |
+
+A profile or models chosen at a plan's handoff apply to that run only and win over the saved settings.
+
+On a machine without the desktop app, put settings in `~/.claude/settings.json`:
+
+```json
+{
+  "pluginConfigs": {
+    "superpowers-flow@code101-plugins": {
+      "options": { "profile": "balanced", "mediumModel": "sonnet", "notify": "milestones" }
+    }
+  }
+}
+```
+
+## How it works
+
+<details>
+<summary>Workers, runners, child sessions and the panel</summary>
+
+**Tiered workers.** Superpowers dispatches five `sp-*` workers in place of `general-purpose` plus a model:
 
 | Superpowers says | Worker | Model / effort |
 | --- | --- | --- |
@@ -16,68 +164,26 @@ Live status for [superpowers](https://github.com/obra/superpowers) plan runs, ad
 | most capable, for understanding | `sp-heavy` | Opus / xhigh |
 | most capable, for architecture and the final review | `sp-fable` | Fable / high |
 
-Each tier draws its own crab in the panel. A plan task may name a tier (`tier: sp-careful`) to override the table, and the settings below can fix a tier per role and change each tier's model and effort.
+A plan task may name a tier (`tier: sp-careful`). A stuck coder is re-dispatched one tier up. Models chosen for a run reach each worker through a `Role: coder|reviewer|final` line in its brief.
 
-Cost is a rough estimate from token counts and a per-model price table (`PRICES` in `hooks/register.tsx`), not a bill.
+**Runners.** A slice is a chain of tasks that depend on each other.
 
-## Install
+- `subagent`: workers in this session, one folder; with `parallel`, tasks whose files do not overlap run together.
+- `worktree`: one git worktree and branch per slice (`.worktrees/<slice>`), merged into the feature branch when done; the final review runs on the merged branch.
+- `session`: one headless `claude -p` per slice in its worktree. Each reports to `.git/superpowers-flow/<run>/` (shared by every worktree, never committed, removed 3 days after the run finishes) and logs to `.worktrees/<slice>.log`. A slice silent for 5 minutes shows as failed. A headless session cannot ask for permission: it runs on your permission rules, in this session's mode when that is `acceptEdits`, `auto`, `dontAsk` or `bypassPermissions`; otherwise Claude asks you first.
 
-Needs Claude Code v2.1.287 or later, for mods; `claude --version` shows yours and `claude update` updates it. Older versions refuse the manifest.
+**The panel** draws every running worker, the latest 8 finished (Show more: 24), the next 8 planned and up to 3 running workers per child session, and counts the rest, so long runs keep drawing; `/flow-status` lists everything. Costs are estimates from token counts (`PRICES` in `hooks/register.tsx`), not a bill.
 
-At the prompt of a terminal session:
+</details>
 
-```
-/plugin install superpowers-flow --marketplace koderi-dp/claude-plugins
-```
-
-From a shell:
-
-```bash
-claude plugin install superpowers-flow --marketplace koderi-dp/claude-plugins
-```
-
-In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
-
-Disable savvy-progress and session-band if they are installed: this plugin draws what both do, and session-band covers any band loaded after it.
-
-## Settings
-
-`language`: `auto` (default), `en`, `ru` or `he`. Hebrew draws the bar and the panel right to left.
-
-`notify`: `off` (default) or `milestones`: whether a session starts with milestone notifications on. `/flow-notify on|off` changes it for the session.
-
-`autoOpen`: `tier` (default) opens the panel when an `sp-*` worker starts or a plan is reported; `any` also opens it, once per session, when any other subagent starts.
-
-**`/flow-config`** lists every setting with its value and choices, and changes them anywhere: the desktop app (with or without its Settings tab), the terminal, a session over SSH, or the phone. `/flow-config coderTier=medium mediumModel=sonnet` saves both and the running session uses them from the next worker on; `/flow-config reset` puts everything back to the defaults. It writes the same values the Settings tab does.
-
-**Roles and tiers.** `coderTier`, `reviewerTier` and `finalReviewTier` fix the tier each role runs on: `auto` (default) lets the skill choose by task difficulty, or one of `light`, `medium`, `careful`, `heavy`, `fable`. A fixed coder tier is the starting tier; a stuck coder is still re-dispatched one tier up. `<tier>Model` (`haiku`, `sonnet`, `opus`, `fable`) and `<tier>Effort` (`low` … `max`) change what a tier runs on; `default` keeps the agent file's. The mod applies them when each worker starts, and the panel shows them on planned rows. Settings are read when a session starts.
-
-The settings page in the desktop app saves values for sessions on that computer only. On another machine, such as one you reach over SSH, put them in its `~/.claude/settings.json`:
-
-```json
-{
-  "pluginConfigs": {
-    "superpowers-flow@code101-plugins": {
-      "options": {
-        "coderTier": "medium",
-        "reviewerTier": "careful",
-        "finalReviewTier": "fable",
-        "mediumModel": "sonnet",
-        "mediumEffort": "high",
-        "autoOpen": "any"
-      }
-    }
-  }
-}
-```
-
-## What it contains
-
-| Part | Name |
+| Part | Where |
 | --- | --- |
-| Skill | `superpowers-flow`, picked up when a superpowers plan runs with subagents |
-| Agents | `sp-light`, `sp-medium`, `sp-careful`, `sp-heavy`, `sp-fable` |
-| Settings | `hooks/tiers.ts`: role and tier settings, and the skill section they add |
-| Mod | `hooks/register.tsx`: the bar, the panel, the `progress` and `step` tools, `/flow-agents`, `/flow-status`, `/flow-notify`, `/flow-config`; `hooks/session.tsx`: the session row and `/flow-session` |
+| Skill | `skills/superpowers-flow`, used when a superpowers plan runs with subagents |
+| Agents | `agents/sp-light.md` … `agents/sp-fable.md` |
+| Profiles, settings, handoff texts | `hooks/tiers.ts` |
+| Child-session files | `hooks/bridge.ts` |
+| Bar, panel, tools and commands | `hooks/register.tsx`, `hooks/session.tsx` |
 
-The mod is built on function hooks, an early-access Claude Code API that may change between releases. Tests run with `claude plugin test plugins/superpowers-flow`.
+Built on function hooks, an early-access Claude Code API that may change between releases. Tests: `claude plugin test plugins/superpowers-flow`.
+
+Adapted from johnnyvizz's [savvy-flow](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-flow), [savvy-progress](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress) and [session-band](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/session-band) (MIT, [LICENSE-savvy](LICENSE-savvy)).

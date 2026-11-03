@@ -1,9 +1,0 @@
-{
-  "name": "shipright",
-  "version": "0.2.1",
-  "description": "Ship it right: spec, plan, new branch, one task at a time with code, unit test and a quick review, then a full review of the whole branch before the pull request, on models you choose.",
-  "author": {
-    "name": "Danijel Peric"
-  },
-  "types": "./types/index.d.ts"
-}
