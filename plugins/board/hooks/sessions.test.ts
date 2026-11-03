@@ -90,6 +90,30 @@ test('marking an item in progress names it in the live entry, and get lists the 
   expect(got.sessions).toEqual([expect.objectContaining({ id: 'other', title: 'Other', isQuiet: true })])
 })
 
+const status = async ($: { command: { run: (e: never) => Promise<unknown> } }) =>
+  ((await $.command.run({ command: 'board', args: 'status', origin: { kind: 'composer' } } as never)) as { text?: string }).text ?? ''
+
+test("the in-progress chip shows this session's own agent with its model and time", async ($, on) => {
+  const w = world(on)
+  on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a1' }))
+  await start($)
+  await $.tool.call({ tool: 'mcp__board__board', action: 'update', milestones: [{ id: 'q8', title: 'Q8', status: 'active', items: [{ id: 't2', title: 'Threads view', status: 'in_progress' }] }] } as never)
+  await $.agent.spawn({ tool_use_id: 't', prompt: 'p', description: 'Implement Task 2', subagentType: 'x', provider: 'engine', parentModel: 'm', background: false, fork: false } as never)
+  await w.clock.advance(5 * 60_000)
+  expect(await status($)).toContain('1 in progress: Threads view · opus · 5m')
+})
+
+test('marking the held item done takes it out of the live entry', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const upd = (s: string) =>
+    $.tool.call({ tool: 'mcp__board__board', action: 'update', milestones: [{ id: 'q8', title: 'Q8', status: 'active', items: [{ id: 't2', title: 'View', status: s }] }] } as never)
+  await upd('in_progress')
+  expect(w.live().sessions.self.item).toBe('q8/t2')
+  await upd('done')
+  expect(w.live().sessions.self.item).toBeUndefined()
+})
+
 test('without a repository the live file goes under the home folder', async ($, on) => {
   const files = new Map<string, string>()
   mock.clock(on, { now: NOW })

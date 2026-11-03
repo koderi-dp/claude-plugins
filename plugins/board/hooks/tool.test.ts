@@ -76,6 +76,13 @@ test('import reads the plan relative to the root', async ($, on) => {
   expect(text(r)).toContain('x · X plan · 0/3')
 })
 
+test('import in a worktree reads a plan only the worktree has, and writes the main board', async ($, on) => {
+  const { files } = world(on, { 'C:/p/wt/task-7/docs/superpowers/plans/2026-11-02-q8.md': '# Q8\n### Task 1: Follow\n' })
+  const r = await $.tool.call({ tool: TOOL, action: 'import', plan: 'docs/superpowers/plans/2026-11-02-q8.md' } as never)
+  expect(text(r)).toStartWith('imported 1 tasks into q8\n')
+  expect(JSON.parse(files.get(BOARD)!).milestones[0].ref).toBe('docs/superpowers/plans/2026-11-02-q8.md')
+})
+
 test('import of a missing plan refuses', async ($, on) => {
   const { writes } = world(on)
   const r = await $.tool.call({ tool: TOOL, action: 'import', plan: 'docs/superpowers/plans/nope.md' } as never)

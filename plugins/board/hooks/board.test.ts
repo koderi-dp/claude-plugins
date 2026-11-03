@@ -56,8 +56,36 @@ test('applyUpdate leaves updatedAt alone when only the note changes, and remove 
   }
   const r = applyUpdate(b, { milestones: [{ id: 'm', items: [{ id: 't1', status: 'done', note: 'a1..b2' }] }] }, 'new')
   expect(r.milestones[0]!.items[0]!).toMatchObject({ updatedAt: 'old', note: 'a1..b2' })
-  expect(applyUpdate(r, { remove: ['t2'] }, 'new').milestones[0]!.items.map(i => i.id)).toEqual(['t1'])
+  expect(applyUpdate(r, { remove: ['m/t2'] }, 'new').milestones[0]!.items.map(i => i.id)).toEqual(['t1'])
   expect(applyUpdate(r, { remove: ['m'] }, 'new').milestones).toEqual([])
+})
+
+test('remove of milestone/item drops that one item only; a bare id names a milestone', () => {
+  const b: Board = {
+    version: 1,
+    milestones: [ms('a', 'done', [{ id: 't3', title: 'A3', status: 'done' }]), ms('q8', 'active', [{ id: 't3', title: 'Q3', status: 'next' }])],
+  }
+  const r = applyUpdate(b, { remove: ['q8/t3'] }, 'now')
+  expect(r.milestones[0]!.items.map(i => i.id)).toEqual(['t3'])
+  expect(r.milestones[1]!.items).toEqual([])
+  expect(applyUpdate(b, { remove: ['t3'] }, 'now').milestones.map(m => m.items.length)).toEqual([1, 1])
+})
+
+test('a partial goal merges over the old one', () => {
+  const b: Board = { version: 1, goal: { title: 'MVP rows on main', done: 21, total: 36 }, milestones: [] }
+  expect(applyUpdate(b, { goal: { done: 22 } as never }, 'now').goal).toEqual({ title: 'MVP rows on main', done: 22, total: 36 })
+})
+
+test('parseBoard gives items without a title or with an unknown status safe values', () => {
+  const r = parseBoard('{ "version": 1, "milestones": [{ "id": "m", "status": "active", "items": [{ "id": "t1" }, { "id": "t2", "title": "B", "status": "wip" }] }] }')
+  const items = (r as { board: Board }).board.milestones[0]!.items
+  expect(items[0]).toMatchObject({ id: 't1', title: 't1', status: 'backlog' })
+  expect(items[1]).toMatchObject({ title: 'B', status: 'backlog' })
+  expect(() => statusText((r as { board: Board }).board, null, NO_LIVE, [], [], AT, 'all')).not.toThrow()
+})
+
+test('activityOf reads the last command of a multi-line script', () => {
+  expect(activityOf({ tool: 'Bash', command: 'set -e\nnpm run build\nnpm test' })).toBe('running npm test')
 })
 
 test('applyUpdate places a new milestone after another and replaces the goal whole', () => {

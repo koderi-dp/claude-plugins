@@ -177,3 +177,14 @@ test('a board file that does not parse shows its error line in the pane', async 
   const ui = await $.ui.mount({ plugin: 'board', surface: 'terminal', component: 'Pane', requestId: 'board', props: PANE })
   expect(await ui.find({ type: 'Text', text: /^Board: line \d+: / })).toBeDefined()
 })
+
+test("another session's board change reaches the open panel", async ($, on) => {
+  const w = world(on, { [BOARD]: JSON.stringify({ version: 1, milestones: [{ id: 'a', title: 'First', status: 'active', items: [] }] }) })
+  await $.session.start({ cwd: MAIN, surface: 'terminal', isInteractive: true } as never)
+  await run($, 'open')
+  const ui = await $.ui.mount({ plugin: 'board', surface: 'terminal', component: 'Pane', requestId: 'board', props: PANE })
+  expect(await ui.find({ key: 'm-a' })).toBeDefined()
+  w.files.set(BOARD, JSON.stringify({ version: 1, milestones: [{ id: 'b', title: 'Second', status: 'active', items: [] }] }))
+  await w.clock.advance(6000)
+  expect(await ui.find({ key: 'm-b' })).toBeDefined()
+})

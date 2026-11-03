@@ -124,7 +124,20 @@ async function writeBoard($: EngineInterface, next: Board): Promise<void> {
 async function boardText($: EngineInterface, scope?: string): Promise<string> {
   const others = await othersNow($)
   const at = await $.clock.now()
-  return statusText(await read($, board), await read($, boardError), asLive(others), await read($, agents), await read($, tasks), at, scope)
+  return statusText(await read($, board), await read($, boardError), asLive(others), await read($, agents), await read($, tasks), at, scope, await ownEntry($))
+}
+
+/** This session as a live entry, for the chips: the item it holds and its running agents. */
+async function ownEntry($: EngineInterface): Promise<LiveSession> {
+  const running = (await read($, agents)).filter(a => a.status === 'running')
+  return {
+    title: '',
+    cwd: '',
+    ...(self.item ? { item: self.item } : {}),
+    startedAt: '',
+    seenAt: '',
+    agents: running.map(a => ({ name: a.name, model: a.model, startedAt: new Date(a.startedAt).toISOString(), activity: a.activity })),
+  }
 }
 
 // ---------- the live file: this session's entry, and the others' ----------
@@ -133,7 +146,16 @@ const HEARTBEAT_MS = 2000
 const READ_MS = 5000
 
 /** This session's own facts for its entry; the module's, so a reload starts them over from the file. */
-const self = { firstPrompt: null as string | null, branch: undefined as string | undefined, item: undefined as string | undefined, startedAt: '', lastWrite: -Infinity, lastRead: -Infinity }
+/** `item`: undefined until read back from the file after a reload; null when the session holds none. */
+const self = {
+  firstPrompt: null as string | null,
+  branch: undefined as string | undefined,
+  item: undefined as string | null | undefined,
+  startedAt: '',
+  lastWrite: -Infinity,
+  lastRead: -Infinity,
+  lastBoardRead: -Infinity,
+}
 
 async function homeDir($: EngineInterface): Promise<string> {
   // `$.env.get` takes a literal name, so the module's reads can be listed.
@@ -282,10 +304,12 @@ async function runTool($: EngineInterface, input: ToolInput): Promise<string> {
   if (action === 'update') {
     const nowIso = new Date(await $.clock.now()).toISOString()
     await writeBoard($, applyUpdate(current, { goal: input.goal, milestones: input.milestones, remove: input.remove }, nowIso))
-    // The item this session now works on goes into its live entry.
-    const taken = (input.milestones ?? []).flatMap(m => (m.items ?? []).filter(i => i.status === 'in_progress').map(i => `${m.id}/${i.id}`)).pop()
-    if (taken) {
-      self.item = taken
+    // The item this session now works on goes into its live entry; one it leaves goes out.
+    const changed = (input.milestones ?? []).flatMap(m => (m.items ?? []).filter(i => i.status !== undefined).map(i => ({ key: `${m.id}/${i.id}`, status: i.status })))
+    const taken = changed.filter(c => c.status === 'in_progress').pop()?.key
+    const left = changed.some(c => c.key === self.item && c.status !== 'in_progress')
+    if (taken || left) {
+      self.item = taken ?? null
       await heartbeat($, true)
     }
     return boardText($)
@@ -293,7 +317,12 @@ async function runTool($: EngineInterface, input: ToolInput): Promise<string> {
   if (action === 'import') {
     const plan = String(input.plan ?? '').replace(/\\/g, '/').replace(/^\.\//, '')
     if (!plan) return 'refused: import needs `plan`, a repo-relative path'
-    const text = await readText($, `${await resolveRoot($)}/${plan}`)
+    // A plan just written in a worktree is on its branch only: the session's own checkout first.
+    let own = ''
+    try {
+      own = slashes(await $.session.root())
+    } catch {}
+    const text = (own ? await readText($, `${own}/${plan}`) : null) ?? (await readText($, `${await resolveRoot($)}/${plan}`))
     if (text === null) return `refused: cannot read ${plan}`
     const r = importPlan(current, { plan, text, milestone: input.milestone })
     if (!r.ok) return `refused: ${r.error}`
@@ -309,7 +338,7 @@ const TOOL_SCHEMA = {
     action: { type: 'string', enum: ['get', 'update', 'import'] },
     goal: {
       type: 'object',
-      description: 'The one line above the overview, replaced whole.',
+      description: 'The one line above the overview; fields given replace, fields left out stay.',
       properties: { title: { type: 'string' }, done: { type: 'integer' }, total: { type: 'integer' } },
     },
     milestones: {
@@ -346,7 +375,7 @@ const TOOL_SCHEMA = {
         required: ['id'],
       },
     },
-    remove: { type: 'array', items: { type: 'string' }, description: 'Milestone or item ids to drop.' },
+    remove: { type: 'array', items: { type: 'string' }, description: 'Ids to drop: a milestone id, or `<milestone>/<item>` for one item.' },
     plan: { type: 'string', description: 'For import: the plan file, relative to the repository root.' },
     milestone: {
       type: 'object',
@@ -373,7 +402,7 @@ export const register: Register = (on, options) => {
       await $.tool.register({
         name: 'board',
         description:
-          'The project board: `get` reads it; `update` upserts milestones and items by id (fields left out keep their value; `remove` drops ids); ' +
+          'The project board: `get` reads it; `update` upserts milestones and items by id (fields left out keep their value; `remove` drops a milestone id or a `<milestone>/<item>` id); ' +
           '`import` reads a plan\'s `### Task N:` headings into a milestone. Main session only.',
         isDeferred: false,
         inputSchema: TOOL_SCHEMA,
@@ -392,9 +421,16 @@ export const register: Register = (on, options) => {
         try {
           const isRunning = (await read($, agents)).some(a => a.status === 'running')
           const isOpen = await isPaneOpen($)
-          if (isOpen) await readLive($)
-          if (!isRunning && !isOpen) return
           const at = await $.clock.now()
+          if (isOpen) {
+            await readLive($)
+            // Another session may have written the board: re-read it every 5 s while it shows.
+            if (at - self.lastBoardRead >= READ_MS) {
+              self.lastBoardRead = at
+              await loadBoard($)
+            }
+          }
+          if (!isRunning && !isOpen) return
           await update($, now, () => at)
         } catch {}
       })()
@@ -428,7 +464,8 @@ export const register: Register = (on, options) => {
 
   // The session's title in the live file is its first prompt.
   on('prompt.submit', async ($, e, next) => {
-    if (self.firstPrompt === null && e.text.trim() && !e.text.trim().startsWith('/')) self.firstPrompt = e.text
+    const t = typeof e.text === 'string' ? e.text.trim() : ''
+    if (self.firstPrompt === null && t && !t.startsWith('/')) self.firstPrompt = t
     return next(e)
   })
 
@@ -539,6 +576,17 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
+    try {
+      return await drawPane($, ui)
+    } catch (err) {
+      const { Text } = ui as unknown as { Text: (p: Record<string, unknown>) => RenderElement }
+      return <Text color="#e8a33c">{`Board: ${String((err as Error)?.message ?? err)}`}</Text>
+    }
+  })
+}
+
+async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']['resolve']>): Promise<RenderElement> {
+  {
     const { Box, Button } = ui as unknown as { Box: (p: Record<string, unknown>) => RenderElement; Button: (p: Record<string, unknown>) => RenderElement }
     const at = Math.max(await read($, now), await $.clock.now())
     let selfId = ''
@@ -546,7 +594,9 @@ export const register: Register = (on, options) => {
       selfId = await sessionId($)
     } catch {}
     const list = others(await read($, live), selfId, at)
-    const d = { agents: await read($, agents), tasks: await read($, tasks), others: list, live: asLive(list), at }
+    // The chips see this session too; the Now view lists only the others.
+    const withSelf: Live = { sessions: { ...asLive(list).sessions, [selfId || 'self']: await ownEntry($) } }
+    const d = { agents: await read($, agents), tasks: await read($, tasks), others: list, live: withSelf, at }
     const b = await read($, board)
     const error = await read($, boardError)
     const p = await read($, panel)
@@ -574,5 +624,5 @@ export const register: Register = (on, options) => {
       onNow: () => show({ kind: 'now' }),
       onMore: () => void update($, panel, prev => ({ ...prev, isMoreShown: !prev.isMoreShown })),
     })
-  })
+  }
 }

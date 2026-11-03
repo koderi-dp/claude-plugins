@@ -23,7 +23,7 @@ Which session is on what goes to `.git/board-live.json` (never committed), one e
 One tool for Claude, `mcp__board__board`, in the main session only (a subagent's call is ignored, so a worker cannot mark its own task done):
 
 - `get` reads the board and the live sessions.
-- `update` adds or changes milestones and items by id; fields left out keep their value; `remove` drops ids.
+- `update` adds or changes milestones and items by id; fields left out keep their value; `remove` drops a milestone, or one item as `q8/t3`.
 - `import` reads a plan's `### Task N:` headings into a milestone.
 
 A board file that does not parse is never overwritten: the tool refuses with the line, and the panel shows it.

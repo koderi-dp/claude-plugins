@@ -12,7 +12,7 @@ Every change goes through the tool. Never write `board.json` with Edit or Write.
 ## The tool
 
 - `{ "action": "get" }` answers the board as JSON (`exists: false` when there is none) and the other live sessions on this project.
-- `{ "action": "update", "milestones": [...], "goal": {...}, "remove": [...] }` upserts by `id`. Fields you leave out keep their value; a new id is appended, or placed right after an `after` id. A status change stamps `updatedAt`. `remove` drops milestone or item ids. It answers the board as text: read it to check what you wrote.
+- `{ "action": "update", "milestones": [...], "goal": {...}, "remove": [...] }` upserts by `id`. Fields you leave out keep their value; a new id is appended, or placed right after an `after` id. A status change stamps `updatedAt`. `goal` merges the same way (`{ "done": 22 }` keeps its title and total). `remove` drops a milestone by its id, or one item as `<milestone>/<item>` (`q8/t3`): every plan has a `t3`, so a bare item id removes nothing. It answers the board as text: read it to check what you wrote.
 - `{ "action": "import", "plan": "docs/superpowers/plans/<file>.md", "milestone": { "id", "title", "needs", "size", "closes", "branch" } }` reads the plan's `### Task N:` headings into a milestone with items `t1`, `t2`, … Existing items keep their status and note; titles and refs refresh.
 
 Item statuses: `backlog`, `next`, `in_progress`, `blocked`, `done`. Milestone statuses: `planned`, `active`, `done`. A `note` is one line: where the status came from, or what blocks the item.

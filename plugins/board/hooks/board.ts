@@ -1,11 +1,11 @@
 // Pure: the board file's shape, merge, plan import and the text renderer.
 // Nothing here imports the engine, so the tests need none.
-import type { AgentRun, Board, Goal, Item, ItemStatus, Live, Milestone, NativeTask } from '../types'
+import type { AgentRun, Board, Goal, Item, ItemStatus, Live, LiveSession, Milestone, NativeTask } from '../types'
 
 export type Parsed = { ok: true; board: Board } | { ok: false; error: string }
 
 export type Update = {
-  goal?: Goal
+  goal?: Partial<Goal>
   milestones?: Array<Omit<Partial<Milestone>, 'items'> & { id: string; after?: string; items?: Array<Partial<Item> & { id: string; after?: string }> }>
   remove?: string[]
 }
@@ -90,6 +90,9 @@ function jsonErrorAt(text: string): number {
 
 const lineAt = (text: string, offset: number) => text.slice(0, offset).split('\n').length
 
+const ITEM_STATUSES = new Set(['backlog', 'next', 'in_progress', 'blocked', 'done'])
+const MILESTONE_STATUSES = new Set(['planned', 'active', 'done'])
+
 export function parseBoard(text: string): Parsed {
   let data: unknown
   try {
@@ -101,8 +104,15 @@ export function parseBoard(text: string): Parsed {
   }
   if (!isObject(data) || !Array.isArray(data.milestones)) return { ok: false, error: 'line 1: not a board (no "milestones" list)' }
   const milestones = (data.milestones as unknown[]).filter(isObject).map(m => {
-    const items = Array.isArray(m.items) ? (m.items as unknown[]).filter(isObject) : []
-    return { ...m, id: String(m.id ?? ''), title: String(m.title ?? m.id ?? ''), status: m.status ?? 'planned', items } as Milestone
+    // A hand edit can leave an item without a title or with a status no view draws.
+    const items = (Array.isArray(m.items) ? (m.items as unknown[]).filter(isObject) : []).map(i => ({
+      ...i,
+      id: String(i.id ?? ''),
+      title: String(i.title ?? i.id ?? ''),
+      status: ITEM_STATUSES.has(String(i.status)) ? i.status : 'backlog',
+    }))
+    const status = MILESTONE_STATUSES.has(String(m.status)) ? m.status : 'planned'
+    return { ...m, id: String(m.id ?? ''), title: String(m.title ?? m.id ?? ''), status, items } as Milestone
   })
   return { ok: true, board: { ...data, version: 1, milestones } as Board }
 }
@@ -155,9 +165,11 @@ export function applyUpdate(board: Board, u: Update, nowIso: string): Board {
       milestones = place(milestones, next, after)
     }
   }
+  // A bare id names a milestone; `<milestone>/<item>` one item, since every plan has a `t3`.
   const gone = new Set(u.remove ?? [])
-  if (gone.size) milestones = milestones.filter(m => !gone.has(m.id)).map(m => ({ ...m, items: m.items.filter(i => !gone.has(i.id)) }))
-  return { ...copy, ...(u.goal ? { goal: { ...u.goal } } : {}), milestones }
+  if (gone.size) milestones = milestones.filter(m => !gone.has(m.id)).map(m => ({ ...m, items: m.items.filter(i => !gone.has(`${m.id}/${i.id}`)) }))
+  const goal = u.goal ? ({ ...(copy.goal ?? { title: '', done: 0, total: 0 }), ...defined(u.goal) } as Goal) : copy.goal
+  return { ...copy, ...(goal ? { goal } : {}), milestones }
 }
 
 // ---------- import ----------
@@ -293,14 +305,15 @@ function headLine(board: Board | null, error: string | null): string {
 
 /**
  * The board and Now as text: the tool's answers, `/board status`, the phone.
- * `live` here is the other sessions only; the caller leaves this one out.
+ * `live` here is the other sessions only; the caller leaves this one out. `own`, this session's entry, counts for the chips only.
  */
-export function statusText(board: Board | null, error: string | null, live: Live, agents: AgentRun[], tasks: NativeTask[], at: number, scope?: 'all' | string): string {
+export function statusText(board: Board | null, error: string | null, live: Live, agents: AgentRun[], tasks: NativeTask[], at: number, scope?: 'all' | string, own?: LiveSession): string {
+  const chips: Live = own ? { sessions: { ...live.sessions, ' self': own } } : live
   const lines = [headLine(board, error)]
   if (board && !error && scope && scope !== 'all') {
     const m = board.milestones.find(x => x.id === scope)
     if (!m) return `No milestone ${scope}. Ids: ${board.milestones.map(x => x.id).join(', ') || 'none'}`
-    lines.push(milestoneRow(m, live, at))
+    lines.push(milestoneRow(m, chips, at))
     const where = [m.ref, m.branch].filter(Boolean).join(' · ')
     if (where) lines.push(`  ${where}`)
     for (const i of m.items) lines.push(`  ${itemRow(i, at)}`)
@@ -310,7 +323,7 @@ export function statusText(board: Board | null, error: string | null, live: Live
   if (board && !error) {
     const isAll = scope === 'all'
     const group = (status: Milestone['status']) => board.milestones.filter(m => m.status === status)
-    const withItems = (m: Milestone) => [`  ${milestoneRow(m, live, at)}`, ...(isAll ? m.items.map(i => `    ${itemRow(i, at)}`) : [])]
+    const withItems = (m: Milestone) => [`  ${milestoneRow(m, chips, at)}`, ...(isAll ? m.items.map(i => `    ${itemRow(i, at)}`) : [])]
     const active = group('active')
     if (active.length) lines.push('Active', ...active.flatMap(withItems))
     const planned = group('planned')
@@ -345,7 +358,7 @@ const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` 
 
 /** The command a shell call runs, in its first three words: env assignments, `export`, `timeout`, `time` left out. */
 function commandWords(command: string): string {
-  const segment = command.split(/&&|;|\|\|/).map(s => s.trim()).filter(s => s && !/^export\s/.test(s) && !/^cd\s/.test(s)).pop() ?? ''
+  const segment = command.split(/&&|;|\|\||\n/).map(s => s.trim()).filter(s => s && !/^export\s/.test(s) && !/^cd\s/.test(s)).pop() ?? ''
   const words = (segment.split('|')[0] ?? '').trim().match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
   let i = 0
   while (i < words.length) {
