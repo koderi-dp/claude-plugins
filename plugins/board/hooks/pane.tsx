@@ -2,8 +2,8 @@
 // One tree for terminal and desktop: Box, Text and Button only.
 import type { EngineInterface } from 'claude-code'
 
-import type { AgentRun, NativeTask } from '../types'
-import { elapsed, shortModel } from './board'
+import type { AgentRun, Board, Item, Live, Milestone, NativeTask } from '../types'
+import { attention, elapsed, queueText, shortModel } from './board'
 import type { Others } from './live'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
@@ -86,6 +86,168 @@ export function renderNow(ui: Ui, d: { agents: AgentRun[]; tasks: NativeTask[]; 
           </Box>
         )
       })}
+    </Box>
+  )
+}
+
+// ---------- the board ----------
+
+export const PLANNED_SHOWN = 4
+
+export function barText(done: number, total: number, width = 20): string {
+  const filled = total > 0 ? Math.round((Math.min(done, total) / total) * width) : 0
+  return '█'.repeat(filled) + '░'.repeat(width - filled)
+}
+
+const doneOf = (m: Milestone) => m.items.filter(i => i.status === 'done').length
+const MILESTONE_GLYPH: Record<string, string> = { active: '●', planned: '○', done: '✓' }
+
+type Els = { Box: (p: object) => Element; Text: (p: object) => Element; Button: (p: object) => Element }
+
+export function renderHome(
+  ui: Ui,
+  d: {
+    board: Board | null
+    error: string | null
+    live: Live
+    agents: AgentRun[]
+    tasks: NativeTask[]
+    others: Others
+    at: number
+    isMoreShown: boolean
+    onOpen: (id: string) => void
+    onNow: () => void
+    onMore: () => void
+  },
+): Element {
+  const { Box, Text, Button } = ui as unknown as Els
+  const head = (text: string) => <Text dimColor>{text}</Text>
+  const nowButton = (
+    <Button
+      key="now"
+      plain
+      label={`Now · ${plural(d.agents.filter(a => a.status === 'running').length, 'agent')} · ${plural(d.tasks.length, 'task')} · ${plural(d.others.length, 'session')}`}
+      onPress={d.onNow}
+    />
+  )
+  if (d.error || !d.board) {
+    return (
+      <Box flexDirection="column">
+        {d.error ? <Text color={BLOCKED}>{`Board: ${d.error}`}</Text> : <Text dimColor>No board. /board init reads the plans and the ledger.</Text>}
+        {nowButton}
+      </Box>
+    )
+  }
+  const b = d.board
+  const items = b.milestones.flatMap(m => m.items)
+  const done = items.filter(i => i.status === 'done').length
+  const [num, den] = b.goal ? [b.goal.done, b.goal.total] : [done, items.length]
+  const group = (s: Milestone['status']) => b.milestones.filter(m => m.status === s)
+  const row = (m: Milestone) => (
+    <Box flexDirection="column">
+      <Box flexDirection="row">
+        <Button key={`m-${m.id}`} plain label={`${MILESTONE_GLYPH[m.status] ?? '○'} ${m.title} · ${doneOf(m)}/${m.items.length}`} onPress={() => d.onOpen(m.id)} />
+        {m.status === 'planned' && queueText(m) && <Text dimColor>{`  ${queueText(m)}`}</Text>}
+      </Box>
+      {m.status === 'active' &&
+        (() => {
+          const a = attention(m, d.live, d.at)
+          if (a.kind === 'none') return null
+          return (
+            <Text color={a.kind === 'blocked' ? BLOCKED : a.kind === 'in_progress' ? RUNNING : undefined} dimColor={a.kind === 'next'} wrap="truncate-end">
+              {`  ${a.text}`}
+            </Text>
+          )
+        })()}
+    </Box>
+  )
+  const active = group('active')
+  const planned = group('planned')
+  const finished = group('done')
+  const shownPlanned = d.isMoreShown ? planned : planned.slice(0, PLANNED_SHOWN)
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="row">
+        <Text bold>Board</Text>
+        <Text dimColor>{b.goal ? ` · ${b.goal.title} ${num}/${den}` : ` · ${num}/${den} items`}</Text>
+      </Box>
+      <Text color={DONE}>{barText(num, den)}</Text>
+      {active.length > 0 && head('Active')}
+      {active.map(row)}
+      {planned.length > 0 && head('Planned')}
+      {shownPlanned.map(row)}
+      {planned.length > PLANNED_SHOWN && (
+        <Button key="more" plain label={d.isMoreShown ? 'Show fewer' : `… and ${planned.length - PLANNED_SHOWN} more planned`} onPress={d.onMore} />
+      )}
+      {finished.length > 0 && head('Done')}
+      {finished.length === 1 ? finished.map(row) : finished.length > 1 && <Text dimColor>{`✓ ${finished.length} done, latest: ${finished[finished.length - 1].title}`}</Text>}
+      {nowButton}
+    </Box>
+  )
+}
+
+const RANGE = /\b[0-9a-f]{7,40}\.\.[0-9a-f]{7,40}\b/
+
+const ITEM_GROUPS: Array<{ status: Item['status']; title: string; glyph: string; color?: string }> = [
+  { status: 'in_progress', title: 'In progress', glyph: '●', color: RUNNING },
+  { status: 'blocked', title: 'Blocked', glyph: '◐', color: BLOCKED },
+  { status: 'next', title: 'Next', glyph: '○' },
+  { status: 'backlog', title: 'Backlog', glyph: '·' },
+  { status: 'done', title: 'Done', glyph: '✓', color: DONE },
+]
+
+export function renderMilestone(
+  ui: Ui,
+  d: { m: Milestone; board: Board; live: Live; agents: AgentRun[]; tasks: NativeTask[]; others: Others; at: number; onBack: () => void },
+): Element {
+  const { Box, Text, Button } = ui as unknown as Els
+  const m = d.m
+  const where = [m.ref, m.branch].filter(Boolean).join(' · ')
+  const holderOf = (i: Item) => d.others.find(o => o.item === `${m.id}/${i.id}`)?.title
+  const since = (iso: string | undefined) => {
+    const t = iso ? Date.parse(iso) : NaN
+    return Number.isNaN(t) ? '' : elapsed(d.at - t)
+  }
+  const right = (i: Item) => (i.status === 'in_progress' || i.status === 'blocked' ? since(i.updatedAt) : i.status === 'done' ? (RANGE.exec(i.note ?? '')?.[0] ?? '') : '')
+  return (
+    <Box flexDirection="column">
+      <Button key="back" plain label="‹ Board" onPress={d.onBack} />
+      <Text bold wrap="truncate-end">{`${m.title} · ${doneOf(m)}/${m.items.length}`}</Text>
+      <Text color={DONE}>{barText(doneOf(m), m.items.length)}</Text>
+      {where && <Text dimColor wrap="truncate-end">{where}</Text>}
+      {ITEM_GROUPS.map(g => {
+        const list = m.items.filter(i => i.status === g.status)
+        if (!list.length) return null
+        return (
+          <Box flexDirection="column">
+            <Text dimColor>{g.title}</Text>
+            {list.map(i => {
+              const holder = holderOf(i)
+              const r = right(i)
+              const note = i.note && i.note !== r ? i.note : ''
+              return (
+                <Box flexDirection="column">
+                  <Box flexDirection="row">
+                    <Text color={g.color} dimColor={!g.color}>
+                      {g.glyph}
+                    </Text>
+                    <Text wrap="truncate-end" dimColor={i.status === 'done'}>{` ${i.title}${holder ? ` · ${holder}` : ''}`}</Text>
+                    {r && <Text dimColor>{`  `}</Text>}
+                    {r && <Text dimColor>{r}</Text>}
+                  </Box>
+                  {note && <Text dimColor wrap="truncate-end">{`  ${note}`}</Text>}
+                </Box>
+              )
+            })}
+          </Box>
+        )
+      })}
+      {(m.closes?.length ?? 0) > 0 && <Text dimColor>Rows this milestone closes</Text>}
+      {(m.closes ?? []).map(c => (
+        <Text dimColor wrap="truncate-end">{`  ${c}`}</Text>
+      ))}
+      <Text dimColor>Now</Text>
+      {renderNow(ui, { agents: d.agents, tasks: d.tasks, others: d.others, at: d.at, filter: { id: m.id, titles: m.items.map(i => i.title) } })}
     </Box>
   )
 }

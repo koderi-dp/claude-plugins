@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Board, Live, LiveSession, NativeTask, Panel } from '../types'
-import { renderNow } from './pane'
-import { activityOf, applyUpdate, emptyBoard, importPlan, parseBoard, serialize, statusText } from './board'
+import { renderHome, renderMilestone, renderNow } from './pane'
+import { activityOf, applyUpdate, emptyBoard, findText, importPlan, parseBoard, serialize, statusText } from './board'
 import type { ImportInput, Update } from './board'
 import { boardPath, livePath, others, parseLive, titleOf, withEntry, withoutEntry } from './live'
 import type { Others } from './live'
@@ -478,7 +478,13 @@ export const register: Register = (on, options) => {
     try {
       const [sub = '', ...rest] = e.args.trim().split(/\s+/)
       const arg = rest.join(' ')
+      if (sub === '' || sub === 'open' || sub === 'show') {
+        await loadBoard($)
+        await readLive($)
+      }
       if (sub === '') {
+        // Back to the overview each time it opens.
+        await update($, panel, prev => ({ ...prev, view: { kind: 'home' } }))
         const isOpen = await togglePane($)
         return { text: isOpen ? 'Board panel opened.' : 'Board panel closed.' }
       }
@@ -490,6 +496,19 @@ export const register: Register = (on, options) => {
         await loadBoard($)
         return { text: await boardText($, arg || undefined) }
       }
+      if (sub === 'show' && arg) {
+        const b = await read($, board)
+        const m = b?.milestones.find(x => x.id === arg)
+        if (!m) return { text: `No milestone ${arg}. Ids: ${b?.milestones.map(x => x.id).join(', ') || 'none'}` }
+        await update($, panel, prev => ({ ...prev, view: { kind: 'milestone', id: m.id } }))
+        await openPane($)
+        return { text: `Board panel shows ${m.id}.` }
+      }
+      if (sub === 'find' && arg) {
+        await loadBoard($)
+        const b = await read($, board)
+        return { text: b ? findText(b, arg) : 'No board.' }
+      }
       return { text: USAGE }
     } catch (err) {
       return { text: `board: ${String((err as Error)?.message ?? err)}` }
@@ -498,12 +517,40 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
+    const { Box, Button } = ui as unknown as { Box: (p: object) => ReturnType<typeof h>; Button: (p: object) => ReturnType<typeof h> }
     const at = Math.max(await read($, now), await $.clock.now())
-    const l = await read($, live)
     let selfId = ''
     try {
       selfId = await sessionId($)
     } catch {}
-    return renderNow(ui, { agents: await read($, agents), tasks: await read($, tasks), others: others(l, selfId, at), at })
+    const list = others(await read($, live), selfId, at)
+    const d = { agents: await read($, agents), tasks: await read($, tasks), others: list, live: asLive(list), at }
+    const b = await read($, board)
+    const error = await read($, boardError)
+    const p = await read($, panel)
+    const show = (view: Panel['view']) => void update($, panel, prev => ({ ...prev, view }))
+    if (!b && !error) return renderNow(ui, d)
+    if (p.view.kind === 'milestone' && b) {
+      const id = p.view.id
+      const m = b.milestones.find(x => x.id === id)
+      if (m) return renderMilestone(ui, { ...d, m, board: b, onBack: () => show({ kind: 'home' }) })
+    }
+    if (p.view.kind === 'now') {
+      return (
+        <Box flexDirection="column">
+          <Button key="back" plain label="‹ Board" onPress={() => show({ kind: 'home' })} />
+          {renderNow(ui, d)}
+        </Box>
+      )
+    }
+    return renderHome(ui, {
+      ...d,
+      board: b,
+      error,
+      isMoreShown: p.isMoreShown,
+      onOpen: id => show({ kind: 'milestone', id }),
+      onNow: () => show({ kind: 'now' }),
+      onMore: () => void update($, panel, prev => ({ ...prev, isMoreShown: !prev.isMoreShown })),
+    })
   })
 }

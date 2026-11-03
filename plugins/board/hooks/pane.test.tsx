@@ -47,6 +47,8 @@ function world(on: On, seed: Record<string, string> = {}) {
 const spawn = (description: string) =>
   ({ tool_use_id: `tu-${description}`, prompt: 'p', description, subagentType: 'general-purpose', provider: 'engine', parentModel: 'claude-opus-5-5', background: false, fork: false }) as never
 
+const USAGE_TEXT = 'board: status | status all | status <id> | show <id> | find <text> | init | open'
+
 const run = async ($: { command: { run: (e: never) => Promise<unknown> } }, args: string) =>
   ((await $.command.run({ command: 'board', args, origin: { kind: 'composer' } } as never)) as { text?: string }).text ?? ''
 
@@ -101,4 +103,77 @@ test('finished agents fold after 8', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /Agent 10/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Agent 2$/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '+2 · /board status' })).toBeDefined()
+})
+
+const BOARD = `${MAIN}/docs/superpowers/board.json`
+const LIVE = `${MAIN}/.git/board-live.json`
+const item = (id: string, title: string, status: string, extra: object = {}) => ({ id, title, status, ...extra })
+const big = {
+  version: 1,
+  milestones: [
+    { id: 'a', title: 'Phase 1 Foundation', status: 'active', items: [item('t1', 'Monorepo', 'done'), item('t2', 'Domain package', 'in_progress'), item('t3', 'Paraglide UI', 'blocked', { note: 'WIP commit on task-7' })] },
+    ...Array.from({ length: 6 }, (_, i) => ({ id: `p${i}`, title: `Planned ${i}`, status: 'planned', needs: i === 0 ? ['a'] : undefined, size: 'M', items: [item('t1', `Thing ${i}`, 'backlog')] })),
+    { id: 'd1', title: 'Old one', status: 'done', items: [item('t1', 'x', 'done')] },
+    { id: 'd2', title: 'Webhook corpus', status: 'done', items: [item('t1', 'y', 'done')] },
+  ],
+}
+
+test('home groups milestones, folds planned after 4 and opens one on press', async ($, on) => {
+  world(on, { [BOARD]: JSON.stringify(big) })
+  await run($, 'open')
+  const ui = await $.ui.mount({ plugin: 'board', surface: 'terminal', component: 'Pane', requestId: 'board', props: PANE })
+  expect(await ui.find({ type: 'Text', text: /3\/11 items/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Active' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /2 done, latest: Webhook corpus/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /1 blocked: WIP commit on task-7/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /needs a · M/ })).toBeDefined()
+  expect(await ui.find({ key: 'm-p4' })).toBeUndefined()
+  await ui.press({ key: 'more' })
+  expect(await ui.find({ key: 'm-p5' })).toBeDefined()
+  await ui.press({ key: 'm-a' })
+  expect(await ui.find({ key: 'back' })).toBeDefined()
+  for (const t of ['Monorepo', 'Domain package', 'Paraglide UI']) expect(await ui.find({ type: 'Text', text: new RegExp(t) })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Blocked' })).toBeDefined()
+  await ui.press({ key: 'back' })
+  expect(await ui.find({ key: 'm-a' })).toBeDefined()
+  await ui.press({ key: 'now' })
+  expect(await ui.find({ type: 'Text', text: /Nothing running/ })).toBeDefined()
+})
+
+test('a milestone view names the session holding an item and lists what it closes', async ($, on) => {
+  const at = '2026-11-02T09:59:00.000Z'
+  const q8 = { version: 1, milestones: [{ id: 'q8', title: 'Thread following', status: 'active', ref: 'docs/superpowers/plans/q8.md', branch: 'feat/q8', closes: ['18 Thread following'], items: [item('t1', 'Follow a thread', 'done', { note: 'a3f91c2..b70de44' }), item('t2', 'Threads I follow view', 'in_progress', { updatedAt: '2026-11-02T09:48:00Z' }), item('t3', 'Thread mute', 'backlog')] }] }
+  const liveFile = { sessions: { s1: { title: 'Implement Q8 threads', cwd: 'C:/wt/q8', item: 'q8/t2', startedAt: at, seenAt: at, agents: [] } } }
+  world(on, { [BOARD]: JSON.stringify(q8), [LIVE]: JSON.stringify(liveFile) })
+  expect(await run($, 'show q8')).toBe('Board panel shows q8.')
+  const ui = await $.ui.mount({ plugin: 'board', surface: 'desktop', component: 'Pane', requestId: 'board', props: PANE })
+  expect(await ui.find({ type: 'Text', text: /Threads I follow view · Implement Q8 threads/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '12m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'a3f91c2..b70de44' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /18 Thread following/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /docs\/superpowers\/plans\/q8\.md · feat\/q8/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Backlog' })).toBeDefined()
+  expect(await run($, 'show zz')).toMatch(/^No milestone zz/)
+})
+
+test('/board find lists matches with their milestone', async ($, on) => {
+  world(on, { [BOARD]: JSON.stringify(big) })
+  expect(await run($, 'find paraglide')).toBe('a · t3 · Paraglide UI · blocked')
+  expect(await run($, 'find')).toBe(USAGE_TEXT)
+})
+
+test('with no board the pane is the Now view without a back button, and find says so', async ($, on) => {
+  world(on)
+  await run($, 'open')
+  const ui = await $.ui.mount({ plugin: 'board', surface: 'terminal', component: 'Pane', requestId: 'board', props: PANE })
+  expect(await ui.find({ key: 'back' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Nothing running/ })).toBeDefined()
+  expect(await run($, 'find x')).toBe('No board.')
+})
+
+test('a board file that does not parse shows its error line in the pane', async ($, on) => {
+  world(on, { [BOARD]: '{\n  "version": 1,\n  "milestones": [\n' })
+  await run($, 'open')
+  const ui = await $.ui.mount({ plugin: 'board', surface: 'terminal', component: 'Pane', requestId: 'board', props: PANE })
+  expect(await ui.find({ type: 'Text', text: /^Board: line \d+: / })).toBeDefined()
 })
