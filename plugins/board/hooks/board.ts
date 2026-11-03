@@ -336,3 +336,40 @@ export function findText(board: Board, query: string): string {
   )
   return rows.length ? rows.join('\n') : `No items match "${query.trim()}".`
 }
+
+// ---------- activity line ----------
+
+const basename = (p: unknown) => String(p ?? '').split(/[\\/]/).filter(Boolean).pop() ?? ''
+
+const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+
+/** The command a shell call runs, in its first three words: env assignments, `export`, `timeout`, `time` left out. */
+function commandWords(command: string): string {
+  const segment = command.split(/&&|;|\|\|/).map(s => s.trim()).filter(s => s && !/^export\s/.test(s) && !/^cd\s/.test(s)).pop() ?? ''
+  const words = segment.split('|')[0].trim().match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
+  let i = 0
+  while (i < words.length) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++
+    else if (words[i] === 'time' || words[i] === 'env') i++
+    else if (words[i] === 'timeout' && /^\d/.test(words[i + 1] ?? '')) i += 2
+    else break
+  }
+  return words.slice(i, i + 3).join(' ')
+}
+
+export function activityOf(call: { tool: string; [k: string]: unknown }): string {
+  const t = call.tool
+  if (t === 'Edit' || t === 'Write' || t === 'NotebookEdit' || t === 'MultiEdit') return `editing ${basename(call.file_path ?? call.notebook_path)}`
+  if (t === 'Read') return `reading ${basename(call.file_path)}`
+  if (t === 'Grep' || t === 'Glob') return `searching "${cut(String(call.pattern ?? ''), 40)}"`
+  if (t === 'Bash' || t === 'PowerShell') {
+    const words = commandWords(String(call.command ?? ''))
+    return words ? `running ${cut(words, 48)}` : 'running a command'
+  }
+  if (t === 'Agent' || t === 'Task') return `delegating ${cut(String(call.description ?? ''), 48)}`.trim()
+  if (t === 'WebFetch') return `fetching ${/^[a-z]+:\/\/([^/?#]+)/i.exec(String(call.url ?? ''))?.[1] ?? 'a page'}`
+  if (t === 'WebSearch') return `fetching ${cut(String(call.query ?? ''), 48)}`
+  if (/^mcp__.*(browser|playwright)/i.test(t)) return 'waiting on a browser page'
+  if (/^Task(Create|Update|List|Get)$/.test(t) || t === 'TodoWrite') return 'updating tasks'
+  return `using ${t.replace(/^mcp__/, '')}`
+}

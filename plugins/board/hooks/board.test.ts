@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { Board, Live, Milestone } from '../types'
 import { CATALO_PLAN } from './fixtures/catalo-plan'
-import { anchorOf, applyUpdate, attention, emptyBoard, findText, importPlan, parseBoard, serialize, statusText } from './board'
+import { activityOf, anchorOf, applyUpdate, attention, emptyBoard, findText, importPlan, parseBoard, serialize, statusText } from './board'
 
 const PLAN = 'docs/superpowers/plans/2026-10-29-phase1-foundation.md'
 const NO_LIVE: Live = { sessions: {} }
@@ -216,4 +216,29 @@ test('findText lists matching items with their milestone', () => {
   }
   expect(findText(b, 'webhook').split('\n')).toEqual(['q8 · t3 · Mute · next', 'q9 · t1 · Webhook corpus · done'])
   expect(findText(b, 'zzz')).toBe('No items match "zzz".')
+})
+
+test('activityOf turns tool calls into short phrases', () => {
+  expect(activityOf({ tool: 'Edit', file_path: 'C:/p/apps/web/src/catalog/grid.tsx' })).toBe('editing grid.tsx')
+  expect(activityOf({ tool: 'Write', file_path: ['C:', 'p', 'notes.md'].join(String.fromCharCode(92)) })).toBe('editing notes.md')
+  expect(activityOf({ tool: 'Read', file_path: 'C:/p/.superpowers/sdd/progress.md' })).toBe('reading progress.md')
+  expect(activityOf({ tool: 'Bash', command: 'export PATH=$HOME/.local/bin:$PATH && P="playwright" CHECK_BASE=HEAD timeout 600 npm run check:fast 2>&1 | tail -50' })).toBe('running npm run check:fast')
+  expect(activityOf({ tool: 'PowerShell', command: 'git status' })).toBe('running git status')
+  expect(activityOf({ tool: 'Grep', pattern: 'import_run' })).toBe('searching "import_run"')
+  expect(activityOf({ tool: 'Glob', pattern: 'x'.repeat(60) }).length).toBeLessThanOrEqual(52)
+  expect(activityOf({ tool: 'Agent', description: 'Review Task 2' })).toBe('delegating Review Task 2')
+  expect(activityOf({ tool: 'WebFetch', url: 'https://docs.example.com/a/b' })).toBe('fetching docs.example.com')
+  expect(activityOf({ tool: 'WebSearch', query: 'bun json parse' })).toBe('fetching bun json parse')
+  expect(activityOf({ tool: 'mcp__plugin_playwright_playwright__browser_click' })).toBe('waiting on a browser page')
+  expect(activityOf({ tool: 'mcp__Claude_Browser__navigate' })).toBe('waiting on a browser page')
+  expect(activityOf({ tool: 'TaskUpdate' })).toBe('updating tasks')
+  expect(activityOf({ tool: 'mcp__board__board' })).toBe('using board__board')
+})
+
+test('activityOf keeps a 600-character one-liner to one short phrase', () => {
+  const long = `cd /c/x && FOO=1 BAR="a b" ${'node scripts/build.js --flag '.repeat(20)}`
+  const a = activityOf({ tool: 'Bash', command: long })
+  expect(a).toBe('running node scripts/build.js --flag')
+  expect(activityOf({ tool: 'Bash', command: 'y'.repeat(600) }).length).toBeLessThanOrEqual(56)
+  expect(activityOf({ tool: 'Bash' })).toBe('running a command')
 })

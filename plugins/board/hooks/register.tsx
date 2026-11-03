@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Board } from '../types'
-import { applyUpdate, emptyBoard, importPlan, parseBoard, serialize, statusText } from './board'
+import type { AgentRun, Board, NativeTask } from '../types'
+import { activityOf, applyUpdate, emptyBoard, importPlan, parseBoard, serialize, statusText } from './board'
 import type { ImportInput, Update } from './board'
 import { boardPath } from './live'
 
@@ -12,6 +12,11 @@ const DESCRIPTION = 'Show or hide the board panel; `status`, `status all`, `stat
 const board = atom({ plugin: 'board', key: 'board' } as const, null as Board | null)
 const boardError = atom({ plugin: 'board', key: 'boardError' } as const, null as string | null)
 const root = atom({ plugin: 'board', key: 'root' } as const, '')
+const agents = atom({ plugin: 'board', key: 'agents' } as const, [] as AgentRun[])
+const tasks = atom({ plugin: 'board', key: 'tasks' } as const, [] as NativeTask[])
+const now = atom({ plugin: 'board', key: 'now' } as const, 0)
+
+const AGENT_CAP = 200
 
 /** Whether the root is a repository's (the live file then sits in its .git). */
 let hasRepo = false
@@ -61,9 +66,42 @@ async function writeBoard($: EngineInterface, next: Board): Promise<void> {
   await loadBoard($)
 }
 
-async function boardText($: EngineInterface): Promise<string> {
+async function boardText($: EngineInterface, scope?: string): Promise<string> {
   const at = await $.clock.now()
-  return statusText(await read($, board), await read($, boardError), { sessions: {} }, [], [], at)
+  return statusText(await read($, board), await read($, boardError), { sessions: {} }, await read($, agents), await read($, tasks), at, scope)
+}
+
+// ---------- agents and the native task list ----------
+
+const TASK_STATUSES = new Set(['pending', 'in_progress', 'completed'])
+
+/** The id the engine gave a task, from its answer (`Task #3 created …`), else the next number. */
+function taskIdOf(result: unknown, list: NativeTask[]): string {
+  let text = ''
+  try {
+    text = typeof result === 'string' ? result : JSON.stringify(result)
+  } catch {}
+  return /#(\d+)/.exec(text)?.[1] ?? String(list.length + 1)
+}
+
+async function onTaskCall($: EngineInterface, e: { tool: string; [k: string]: unknown }, result: unknown): Promise<void> {
+  if (e.tool === 'TaskCreate') {
+    const subject = String(e.subject ?? '').trim()
+    if (!subject) return
+    await update($, tasks, list => [...list, { id: taskIdOf((result as { result?: unknown })?.result ?? result, list), subject, status: 'pending' as const }].slice(-100))
+    return
+  }
+  if (e.tool === 'TaskUpdate') {
+    const id = String(e.taskId ?? '')
+    const status = String(e.status ?? '')
+    const subject = typeof e.subject === 'string' ? e.subject.trim() : ''
+    await update($, tasks, list => {
+      const at = list.findIndex(t => t.id === id)
+      if (at < 0) return list
+      if (status === 'deleted') return list.filter((_, i) => i !== at)
+      return list.map((t, i) => (i === at ? { ...t, ...(TASK_STATUSES.has(status) ? { status: status as NativeTask['status'] } : {}), ...(subject ? { subject } : {}) } : t))
+    })
+  }
 }
 
 type ToolInput = Update & { action?: string; plan?: string; milestone?: ImportInput['milestone'] }
@@ -173,7 +211,75 @@ export const register: Register = on => {
       await resolveRoot($)
       await loadBoard($)
     } catch {}
+    // Ticks the running agents' clocks; quiet when nothing runs.
+    $.clock.every(1000, () => {
+      void (async () => {
+        try {
+          if (!(await read($, agents)).some(a => a.status === 'running')) return
+          const at = await $.clock.now()
+          await update($, now, () => at)
+        } catch {}
+      })()
+    })
     return started
+  })
+
+  on('agent.spawn', async ($, e, next) => {
+    const started = await next(e)
+    try {
+      if (started && 'model' in started && typeof started.model === 'string') {
+        const at = await $.clock.now()
+        const run: AgentRun = {
+          id: started.agentId ?? e.tool_use_id,
+          ...(started.agentId ? { agentId: started.agentId } : {}),
+          name: e.description || 'subagent',
+          model: started.model,
+          status: 'running',
+          startedAt: at,
+          calls: 0,
+          activity: 'starting',
+        }
+        await update($, agents, list => [...list, run].slice(-AGENT_CAP))
+        await update($, now, () => at)
+      }
+    } catch {}
+    return started
+  })
+
+  // Every call: a subagent's sets its row's activity line; the main session's
+  // TaskCreate and TaskUpdate keep the native task list.
+  on('tool.call', async ($, e, next) => {
+    const agentId = e.agentId
+    if (agentId) {
+      try {
+        const activity = activityOf(e as unknown as { tool: string })
+        await update($, agents, list =>
+          list.map(a => (a.agentId === agentId && a.status === 'running' ? { ...a, activity, calls: a.calls + 1 } : a)),
+        )
+      } catch {}
+      return next(e)
+    }
+    const result = await next(e)
+    if (e.tool === 'TaskCreate' || e.tool === 'TaskUpdate') {
+      try {
+        await onTaskCall($, e as unknown as { tool: string }, result)
+      } catch {}
+    }
+    return result
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const agentId = e.agentId
+    if (agentId) {
+      try {
+        const at = await $.clock.now()
+        await update($, agents, list =>
+          list.map(a => (a.agentId === agentId && a.status === 'running' ? { ...a, status: e.reason === 'answer' ? 'done' : 'failed', endedAt: at } : a)),
+        )
+        await update($, now, () => at)
+      } catch {}
+    }
+    return next(e)
   })
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
@@ -185,5 +291,16 @@ export const register: Register = on => {
     }
   })
 
-  on('command.run', { command: 'board' }, async () => ({ text: 'board: not wired yet' }))
+  on('command.run', { command: 'board' }, async ($, e) => {
+    try {
+      const [sub, ...rest] = e.args.trim().split(/\s+/)
+      if (sub === 'status') {
+        await loadBoard($)
+        return { text: await boardText($, rest.join(' ') || undefined) }
+      }
+      return { text: 'board: not wired yet' }
+    } catch (err) {
+      return { text: `board: ${String((err as Error)?.message ?? err)}` }
+    }
+  })
 }
