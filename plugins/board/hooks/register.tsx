@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, Board, Live, LiveSession, NativeTask } from '../types'
+import type { AgentRun, Board, Live, LiveSession, NativeTask, Panel } from '../types'
+import { renderNow } from './pane'
 import { activityOf, applyUpdate, emptyBoard, importPlan, parseBoard, serialize, statusText } from './board'
 import type { ImportInput, Update } from './board'
 import { boardPath, livePath, others, parseLive, titleOf, withEntry, withoutEntry } from './live'
@@ -17,6 +18,44 @@ const agents = atom({ plugin: 'board', key: 'agents' } as const, [] as AgentRun[
 const tasks = atom({ plugin: 'board', key: 'tasks' } as const, [] as NativeTask[])
 const now = atom({ plugin: 'board', key: 'now' } as const, 0)
 const live = atom({ plugin: 'board', key: 'live' } as const, { sessions: {} } as Live)
+const panel = atom({ plugin: 'board', key: 'panel' } as const, { view: { kind: 'home' }, isMoreShown: false, autoOpenedFor: '' } as Panel)
+
+const PANE = 'board'
+const USAGE = 'board: status | status all | status <id> | show <id> | find <text> | init | open'
+
+/** The `autoOpen` setting as this load of the module received it. */
+let isAutoOpen = true
+
+async function openPane($: EngineInterface): Promise<void> {
+  await update($, now, () => 0)
+  await $.ui.open({ id: PANE, title: 'Board' })
+}
+
+async function isPaneOpen($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.ui.panes()).some(p => p.id === PANE)
+  } catch {
+    return false
+  }
+}
+
+async function togglePane($: EngineInterface): Promise<boolean> {
+  if (await isPaneOpen($)) {
+    await $.ui.close({ id: PANE })
+    return false
+  }
+  await openPane($)
+  return true
+}
+
+/** Opens the panel by itself, once per reason (`board`, `agents`), unless the setting says never. */
+async function autoOpen($: EngineInterface, reason: string): Promise<void> {
+  if (!isAutoOpen) return
+  const p = await read($, panel)
+  if (p.autoOpenedFor.split(',').includes(reason)) return
+  await update($, panel, prev => ({ ...prev, autoOpenedFor: [prev.autoOpenedFor, reason].filter(Boolean).join(',') }))
+  void $.ui.open({ id: PANE, title: 'Board' })
+}
 
 const AGENT_CAP = 200
 
@@ -310,7 +349,8 @@ const TOOL_SCHEMA = {
   required: ['action'],
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  isAutoOpen = (options as Record<string, unknown> | undefined)?.autoOpen !== 'never'
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     try {
@@ -327,14 +367,18 @@ export const register: Register = on => {
       await loadBoard($)
       self.branch = await branchOf($)
       await heartbeat($, true)
+      if (await read($, board)) await autoOpen($, 'board')
     } catch {}
     // Keeps this session's live entry fresh while it lives.
     $.clock.every(30_000, () => void heartbeat($, true))
-    // Ticks the running agents' clocks; quiet when nothing runs.
+    // Ticks the running agents' clocks, and the other sessions while the panel is open.
     $.clock.every(1000, () => {
       void (async () => {
         try {
-          if (!(await read($, agents)).some(a => a.status === 'running')) return
+          const isRunning = (await read($, agents)).some(a => a.status === 'running')
+          const isOpen = await isPaneOpen($)
+          if (isOpen) await readLive($)
+          if (!isRunning && !isOpen) return
           const at = await $.clock.now()
           await update($, now, () => at)
         } catch {}
@@ -361,6 +405,7 @@ export const register: Register = on => {
         await update($, agents, list => [...list, run].slice(-AGENT_CAP))
         await update($, now, () => at)
         await heartbeat($, true)
+        await autoOpen($, 'agents')
       }
     } catch {}
     return started
@@ -431,14 +476,34 @@ export const register: Register = on => {
 
   on('command.run', { command: 'board' }, async ($, e) => {
     try {
-      const [sub, ...rest] = e.args.trim().split(/\s+/)
+      const [sub = '', ...rest] = e.args.trim().split(/\s+/)
+      const arg = rest.join(' ')
+      if (sub === '') {
+        const isOpen = await togglePane($)
+        return { text: isOpen ? 'Board panel opened.' : 'Board panel closed.' }
+      }
+      if (sub === 'open') {
+        await openPane($)
+        return { text: 'Board panel opened.' }
+      }
       if (sub === 'status') {
         await loadBoard($)
-        return { text: await boardText($, rest.join(' ') || undefined) }
+        return { text: await boardText($, arg || undefined) }
       }
-      return { text: 'board: not wired yet' }
+      return { text: USAGE }
     } catch (err) {
       return { text: `board: ${String((err as Error)?.message ?? err)}` }
     }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const ui = $.ui.resolve(e)
+    const at = Math.max(await read($, now), await $.clock.now())
+    const l = await read($, live)
+    let selfId = ''
+    try {
+      selfId = await sessionId($)
+    } catch {}
+    return renderNow(ui, { agents: await read($, agents), tasks: await read($, tasks), others: others(l, selfId, at), at })
   })
 }
