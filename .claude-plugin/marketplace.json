@@ -37,6 +37,11 @@
       "name": "superpowers-flow",
       "source": "./plugins/superpowers-flow",
       "description": "Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered sp-* workers superpowers dispatches instead of general-purpose."
+    },
+    {
+      "name": "board",
+      "source": "./plugins/board",
+      "description": "A panel of this session's tasks, subagents (what each is doing, in words) and sibling sessions, plus a project board of milestones and tasks Claude keeps in docs/superpowers/board.json."
     }
   ]
 }

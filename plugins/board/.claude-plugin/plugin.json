@@ -1,0 +1,22 @@
+{
+  "name": "board",
+  "version": "0.1.0",
+  "description": "A panel of this session's tasks, subagents (what each is doing, in words) and sibling sessions, plus a project board of milestones and tasks Claude keeps in docs/superpowers/board.json.",
+  "author": {
+    "name": "Danijel Peric"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoOpen": {
+      "type": "string",
+      "title": "Open the board panel",
+      "description": "always: the first time a session starts in a project with a board, and when a subagent starts; never: only on /board",
+      "default": "always",
+      "options": [
+        "always",
+        "never"
+      ]
+    }
+  },
+  "license": "MIT"
+}

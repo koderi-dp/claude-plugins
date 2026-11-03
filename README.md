@@ -11,6 +11,7 @@ Claude Code plugins for faster, quieter sessions. This repository is a plugin ma
 | [shipright](plugins/shipright) | Builds a feature in one session: spec, lean plan, branch, task-by-task build with reviews on models you pick, and a live progress pane | Any |
 | [fable-team](plugins/fable-team) | `/fable-team:init` gives a project research (Sonnet), builder (Opus) and reviewer (Opus) subagents in `.claude/agents` plus the routing rule in `CLAUDE.md`; registers no agents itself | Any |
 | [superpowers-flow](plugins/superpowers-flow) | Live progress for superpowers plan runs: a bar above the prompt with a session row (turn, speed, cost, cache, context), an agents panel with model, steps, context, cost and time, and five tiered `sp-*` workers superpowers dispatches instead of `general-purpose` | Any |
+| [board](plugins/board) | A panel of this session's tasks, subagents (what each is doing, in words) and sibling sessions, plus a project board of milestones and tasks Claude keeps in `docs/superpowers/board.json` | Any |
 
 ## Install
 
