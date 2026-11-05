@@ -231,7 +231,8 @@ Text first, so the phone and SSH see the same as the desktop:
 - `add`, `update`, `move`, `remove` on backlog items by id; `update` merges fields, stamps `updatedAt`, regenerates `BACKLOG.md`.
 - `ledger`: `{ item, set: {...} }` merges into the item's ledger (a task entry, a dispatch, a ruling, `resume`, `final`).
 - `status`: the text of `/pipeline status`.
-- `init`: writes `config.json` from what it finds in the project and an empty backlog; on a project that has a backlog.md or an MVP table, drafts items from it with `status: inbox` and `note: "imported, unverified"` and asks for corrections once.
+- `init`: writes `config.json` from what it finds in the project and an empty backlog. For a project that already has a queue, `/pipeline migrate` (section 12) runs first and calls `init` itself.
+- `migrate`: the import step of section 12: reads the named sources and answers the drafted items and the config for the lead to show the user.
 
 Every write re-reads the file, merges, writes through a temp file and renames. A file that fails to parse is never overwritten.
 
@@ -239,7 +240,8 @@ Every write re-reads the file, merges, writes through a temp file and renames. A
 
 | Command | Does |
 | --- | --- |
-| `/pipeline init` | Config and backlog for this project; imports an existing queue |
+| `/pipeline init` | Config and an empty backlog for a new project |
+| `/pipeline migrate` | Move an existing project onto the pipeline (section 12) |
 | `/pipeline add <text>` | Intake (7.1) |
 | `/pipeline next` | Run the first ready item |
 | `/pipeline run <id>` / `run all` | Run one item, or until nothing is ready |
@@ -250,9 +252,19 @@ Every write re-reads the file, merges, writes through a temp file and renames. A
 | `/pipeline panel` | Toggle the panel |
 | `/pipeline config [key=value]` | Show or change the project config |
 
-## 12. Migration for catalo and openhuddle
+## 12. Migration of an existing project
 
-`/pipeline init` in each: the config from the Makefile, package scripts and CI; items from `docs/backlog.md` (catalo) and the MVP queue (openhuddle) as `inbox` with the imported note, in their order. The old WORKFLOW.md and the workflow sections of CLAUDE.md are then replaced by one line pointing at the plugin; the old ledgers stay as history. Done for one project first; the other after a week of use.
+`/pipeline migrate` moves a project that already runs its own process (catalo, openhuddle) onto the pipeline in one session, without losing status or history. It is one command, run once, in the main checkout on a clean `mainBranch`.
+
+1. **Read the sources.** The command names what it found and reads, in this order: `CLAUDE.md` and every `*/CLAUDE.md`; `docs/WORKFLOW.md`, `docs/backlog.md`, `docs/SLICES.md` and any file CLAUDE.md links as a queue, status, workflow or ledger; `docs/superpowers/{specs,plans}/`; `.superpowers/sdd/**/progress.md` and `docs/superpowers/ledgers/`; project skills under `.claude/skills/` that concern dispatch, review or models; the Makefile, package scripts and the CI workflow; `git log --merges` and open `feat/*` branches.
+2. **Draft the config.** `checks` from the scripts and CI (catalo: `check:fast`, the workspace tests, the five-check gate; openhuddle: `make check`, `make gen-check`); `riskyPaths` from the prose that names risky code (auth, sessions, parsers, migrations, concurrency, money) mapped onto real directories; `models` from the project's dispatch rules (openhuddle §2: Sonnet implements, Opus reviews; catalo's `agent-dispatch` skill); `limits` from the prose (three fix rounds) or the defaults; `merge` from the stated mode (openhuddle: auto); `stop` from the project's own "ask the user only for" list. Every value carries a `source` line in the migration report so the user sees where it came from.
+3. **Draft the items.** One backlog item per queue entry, in the queue's order: catalo from the unchecked items of `docs/backlog.md` and its named follow-ups; openhuddle from the "MVP queue" entries, each carrying the MVP rows it closes in `note`. Status: `merged` for what git proves is on `mainBranch` (a checked item with a PR, a struck slice with a merge sha); `building` for an open `feat/*` branch with a ledger, with `resume` reconstructed from the ledger's current-status block; `parked` for what the prose marks later or V1; everything else `inbox` with `note: "imported from <file>, unverified"`. A deferral that lives only in an old item's prose (openhuddle's lost-leftover problem) becomes its own `inbox` item with the source quoted. Existing specs and plans are linked from the items they belong to; nothing is moved or rewritten.
+4. **Keep the history.** Old ledgers, SLICES.md and the old backlog stay where they are, untouched; each gets one line at the top: "Historical. The queue is docs/pipeline/backlog.json since <date>." The migration report lists every file it read and what it took from it.
+5. **Retire the workflow prose.** In CLAUDE.md the sections about how work is run (the loop, roles and models, dispatch, approval gates, ledgers, resume, standing instructions on process) are replaced by one paragraph: the project runs on the pipeline plugin, the config is `docs/pipeline/config.json`, start with `/pipeline status`. Code conventions, layout, commands, decisions already made and the definition of done stay. Project skills that only restated dispatch rules (catalo's `agent-dispatch`) are deleted; skills that do something else (catalo's `increment-review-stack`) stay and the config's `afterMerge` names them. `docs/WORKFLOW.md` becomes the one-paragraph pointer with its "what the slices taught" section kept.
+6. **Show and confirm once.** The command answers with the status block, the config with its source lines, the list of removed and rewritten sections, and one sentence asking for corrections. This is the one interaction: the user answers in a sentence or two ("p3 is done, p7 before p5, merge stays manual") and the lead applies it. Then everything is committed on a branch `chore/pipeline-migration` with a PR, under the project's own merge rule.
+7. **First run.** `/pipeline status` in a fresh session must show the same picture the old docs gave; if it cannot (an item the old ledger calls done that git cannot prove), the item stays `inbox` with the note and the status block says how many are unverified.
+
+The migration is idempotent: a second `/pipeline migrate` on a migrated project refreshes links and the config's sources and changes no status. Done for catalo first; openhuddle after a week of use, when the first migration's rough edges are fixed.
 
 ## 13. Open questions
 
