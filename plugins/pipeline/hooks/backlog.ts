@@ -19,7 +19,6 @@ export function nextId(backlog: Backlog): string {
 /** Appends an item with the next id, every known field present, and the stamp; unknown fields are kept. */
 export function addItem(backlog: Backlog, fields: Partial<Item> & { title: string }, now: string): Backlog {
   const item: Item = {
-    id: nextId(backlog),
     status: 'inbox',
     source: '',
     spec: null,
@@ -29,6 +28,7 @@ export function addItem(backlog: Backlog, fields: Partial<Item> & { title: strin
     ledger: null,
     note: '',
     ...fields,
+    id: nextId(backlog),
     title: fields.title,
     updatedAt: now,
   }
