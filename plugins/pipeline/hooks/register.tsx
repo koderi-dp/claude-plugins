@@ -1,24 +1,32 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, Backlog, Config, Item, Ledger, Signal } from '../types'
+import type { AgentRun, Backlog, Config, Item, Ledger, LiveEntry, Signal } from '../types'
 import { addItem, emptyBacklog, moveItem, readiness, removeItem, renderBacklogMd, updateItem } from './backlog'
 import type { Readiness } from './backlog'
 import { DEFAULTS } from './config'
-import { parseJson, paths, serialize } from './files'
+import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
 import type { LedgerSet } from './ledger'
+import { parseLive, withEntry, withoutEntry } from './live'
 import { statusText } from './status'
+import { deadAgents, isProtected, onCall, onComplete, onResult, onSpawn, onStep, pathOf, signals as raiseSignals } from './watch'
+import type { Call, Limits } from './watch'
 
 const TOOL = 'mcp__pipeline__pipeline'
 const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `move`, `park`, `unpark`'
 const CONFIG_FILE = 'docs/pipeline/config.json'
 const BACKLOG_FILE = 'docs/pipeline/backlog.json'
 const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const TICK_MS = 30_000
+const HEARTBEAT_MS = 2000
+const WAKE_PROMPT = 'pipeline: check the watchdog signals with the pipeline tool'
+const ACTIVE_STATUSES = ['planning', 'building', 'review'] as const
 
 const TOOL_DESCRIPTION =
   'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
-  '`get` → JSON { config, backlog, readiness, signals }; ' +
+  '`get` → JSON { config, backlog, readiness, active, resume, signals }: the active item, its ledger\'s resume block and the open watchdog signals (silent, dead, looping, budget), each delivered once; ' +
   '`status` { id? } → the status block, or one item\'s ledger as text; ' +
   '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers `added <id>` and the status; ' +
   '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title); ' +
@@ -61,12 +69,24 @@ const signals = atom({ plugin: 'pipeline', key: 'signals' } as const, [] as Sign
 
 const slashes = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
+// What this module instance knows between hooks: the live file's whereabouts,
+// this session's entry, the heartbeat throttle, the pending wake-up and the ticker.
+const self = {
+  hasRepo: false,
+  sessionRoot: '',
+  startedAt: '',
+  lastWrite: -Infinity,
+  wakeUntil: -Infinity,
+  ticker: null as null | { cancel: () => void },
+}
+
 /** The main checkout's root, even from a worktree; the session's root without a repository. */
 async function resolveRoot($: EngineInterface): Promise<string> {
   let repoRoot: string | undefined
   try {
     repoRoot = (await $.session.repo())?.root
   } catch {}
+  self.hasRepo = Boolean(repoRoot)
   const found = slashes(repoRoot ?? (await $.session.root()))
   await update($, root, () => found)
   return found
@@ -254,9 +274,18 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
   }
   if (e.action === 'get') {
     const r = loaded ? await judgeAll($, found, loaded) : {}
-    const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, signals: [] }
+    const open = (await read($, signals)).filter(s => !s.delivered)
+    const active = loaded?.items.find(i => i.status === 'building' || i.status === 'review') ?? null
+    const ledger = active ? await loadLedger($, found, active.id) : null
+    const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open }
     if (error) out['error'] = error
-    return JSON.stringify(out, null, 2)
+    const answer = JSON.stringify(out, null, 2)
+    // Each signal is delivered once: what this answer carries is marked.
+    if (open.length) {
+      await update($, signals, list => list.map(s => (s.delivered ? s : { ...s, delivered: true })))
+      await heartbeat($, true)
+    }
+    return answer
   }
 
   // Every write: the file as it is on disk, or refused when it does not parse.
@@ -315,6 +344,173 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
   }
 }
 
+// ---------- the watchdog and the live file ----------
+
+/** The limits in force: the config's over the defaults, so a partial config still has every number. */
+function limitsOf(c: Config | null): Limits {
+  const given = c && typeof c.limits === 'object' && c.limits ? c.limits : {}
+  const out = { ...DEFAULTS.limits }
+  for (const k of Object.keys(out) as (keyof Limits)[]) {
+    const v = (given as Partial<Limits>)[k]
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) out[k] = v
+  }
+  return out
+}
+
+const protectedOf = (c: Config | null): string[] => (Array.isArray(c?.protectedPaths) ? c.protectedPaths.filter((g): g is string => typeof g === 'string' && g !== '') : DEFAULTS.protectedPaths)
+
+async function homeDir($: EngineInterface): Promise<string> {
+  // `$.env.get` takes a literal name, so the module's reads can be listed.
+  let v: string | undefined
+  try {
+    v = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
+  } catch {}
+  return v ? slashes(v) : ''
+}
+
+async function liveFile($: EngineInterface): Promise<string> {
+  const found = (await read($, root)) || (await resolveRoot($))
+  return livePath(found, self.hasRepo, self.hasRepo ? '' : await homeDir($), self.hasRepo ? '' : await hashRoot(found))
+}
+
+async function readText($: EngineInterface, path: string): Promise<string | null> {
+  try {
+    if (!(await $.fs.exists(path))) return null
+    const t = await $.fs.read(path)
+    return typeof t === 'string' ? t : null
+  } catch {
+    return null
+  }
+}
+
+/** The branch the session's own checkout is on: `.git` is a folder in a main checkout, a `gitdir:` file in a worktree. */
+async function branchOf($: EngineInterface): Promise<string | undefined> {
+  try {
+    const top = self.sessionRoot || slashes(await $.session.root())
+    const pointer = await readText($, `${top}/.git`)
+    const gitDir = pointer?.startsWith('gitdir:') ? slashes(pointer.slice(7).trim()) : `${top}/.git`
+    const head = await readText($, `${gitDir}/HEAD`)
+    return /^ref: refs\/heads\/(.+?)\s*$/m.exec(head ?? '')?.[1]
+  } catch {
+    return undefined
+  }
+}
+
+const activeItem = (b: Backlog | null): Item | null => b?.items.find(i => (ACTIVE_STATUSES as readonly string[]).includes(i.status)) ?? null
+
+/** This session's live entry: the active item, the running agents and every signal of this session. */
+async function entryOf($: EngineInterface, previous: LiveEntry | undefined, at: number): Promise<LiveEntry> {
+  const nowIso = new Date(at).toISOString()
+  if (!self.startedAt) self.startedAt = nowIso
+  const item = activeItem(await read($, backlog))
+  const running = (await read($, agents)).filter(a => a.status === 'running')
+  let cwd = ''
+  try {
+    cwd = slashes(await $.session.cwd())
+  } catch {}
+  const branch = await branchOf($)
+  const title = item ? `${item.id} · ${item.title}` : cwd.split('/').pop() || 'pipeline'
+  // Unknown fields of the entry on disk survive; branch and item are this write's.
+  const { branch: _b, item: _i, ...kept } = previous ?? {}
+  return {
+    ...kept,
+    title,
+    cwd,
+    ...(branch ? { branch } : {}),
+    ...(item ? { item: item.id } : {}),
+    startedAt: self.startedAt,
+    seenAt: nowIso,
+    agents: running,
+    signals: await read($, signals),
+  }
+}
+
+/** Writes this session's entry after a fresh read of the file, throttled to one write per 2 s unless forced. */
+async function heartbeat($: EngineInterface, isForced = false): Promise<void> {
+  try {
+    const at = await $.clock.now()
+    if (!isForced && at - self.lastWrite < HEARTBEAT_MS) return
+    self.lastWrite = at
+    const path = await liveFile($)
+    const id = await $.session.id()
+    const current = parseLive((await readText($, path)) ?? '')
+    await $.fs.write(path, serialize(withEntry(current, id, await entryOf($, current.sessions[id], at), at)))
+  } catch {}
+}
+
+/** A signal to the person, per `config.notify`: a push notification, or a toast when the push is refused. */
+async function notify($: EngineInterface, c: Config | null, list: Signal[]): Promise<void> {
+  const mode = c?.notify ?? DEFAULTS.notify
+  if (mode === 'off') return
+  for (const s of list) {
+    const message = `pipeline: ${s.kind} · ${s.agent} · ${s.detail}`.slice(0, 200)
+    let isSent = false
+    try {
+      const r = await $.tool.call({ tool: 'PushNotification', message, status: 'proactive' })
+      isSent = !(r && typeof r === 'object' && 'deny' in r && r.deny !== undefined)
+    } catch {}
+    if (!isSent) {
+      try {
+        await $.ui.toast(message)
+      } catch {}
+    }
+  }
+}
+
+/** Every 30 s: the signals due now join the atom and reach the person; the live file is refreshed. */
+async function tick($: EngineInterface): Promise<void> {
+  try {
+    const at = await $.clock.now()
+    const c = await read($, config)
+    const fresh = raiseSignals(await read($, agents), limitsOf(c), at, await read($, signals))
+    if (fresh.length) {
+      await update($, signals, list => [...list, ...fresh])
+      await notify($, c, fresh)
+    }
+    await heartbeat($, true)
+  } catch {}
+}
+
+/**
+ * At session start: agents the live file lists running under this session's id or
+ * a stale entry are dead; then this session's fresh entry, and the ticker.
+ */
+async function arrive($: EngineInterface): Promise<void> {
+  const at = await $.clock.now()
+  const path = await liveFile($)
+  const id = await $.session.id()
+  let current = parseLive((await readText($, path)) ?? '')
+  const dead = deadAgents(current, id, at)
+  // Nothing that ran before this start is still running.
+  await update($, agents, list => list.map(a => (a.status === 'running' ? { ...a, status: 'failed', endedAt: at } : a)))
+  if (dead.signals.length) {
+    await update($, signals, list => [...list, ...dead.signals])
+    for (const gone of dead.sessions) current = withoutEntry(current, gone)
+    await notify($, await read($, config), dead.signals)
+  }
+  self.startedAt = new Date(at).toISOString()
+  self.lastWrite = at
+  await $.fs.write(path, serialize(withEntry(current, id, await entryOf($, undefined, at), at)))
+  self.ticker?.cancel()
+  self.ticker = $.clock.every(TICK_MS, () => void tick($))
+}
+
+/** Between items: one wake-up at `silentMinutes` while an agent runs, where the host offers ScheduleWakeup; never two pending. */
+async function scheduleWake($: EngineInterface, at: number): Promise<void> {
+  if (at < self.wakeUntil) return
+  if (!(await read($, agents)).some(a => a.status === 'running')) return
+  let isOffered = false
+  try {
+    isOffered = (await $.tool.list()).some(t => t.name === 'ScheduleWakeup')
+  } catch {}
+  if (!isOffered) return
+  const delaySeconds = limitsOf(await read($, config)).silentMinutes * 60
+  self.wakeUntil = at + delaySeconds * 1000
+  try {
+    await $.tool.call({ tool: 'ScheduleWakeup', delaySeconds, reason: 'pipeline: a subagent is running; the watchdog signals are checked at silentMinutes', prompt: WAKE_PROMPT, noop: true })
+  } catch {}
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -328,7 +524,84 @@ export const register: Register = on => {
     try {
       await loadAll($, await resolveRoot($))
     } catch {}
+    try {
+      self.sessionRoot = slashes(await $.session.root())
+    } catch {}
+    try {
+      await arrive($)
+    } catch {}
     return started
+  })
+
+  on('session.end', async ($, e, next) => {
+    try {
+      const path = await liveFile($)
+      const current = parseLive((await readText($, path)) ?? '')
+      await $.fs.write(path, serialize(withoutEntry(current, await $.session.id())))
+    } catch {}
+    return next(e)
+  })
+
+  on('agent.spawn', async ($, e, next) => {
+    const started = await next(e)
+    try {
+      if (started && started.deny === undefined && typeof started.model === 'string') {
+        const at = await $.clock.now()
+        await update($, agents, list => onSpawn(list, { id: started.agentId ?? e.tool_use_id, ...(started.agentId ? { agentId: started.agentId } : {}), name: e.description, model: started.model, at }))
+        await heartbeat($, true)
+      }
+    } catch {}
+    return started
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    const agentId = e.agentId
+    if (agentId) {
+      try {
+        const at = await $.clock.now()
+        await update($, agents, list => onStep(list, agentId, result.usage, at))
+      } catch {}
+    }
+    return result
+  })
+
+  // A subagent's call: a protected path is refused before it runs; otherwise its
+  // activity line, and for a shell command whether it failed. The main session's passes.
+  on('tool.call', async ($, e, next) => {
+    const agentId = e.agentId
+    if (!agentId) return next(e)
+    const call = e as unknown as Call
+    try {
+      if (EDIT_TOOLS.has(e.tool)) {
+        const path = pathOf(call)
+        if (path && isProtected(path, protectedOf(await read($, config)), [await read($, root), self.sessionRoot])) {
+          return { deny: `pipeline: ${path} is protected by ${CONFIG_FILE} protectedPaths` }
+        }
+      }
+      const at = await $.clock.now()
+      await update($, agents, list => onCall(list, agentId, call, at))
+      void heartbeat($)
+    } catch {}
+    const result = await next(e)
+    if (e.tool === 'Bash') {
+      try {
+        const isError = Boolean(result && typeof result === 'object' && 'isError' in result && result.isError)
+        await update($, agents, list => onResult(list, agentId, call, isError))
+      } catch {}
+    }
+    return result
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    try {
+      const at = await $.clock.now()
+      const agentId = e.agentId
+      if (agentId) await update($, agents, list => onComplete(list, agentId, e.reason, at))
+      await heartbeat($, true)
+      if (!agentId) await scheduleWake($, at)
+    } catch {}
+    return next(e)
   })
 
   on('tool.call', { tool: TOOL }, async ($, e) => {

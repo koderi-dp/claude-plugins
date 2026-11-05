@@ -17,7 +17,7 @@ const config = (extra: Record<string, unknown> = {}) =>
 type Engine = { tool: { call: (e: never) => Promise<unknown> }; session: { start: (e: never) => Promise<unknown>; end: (e: never) => Promise<unknown> }; agent: { spawn: (e: never) => Promise<unknown> }; turn: { complete: unknown; step: unknown } }
 
 /** A main checkout at /p/main, this session in its worktree, files in memory; records writes, pushes, wake-ups and the plugin's state. */
-function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: boolean; wakeup?: boolean } = {}) {
+function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: boolean; wakeup?: boolean; push?: 'ok' | 'deny' } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const state = new Map<string, unknown>()
@@ -56,6 +56,7 @@ function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: b
     return { turnId: 'turn', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: { model: 'claude-x', input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } as never
   })
   on('tool.call', { tool: 'PushNotification' }, (_$, e) => {
+    if (options.push === 'deny') return { deny: 'no push here' }
     pushes.push(String((e as { message: string }).message))
     return { result: 'sent' }
   })
@@ -67,8 +68,8 @@ function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: b
     toasts.push(String((e as { text: string }).text))
     return { value: undefined } as never
   })
-  for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Read', 'Bash']) {
-    on('tool.call', { tool }, (_$, e) => {
+  for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Read', 'Bash'] as const) {
+    on('tool.call', { tool: tool as 'Edit' }, (_$, e) => {
       passed.push(`${e.tool}:${String((e as { file_path?: string; command?: string }).file_path ?? (e as { command?: string }).command ?? '')}`)
       const cmd = (e as { command?: string }).command ?? ''
       return cmd.includes('fail') ? ({ result: 'exit 1', isError: true } as never) : { result: 'ok' }
@@ -100,10 +101,12 @@ test('Review Focus 3: silent after the limit, dead after a restart with the live
   await spawn($, 'Implement Task 1')
   await step($, 'agent-t1')
   await $.tool.call({ tool: 'Edit', file_path: `${WORKTREE}/src/a.ts`, old_string: 'a', new_string: 'b', agentId: 'agent-t1' } as never)
-  expect(live(files).sessions['self']!.agents).toMatchObject([{ agentId: 'agent-t1', name: 'Implement Task 1', status: 'running', activity: 'editing a.ts', tokens: 15 }])
+  expect(state.get('agents')).toMatchObject([{ agentId: 'agent-t1', name: 'Implement Task 1', status: 'running', activity: 'editing a.ts', tokens: 15, calls: 1 }])
 
   await clock.advance(9 * MIN)
   expect(state.get('signals') ?? []).toEqual([])
+  // The ticker refreshed the live file with the running agent and its activity.
+  expect(live(files).sessions['self']!.agents).toMatchObject([{ agentId: 'agent-t1', name: 'Implement Task 1', status: 'running', activity: 'editing a.ts', tokens: 15 }])
   expect(pushes).toEqual([])
   await clock.advance(MIN)
   const raised = state.get('signals') as Record<string, unknown>[]
@@ -191,11 +194,11 @@ test('notify off sends nothing; a failing push falls back to a toast', async ($,
 })
 
 test('a push that fails becomes a toast', async ($, on) => {
-  const { clock, toasts } = world(on, { [CONFIG]: config({ notify: 'milestones' }) })
-  on('tool.call', { tool: 'PushNotification' }, () => ({ deny: 'no push here' }))
+  const { clock, toasts, pushes } = world(on, { [CONFIG]: config({ notify: 'milestones' }) }, { push: 'deny' })
   await start($)
   await spawn($, 'Toasted')
   await clock.advance(10 * MIN)
+  expect(pushes).toEqual([])
   expect(toasts).toHaveLength(1)
   expect(toasts[0]).toContain('Toasted')
 })

@@ -13,7 +13,8 @@ export type Ledger = { item: string; plan?: string; branch?: string; worktree?: 
 export type SignalKind = 'silent' | 'dead' | 'looping' | 'budget'
 export type Signal = { kind: SignalKind; agent: string; agentId?: string; detail: string; at: number; delivered: boolean }
 export type AgentRun = { id: string; agentId?: string; name: string; model: string; status: 'running' | 'done' | 'failed'; startedAt: number; lastStepAt: number; endedAt?: number; calls: number; tokens: number; activity: string; lastCommands: string[]; failures: number }
-export type Live = { session: string; startedAt: string; seenAt: string; item?: string; agents: AgentRun[]; signals: Signal[] }
+export type LiveEntry = { title: string; cwd: string; branch?: string; item?: string; startedAt: string; seenAt: string; agents: AgentRun[]; signals: Signal[]; [k: string]: unknown }
+export type Live = { sessions: Record<string, LiveEntry>; [k: string]: unknown }
 export type Panel = { isMoreShown: boolean; autoOpenedFor: string }
 declare module 'claude-code' {
   interface PluginState {
