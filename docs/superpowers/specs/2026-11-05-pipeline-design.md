@@ -74,6 +74,7 @@ Everything under `docs/pipeline/` is committed on the item's branch and merges w
   },
   "limits": { "fixRounds": 3, "silentMinutes": 10, "taskMinutes": 45, "itemTokens": 4000000 },
   "merge": "auto",
+  "mergeMethod": "merge",
   "stop": ["product decision the spec leaves open", "security trade-off", "CI that cannot be made green", "credentials or external services", "new cost", "destructive data change"],
   "afterMerge": ["docs/pipeline/BACKLOG.md"],
   "notify": "milestones"
@@ -85,7 +86,7 @@ Everything under `docs/pipeline/` is committed on the item's branch and merges w
 - `protectedPaths`: the mod denies a subagent's Edit or Write there (the `tool.call` hook). The lead may still edit them when the item's spec says so.
 - `models`: tiers, not exact ids; `escalate` is where a stuck implementer goes.
 - `limits`: what the watchdog enforces (section 8).
-- `merge`: `auto` merges on green CI with no open Critical or Important finding; `pr` stops at an open PR.
+- `merge`: `auto` merges on green CI with no open Critical or Important finding; `pr` stops at an open PR. `mergeMethod`: `merge` (a merge commit, the default) or `squash`.
 - `stop`: the conditions on which the runner halts an item and asks. Free text: the skill reads it.
 - `notify`: `off`, `milestones` (item started, PR open, merged, blocked), `all` (every task).
 

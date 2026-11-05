@@ -214,15 +214,24 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
   const p = paths(found)
 
   if (e.action === 'init') {
-    if (await $.fs.exists(p.config)) return `exists: ${CONFIG_FILE}`
-    await $.fs.write(p.config, serialize(DEFAULTS))
-    const empty = emptyBacklog()
-    await $.fs.write(p.backlog, serialize(empty))
-    await $.fs.write(p.backlogMd, renderBacklogMd(empty))
-    await update($, config, () => structuredClone(DEFAULTS))
-    await update($, backlog, () => empty)
+    const hasConfig = await $.fs.exists(p.config)
+    const hasBacklog = await $.fs.exists(p.backlog)
+    if (hasConfig && hasBacklog) return `exists: ${CONFIG_FILE}`
+    const wrote: string[] = []
+    if (!hasConfig) {
+      await $.fs.write(p.config, serialize(DEFAULTS))
+      await update($, config, () => structuredClone(DEFAULTS))
+      wrote.push(CONFIG_FILE)
+    }
+    if (!hasBacklog) {
+      const empty = emptyBacklog()
+      await $.fs.write(p.backlog, serialize(empty))
+      await $.fs.write(p.backlogMd, renderBacklogMd(empty))
+      await update($, backlog, () => empty)
+      wrote.push(BACKLOG_FILE, BACKLOG_MD_FILE)
+    }
     await update($, fileError, () => null)
-    return `wrote ${CONFIG_FILE}, ${BACKLOG_FILE}, ${BACKLOG_MD_FILE}`
+    return `wrote ${wrote.join(', ')}`
   }
   if (e.action === 'status') {
     if (e.id === undefined) return statusNow($, found, c, loaded, error)

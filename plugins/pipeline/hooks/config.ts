@@ -20,6 +20,7 @@ export const DEFAULTS: Config = {
   },
   limits: { fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000 },
   merge: 'pr',
+  mergeMethod: 'merge',
   stop: [
     'product decision the spec leaves open',
     'security trade-off',
@@ -113,7 +114,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
       }
   }
 
-  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'merge', 'stop', 'afterMerge', 'notify'])
+  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'notify'])
   const extra = Object.fromEntries(Object.entries(raw).filter(([k]) => !known.has(k)))
   const config: Config = {
     ...extra,
@@ -126,6 +127,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
     models,
     limits,
     merge: oneOf('merge', ['auto', 'pr'] as const, DEFAULTS.merge),
+    mergeMethod: oneOf('mergeMethod', ['merge', 'squash'] as const, DEFAULTS.mergeMethod),
     stop: strings('stop', DEFAULTS.stop),
     afterMerge: strings('afterMerge', DEFAULTS.afterMerge),
     notify: oneOf('notify', ['off', 'milestones', 'all'] as const, DEFAULTS.notify),
@@ -233,6 +235,7 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
     config.merge = 'auto'
     sources['merge'] = 'prose: auto-merge'
   } else sources['merge'] = 'default'
+  sources['mergeMethod'] = 'default'
 
   return { config, sources }
 }
