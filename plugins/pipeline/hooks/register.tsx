@@ -5,11 +5,13 @@ import type { AgentRun, Backlog, Config, Item, Ledger, LiveEntry, Panel, Signal 
 import { addItem, emptyBacklog, moveItem, readiness, removeItem, renderBacklogMd, updateItem } from './backlog'
 import type { Readiness } from './backlog'
 import { cleanList, planOf } from './clean'
-import { DEFAULTS, normalizeConfig } from './config'
+import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
 import type { LedgerSet } from './ledger'
 import { parseLive, withEntry, withoutEntry } from './live'
+import { activeFromBranches, bulkToRemove, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, rulesFromProse } from './migrate'
+import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { BAR_ROW_H, barSvg, barText, modelName } from './draw'
 import type { Bar } from './draw'
 import { BLOCKED, RUNNING, activeTitle, renderPanel } from './pane'
@@ -32,6 +34,7 @@ const TICK_MS = 30_000
 const HEARTBEAT_MS = 2000
 const WAKE_PROMPT = 'pipeline: check the watchdog signals with the pipeline tool'
 const ACTIVE_STATUSES = ['planning', 'building', 'review'] as const
+const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', 'review', 'merged', 'blocked', 'parked']
 
 const TOOL_DESCRIPTION =
   'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
@@ -44,13 +47,15 @@ const TOOL_DESCRIPTION =
   '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
   '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers the ledger as text; ' +
   '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists; ' +
-  '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/), for one merged item or for every merged item; it deletes nothing, the caller removes them with git rm -r and commits. ' +
+  '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/), for one merged item or for every merged item; it deletes nothing, the caller removes them with git rm -r and commits; ' +
+  '`migrate` { refresh? } → JSON { sources, config, sourcesOfConfig, items, rules, active, bulk: { files, count }, unsure, report }: reads the project\'s queue, workflow prose, ledgers, scripts and CI and drafts the config, the items, the rules and the active item, writing nothing; refused when config.json exists unless refresh; ' +
+  '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of files given the line and the bulk files to git rm; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
   'Every write re-reads backlog.json, merges, regenerates BACKLOG.md and answers the status text; a file that does not parse is refused with its line and left alone.'
 
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init', 'clean'] },
+    action: { type: 'string', enum: ['get', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init', 'clean', 'migrate', 'migrate-apply'] },
     id: { type: 'string', description: 'The item id, as p12.' },
     item: {
       type: ['object', 'string'],
@@ -66,6 +71,10 @@ const TOOL_SCHEMA = {
     },
     set: { type: 'object', description: 'For update: the fields to merge into the item. For ledger: the fields to merge into the ledger.' },
     to: { description: 'For move: "top" or { after: "<id>" }.' },
+    refresh: { type: 'boolean', description: 'For migrate and migrate-apply: go on although docs/pipeline/ exists; the apply then refreshes titles, sources and links and changes no status.' },
+    config: { type: 'object', description: 'For migrate-apply: the corrected config, as migrate drafted it.' },
+    items: { type: 'array', description: 'For migrate-apply: the corrected items in queue order (title, status, size, needs, source, spec, plan, pr, note; a building item with branch and resume), as migrate drafted them; needs may name the queue labels.', items: { type: 'object' } },
+    rules: { type: 'array', description: 'For migrate-apply: the corrected rules, each { group, line, source }.', items: { type: 'object' } },
   },
   required: ['action'],
 }
@@ -268,6 +277,10 @@ type ToolInput = {
   item?: (Partial<Item> & { title?: string }) | string
   set?: Partial<Item> | LedgerSet
   to?: 'top' | { after: string }
+  refresh?: boolean
+  config?: unknown
+  items?: unknown
+  rules?: unknown
 }
 
 class Refused extends Error {}
@@ -417,6 +430,15 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     const list = cleanList({ config: c, backlog: loaded, ...(id !== undefined ? { item: id } : {}), ...(await cleanInput($, found, loaded)) })
     return list.length ? list.join('\n') : 'nothing to clean'
   }
+  if (e.action === 'migrate') {
+    if (!e.refresh && (await $.fs.exists(p.config))) throw new Refused(`${CONFIG_FILE} exists; pass refresh: true to draft again`)
+    return JSON.stringify(await migrateDraft($, found), null, 2)
+  }
+  if (e.action === 'migrate-apply') {
+    if (!e.refresh && (await $.fs.exists(p.dir))) throw new Refused('docs/pipeline/ exists; pass refresh: true to refresh titles, sources and links without changing a status')
+    if (error) throw new Refused(error)
+    return migrateApply($, found, loaded, e)
+  }
 
   // Every write: the file as it is on disk, or refused when it does not parse.
   if (error) throw new Refused(error)
@@ -472,6 +494,233 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     default:
       throw new Refused(`unknown action "${String(e.action)}"`)
   }
+}
+
+// ---------- migration ----------
+
+const SDD_DIR = '.superpowers/sdd'
+const HISTORICAL = /^Historical\./
+
+/** Repo-relative paths under `<root>/<dir>`, files and folders (with a slash), down to `depth` levels; nothing when the folder is not there. */
+async function walk($: EngineInterface, found: string, dir: string, depth: number): Promise<string[]> {
+  const out: string[] = []
+  for (const name of await listDir($, dir ? `${found}/${dir}` : found)) {
+    const rel = dir ? `${dir}/${name}` : name
+    out.push(rel)
+    if (name.endsWith('/') && depth > 1) out.push(...(await walk($, found, rel.slice(0, -1), depth - 1)))
+  }
+  return out
+}
+
+/** The project as the migration reads it: the listing of the known places, the branches and the superpowers increments. */
+async function scanProject($: EngineInterface, found: string): Promise<{ listing: string[]; branches: string[]; increments: Increment[] }> {
+  const listing: string[] = []
+  const seen = new Set<string>()
+  const add = (paths: string[]) => {
+    for (const p of paths) if (!seen.has(p)) { seen.add(p); listing.push(p) }
+  }
+  const top = await walk($, found, '', 1)
+  add(top)
+  for (const dir of top.filter(p => p.endsWith('/') && !p.startsWith('.'))) if (await $.fs.exists(`${found}/${dir}CLAUDE.md`)) add([`${dir}CLAUDE.md`])
+  add(await walk($, found, 'docs', 1))
+  for (const dir of ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/superpowers/ledgers', '.github/workflows']) add(await walk($, found, dir, 1))
+  add(await walk($, found, SDD_DIR, 5))
+  add(await walk($, found, '.claude/skills', 2))
+
+  const branches: string[] = []
+  for (const p of await walk($, found, '.git/refs/heads', 6)) if (!p.endsWith('/')) branches.push(p.slice('.git/refs/heads/'.length))
+  const packed = await readText($, `${found}/.git/packed-refs`)
+  for (const m of (packed ?? '').matchAll(/^[0-9a-f]{40} refs\/heads\/(\S+)/gm)) if (!branches.includes(m[1]!)) branches.push(m[1]!)
+
+  const increments: Increment[] = []
+  for (const dir of listing.filter(p => p.startsWith(`${SDD_DIR}/`) && p.endsWith('/') && p.slice(SDD_DIR.length + 1, -1).indexOf('/') < 0)) {
+    const name = dir.slice(SDD_DIR.length + 1, -1)
+    const texts: string[] = []
+    const pointer = await readText($, `${found}/${dir}plan-path`)
+    if (pointer) texts.push(pointer.trim())
+    const progress = await readText($, `${found}/${dir}progress.md`)
+    const header = /^#\s+.*$/m.exec(progress ?? '')?.[0]
+    if (header) texts.push(header)
+    increments.push({ dir: name, pointer: texts.join('\n') })
+  }
+  return { listing, branches, increments }
+}
+
+const isMd = (p: string) => /\.md$/i.test(p)
+const isLedger = (p: string) => /^\.superpowers\/sdd\/(?:.*\/)?progress\.md$/.test(p) || /^docs\/superpowers\/ledgers\/[^/]+\.md$/.test(p)
+const isSkill = (p: string) => /^\.claude\/skills\/[^/]+\/SKILL\.md$/.test(p)
+const isWorkflow = (p: string) => /^\.github\/workflows\/[^/]+$/.test(p)
+const isClaudeMd = (p: string) => p === 'CLAUDE.md' || p.endsWith('/CLAUDE.md')
+
+/** `migrate`: the sources read, the drafted config with its sources, the items, the rules, the active item, the bulk and the report. Writes nothing. */
+async function migrateDraft($: EngineInterface, found: string): Promise<Record<string, unknown>> {
+  const { listing, branches, increments } = await scanProject($, found)
+  const claudeMd = (await readText($, `${found}/CLAUDE.md`)) ?? ''
+  const sources = findSources(listing, claudeMd).filter(p => !p.endsWith('/'))
+  const texts = new Map<string, string>()
+  for (const file of sources) {
+    const t = await readText($, `${found}/${file}`)
+    if (t !== null) texts.set(file, t)
+  }
+  const report: string[] = []
+  const yielded = (file: string, what: string) => report.push(`${file}: ${what}`)
+
+  // The config from the scripts, the make targets, the CI and the prose.
+  let scripts: Record<string, string> = {}
+  const pkg = texts.get('package.json')
+  if (pkg !== undefined) {
+    const parsed = parseJson<{ scripts?: Record<string, unknown> }>(pkg, 'package.json')
+    if (parsed.ok) {
+      scripts = Object.fromEntries(Object.entries(parsed.value?.scripts ?? {}).filter((kv): kv is [string, string] => typeof kv[1] === 'string'))
+      yielded('package.json', `${Object.keys(scripts).length} scripts`)
+    } else yielded('package.json', `not read: ${parsed.error}`)
+  }
+  const makeTargets = [...(texts.get('Makefile') ?? '').matchAll(/^([a-zA-Z_-]+):/gm)].map(m => m[1]!)
+  if (texts.has('Makefile')) yielded('Makefile', `${makeTargets.length} targets`)
+  const ci = sources.filter(isWorkflow).map(f => texts.get(f) ?? '').join('\n')
+  for (const f of sources.filter(isWorkflow)) yielded(f, 'CI workflow')
+  const prose = sources.filter(f => isMd(f) && texts.has(f)).map(f => texts.get(f)!)
+  const { config: drafted, sources: sourcesOfConfig } = draftConfig({ scripts, makeTargets, ci, prose })
+
+  // The items: the markdown queue, the MVP queue of each CLAUDE.md.
+  const items: Partial<Item>[] = []
+  const backlogMd = texts.get('docs/backlog.md')
+  if (backlogMd !== undefined) {
+    const own = itemsFromBacklogMd(backlogMd, 'docs/backlog.md')
+    items.push(...own)
+    yielded('docs/backlog.md', `${own.length} items (${own.filter(i => i.status === 'merged').length} merged, ${own.filter(i => i.status === 'parked').length} parked)`)
+  }
+  for (const f of sources.filter(isClaudeMd)) {
+    const own = itemsFromMvpQueue(texts.get(f) ?? '', f)
+    items.push(...own)
+    yielded(f, own.length ? `${own.length} queue entries` : 'no queue')
+  }
+
+  // The rules from the workflow prose.
+  const ruleFiles = sources.filter(f => (isClaudeMd(f) || f === 'docs/WORKFLOW.md' || isSkill(f)) && texts.has(f))
+  const rules = rulesFromProse(ruleFiles.map(file => ({ file, text: texts.get(file)! })))
+  for (const f of ruleFiles) {
+    const n = rules.filter(r => r.source === f).length
+    if (n || !isClaudeMd(f)) yielded(f, `${n} candidate rules`)
+  }
+
+  // The active item from the branches and the ledgers.
+  const ledgerFiles = sources.filter(f => isLedger(f) && texts.has(f))
+  const active = activeFromBranches(branches, ledgerFiles.map(file => ({ file, text: texts.get(file)! })))
+  for (const f of ledgerFiles) {
+    const hit = active.find(a => a.ledger === f)
+    yielded(f, hit ? `ledger of ${hit.branch}, resume at task ${hit.resume.task}` : 'ledger, no open feat branch')
+  }
+  for (const f of sources) if (!report.some(r => r.startsWith(`${f}: `))) yielded(f, texts.has(f) ? 'read, nothing taken' : 'not readable')
+
+  // The bulk of the merged increments.
+  const { merged, unsure } = incrementsOf(increments, items)
+  const bulk = bulkToRemove(listing, merged)
+  if (merged.length) report.push(`merged increments: ${merged.join(', ')} (${bulk.count} files to remove)`)
+  if (unsure.length) report.push(`unsure increments (a folder named like a merged item, no plan match): ${unsure.join(', ')}`)
+  report.push(`branches: ${branches.length ? branches.join(', ') : 'none found under .git/refs/heads'}`)
+
+  return { sources, config: drafted, sourcesOfConfig, items, rules, active, bulk, unsure, report: report.join('\n') }
+}
+
+type ApplyItem = Partial<Item> & { resume?: ActiveItem['resume'] }
+
+const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+
+/** `migrate-apply`: the four files from the corrected drafts, the ledger of a building item, the Historical lines, the bulk list. */
+async function migrateApply($: EngineInterface, found: string, loaded: Backlog | null, e: ToolInput): Promise<string> {
+  const p = paths(found)
+  const now = await nowIso($)
+  const isRefresh = Boolean(e.refresh)
+
+  const { config: given, problems } = normalizeConfig(e.config ?? {})
+  if (problems.length) throw new Refused(problems.join('; '))
+  if (!Array.isArray(e.items)) throw new Refused('migrate-apply needs items')
+  const items = e.items.filter(isRecord) as ApplyItem[]
+  for (const it of items) {
+    if (typeof it.title !== 'string' || !it.title.trim()) throw new Refused('every item needs a title')
+    if (it.status !== undefined && !STATUSES.includes(it.status)) throw new Refused(`item "${it.title.trim()}": unknown status ${JSON.stringify(it.status)}`)
+  }
+  const rules = (Array.isArray(e.rules) ? e.rules : []).filter((r): r is MigrateRule => isRecord(r) && typeof r['line'] === 'string' && typeof r['group'] === 'string')
+
+  // The config: merged over the file on a refresh, so unknown fields survive.
+  const onDisk = isRefresh ? await loadJson<Record<string, unknown>>($, p.config, CONFIG_FILE) : { value: null, error: null }
+  if (onDisk.error) throw new Refused(onDisk.error)
+  const nextConfig = onDisk.value ? { ...onDisk.value, ...given } : given
+  await $.fs.write(p.config, serialize(nextConfig))
+  await update($, config, () => normalizeConfig(nextConfig).config)
+  if (!isRefresh || !(await $.fs.exists(p.rules))) await $.fs.write(p.rules, renderRulesMd(rules))
+
+  // The items: added in order with new ids; on a refresh matched by id or title and only their titles, sources and links
+  // refreshed (the ledger link is the tool's own and stays).
+  let next: Backlog = loaded ?? emptyBacklog()
+  const ids = new Map<string, string>()
+  const fresh = new Set<string>()
+  const LINKS = ['title', 'source', 'spec', 'plan', 'pr'] as const
+  const ledgers: { id: string; item: ApplyItem }[] = []
+  for (const it of items) {
+    const { id: label, needs: _n, resume: _r, status, ...rest } = it
+    const title = it.title!.trim()
+    const existing = isRefresh ? next.items.find(i => (label !== undefined && i.id === label) || i.title === title) : undefined
+    if (existing) {
+      const fields: Partial<Item> = {}
+      for (const k of LINKS) if (it[k] !== undefined && it[k] !== existing[k]) fields[k] = it[k] as never
+      if (Object.keys(fields).length) next = updateItem(next, existing.id, fields, now)
+      if (label) ids.set(label, existing.id)
+      continue
+    }
+    const fields: Partial<Item> & { title: string } = { ...rest, title, status: status ?? 'inbox' }
+    next = addItem(next, fields, now)
+    const id = next.items[next.items.length - 1]!.id
+    fresh.add(id)
+    if (label) ids.set(label, id)
+    if (status === 'building' && it.resume) ledgers.push({ id, item: it })
+  }
+  // The needs of the items added now, once every id is known: a queue label becomes the id it got, an unknown one goes into the note.
+  const known = new Set(next.items.map(i => i.id))
+  for (const it of items) {
+    const target = (it.id !== undefined ? ids.get(it.id) : undefined) ?? next.items.find(i => i.title === it.title?.trim())?.id
+    if (!target || !fresh.has(target) || !Array.isArray(it.needs) || !it.needs.length) continue
+    const needs: string[] = []
+    const unknown: string[] = []
+    for (const n of it.needs) {
+      const mapped = ids.get(String(n)) ?? (known.has(String(n)) ? String(n) : undefined)
+      if (mapped && mapped !== target) needs.push(mapped)
+      else if (!mapped) unknown.push(String(n))
+    }
+    const item = next.items.find(i => i.id === target)!
+    const fields: Partial<Item> = { needs }
+    if (unknown.length) fields.note = [item.note, `needs ${unknown.join(', ')}, not in the import`].filter(Boolean).join('; ')
+    next = updateItem(next, target, fields, now)
+  }
+  for (const { id, item } of ledgers) {
+    const file = ledgerFile(id)
+    const ledger: Ledger = {
+      ...emptyLedger(id),
+      ...(typeof item.branch === 'string' ? { branch: item.branch } : {}),
+      ...(typeof item.plan === 'string' ? { plan: item.plan } : {}),
+      ...(typeof item.ledger === 'string' ? { importedFrom: item.ledger } : {}),
+      resume: { ...item.resume!, at: now },
+    }
+    await $.fs.write(p.ledger(id), serialize(ledger))
+    next = updateItem(next, id, { ledger: file }, now)
+  }
+  const status = await writeBacklog($, found, normalizeConfig(nextConfig).config, next)
+
+  // The Historical line, once, on the old queue and ledger files.
+  const { listing, increments } = await scanProject($, found)
+  const old = ['docs/backlog.md', 'docs/SLICES.md', ...listing.filter(f => /^\.superpowers\/sdd\/.*\/(?:progress\.md|final-review[^/]*\.md)$/.test(f))]
+  let added = 0
+  for (const f of old) {
+    const text = await readText($, `${found}/${f}`)
+    if (text === null || HISTORICAL.test(text)) continue
+    await $.fs.write(`${found}/${f}`, `${historicalLine(now.slice(0, 10))}\n\n${text}`)
+    added += 1
+  }
+  const bulk = bulkToRemove(listing, incrementsOf(increments, next.items).merged)
+  const lines = [status, `historical line added to ${added} file${added === 1 ? '' : 's'}`]
+  if (bulk.count) lines.push(`bulk: ${bulk.count} files of merged increments to remove with git rm once the user confirms (kept with retain.superpowers):`, ...bulk.files)
+  return lines.join('\n')
 }
 
 // ---------- the watchdog and the live file ----------

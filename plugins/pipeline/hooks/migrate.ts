@@ -126,6 +126,20 @@ const PR_LINK = /https?:\/\/\S+?\/pull\/\d+/
 const DEFERRED = /\b(later|V1|phase 2)\b/i
 const FOLLOW_UPS = /^named follow-ups\b/i
 
+/** The first spec and the first plan a bullet links (`.../specs/x.md`, `.../plans/x.md`), resolved against the queue file's folder. */
+function linksOf(body: string, file: string): { spec?: string; plan?: string } {
+  const dir = file.includes('/') ? file.slice(0, file.lastIndexOf('/') + 1) : ''
+  const out: { spec?: string; plan?: string } = {}
+  for (const m of body.matchAll(/\[[^\]]*\]\(([^)\s#]+\.md)[^)]*\)/g)) {
+    const raw = m[1] ?? ''
+    if (/^[a-z]+:/i.test(raw)) continue
+    const target = raw.startsWith('/') ? raw.slice(1) : raw.startsWith('./') ? dir + raw.slice(2) : raw.startsWith('../') ? raw.replace(/^(\.\.\/)+/, '') : dir + raw
+    if (!out.spec && /\/specs\//.test(target)) out.spec = target
+    else if (!out.plan && /\/plans\//.test(target)) out.plan = target
+  }
+  return out
+}
+
 /** Backlog items from a markdown queue of `- [ ]` / `- [x]` items and "Named follow-ups" lists or tables, in document order. */
 export function itemsFromBacklogMd(text: string, file: string): Partial<Item>[] {
   const out: Partial<Item>[] = []
@@ -138,15 +152,16 @@ export function itemsFromBacklogMd(text: string, file: string): Partial<Item>[] 
         const body = box[2] ?? ''
         const title = firstSentence(body)
         if (!title) continue
+        const links = linksOf(body, file)
         if (box[1] !== ' ') {
           const pr = PR_LINK.exec(body)?.[0]
           out.push(pr
-            ? { title, status: 'merged', pr, source, note: `imported from ${file}` }
-            : { title, status: 'merged', source, note: `imported from ${file}; no PR link` })
+            ? { title, status: 'merged', pr, source, ...links, note: `imported from ${file}` }
+            : { title, status: 'merged', source, ...links, note: `imported from ${file}; no PR link` })
           continue
         }
         const deferred = DEFERRED.test(title) || /\((?:later|V1|phase 2)\)|\b(?:deferred|moved|parked)\s+(?:to|for)\s+(?:later|V1|phase 2)\b/i.test(body)
-        out.push({ title, status: deferred ? 'parked' : 'inbox', source, note: unverified })
+        out.push({ title, status: deferred ? 'parked' : 'inbox', source, ...links, note: unverified })
         continue
       }
       if (FOLLOW_UPS.test(u.heading)) {
@@ -329,3 +344,61 @@ export function activeFromBranches(branches: string[], ledgers: SourceText[]): A
 export function historicalLine(date: string): string {
   return `Historical. The queue is docs/pipeline/backlog.json since ${date}.`
 }
+
+// ---------- the bulk of merged increments ----------
+
+const SDD = '.superpowers/sdd/'
+const KEPT = /^(?:progress\.md|final-review[^/]*)$/i
+const STOP_WORDS = new Set(['and', 'the', 'of', 'for', 'with', 'from', 'to', 'in', 'on', 'a', 'an', 'slice', 'part', 'phase'])
+
+const trimPath = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '')
+
+/** The words of a folder name or a title that carry meaning: lower case, the date prefix and short or common words dropped. */
+function words(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/^\d{4}-\d{2}-\d{2}-/, '')
+    .split(/[^a-z0-9]+/)
+    .filter(w => w.length >= 3 && !STOP_WORDS.has(w))
+}
+
+export type Increment = { dir: string; pointer: string }
+
+/**
+ * Which `.superpowers/sdd/<dir>` folders belong to merged items: `merged` when the folder's pointer (its `plan-path`
+ * file or its progress.md header) names a merged item's plan exactly; `unsure` when only the folder's words all appear
+ * in a merged item's title. Any other folder is left alone.
+ */
+export function incrementsOf(increments: Increment[], items: Partial<Item>[]): { merged: string[]; unsure: string[] } {
+  const merged: string[] = []
+  const unsure: string[] = []
+  const done = items.filter(i => i.status === 'merged')
+  const plans = new Set(done.map(i => (typeof i.plan === 'string' ? trimPath(i.plan) : '')).filter(Boolean))
+  for (const inc of increments) {
+    const named = inc.pointer.split(/\s+/).map(trimPath).filter(p => p.endsWith('.md'))
+    if (named.some(p => plans.has(p))) {
+      merged.push(inc.dir)
+      continue
+    }
+    const own = words(inc.dir)
+    if (own.length && done.some(i => { const t = new Set(words(i.title ?? '')); return own.every(w => t.has(w)) })) unsure.push(inc.dir)
+  }
+  return { merged, unsure }
+}
+
+/** The files under `.superpowers/sdd/<increment>/` of the merged increments, except `progress.md` and `final-review*.md`, with their count. */
+export function bulkToRemove(listing: string[], mergedIncrements: string[]): { files: string[]; count: number } {
+  const dirs = new Set(mergedIncrements.map(d => trimPath(d).replace(/\/+$/, '')))
+  const files: string[] = []
+  for (const raw of listing) {
+    const p = trimPath(raw)
+    if (!p.startsWith(SDD) || p.endsWith('/')) continue
+    const rest = p.slice(SDD.length)
+    const dir = rest.split('/')[0] ?? ''
+    if (!dirs.has(dir) || dir === rest) continue
+    if (KEPT.test(rest.split('/').pop() ?? '')) continue
+    if (!files.includes(p)) files.push(p)
+  }
+  return { files, count: files.length }
+}
+

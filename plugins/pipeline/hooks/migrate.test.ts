@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { CATALO_BACKLOG as CATALO, OPENHUDDLE_CLAUDE as OH_CLAUDE, OPENHUDDLE_WORKFLOW as OH_WORKFLOW } from './fixtures'
-import { activeFromBranches, findSources, historicalLine, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, rulesFromProse } from './migrate'
+import { activeFromBranches, bulkToRemove, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, rulesFromProse } from './migrate'
 
 // Review Focus 5: the catalo backlog
 
@@ -268,3 +268,52 @@ test('activeFromBranches reconstructs a building item from an open feat branch w
 test('historicalLine', () => {
   expect(historicalLine('2026-11-05')).toBe('Historical. The queue is docs/pipeline/backlog.json since 2026-11-05.')
 })
+
+test('catalo: a checked item links the spec and the plan its bullet names, resolved against docs/', () => {
+  const items = itemsFromBacklogMd(CATALO, 'docs/backlog.md')
+  const versioned = items.find(i => i.title?.startsWith('Versioned page'))
+  expect(versioned).toMatchObject({ spec: 'docs/superpowers/specs/2026-10-31-page-document-renderer-design.md', plan: 'docs/superpowers/plans/2026-10-31-page-document-renderer.md' })
+  const templates = items.find(i => i.title?.startsWith('Reusable page templates'))
+  expect(templates?.spec).toBe('docs/superpowers/specs/2026-11-04-hybrid-editor-templates-design.md')
+  expect(templates?.plan).toBeUndefined()
+})
+
+test('incrementsOf: an exact plan match is merged, a folder named like a merged title is unsure, the rest is left alone', () => {
+  const items = [
+    { title: 'Search over articles', status: 'merged' as const, plan: 'docs/superpowers/plans/2026-11-01-search.md' },
+    { title: 'Export jobs and downloads', status: 'merged' as const },
+    { title: 'Brand filters', status: 'inbox' as const, plan: 'docs/superpowers/plans/2026-11-04-brand-filters.md' },
+  ]
+  const { merged, unsure } = incrementsOf([
+    { dir: '2026-11-01-search', pointer: '# SDD ledger — plan: docs/superpowers/plans/2026-11-01-search.md' },
+    { dir: '2026-11-02-export-jobs', pointer: '' },
+    { dir: '2026-11-04-brand-filters', pointer: 'docs/superpowers/plans/2026-11-04-brand-filters.md' },
+    { dir: '2026-11-05-other', pointer: '' },
+  ], items)
+  expect(merged).toEqual(['2026-11-01-search'])
+  expect(unsure).toEqual(['2026-11-02-export-jobs'])
+})
+
+test('bulkToRemove lists the files of merged increments except progress.md and the final review', () => {
+  const listing = [
+    '.superpowers/sdd/',
+    '.superpowers/sdd/2026-11-01-search/',
+    '.superpowers/sdd/2026-11-01-search/progress.md',
+    '.superpowers/sdd/2026-11-01-search/final-review.md',
+    '.superpowers/sdd/2026-11-01-search/final-review-2.md',
+    '.superpowers/sdd/2026-11-01-search/task-1-brief.md',
+    '.superpowers/sdd/2026-11-01-search/logs/',
+    '.superpowers/sdd/2026-11-01-search/logs/task-1.log',
+    '.superpowers/sdd/2026-11-01-search/screens/home.png',
+    '.superpowers/sdd/2026-11-03-export/progress.md',
+    '.superpowers/sdd/2026-11-03-export/task-1-brief.md',
+    'docs/backlog.md',
+  ]
+  expect(bulkToRemove(listing, ['2026-11-01-search'])).toEqual({
+    files: ['.superpowers/sdd/2026-11-01-search/task-1-brief.md', '.superpowers/sdd/2026-11-01-search/logs/task-1.log', '.superpowers/sdd/2026-11-01-search/screens/home.png'],
+    count: 3,
+  })
+  expect(bulkToRemove(listing, ['2026-11-01-search/', '2026-11-03-export']).count).toBe(4)
+  expect(bulkToRemove(listing, [])).toEqual({ files: [], count: 0 })
+})
+
