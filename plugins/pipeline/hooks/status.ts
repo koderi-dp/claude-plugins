@@ -1,4 +1,4 @@
-// The status block of spec §9 and one item's ledger as text. Pure: takes and returns plain data.
+// The status block of spec §9. Pure: takes and returns plain data. One item's ledger as text is in ledger.ts.
 
 import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, Signal } from '../types'
 import type { Readiness } from './backlog'
@@ -103,27 +103,4 @@ function nowLines(agents: AgentRun[], signals: Signal[], now: number): string[] 
     for (const s of open) lines.push(`  ${s.kind}: ${line([s.agent, s.detail])}`)
   }
   return lines
-}
-
-/** One item's ledger as text: the resume line first, then the tasks, rulings, blockers and the final verdict. */
-export function itemText(ledger: Ledger, item: Item | null): string {
-  const head = line([ledger.item, item?.title, item?.status, taskCounter(ledger), ledger.resume?.state, ledger.resume?.lastVerified ? `verified ${ledger.resume.lastVerified}` : undefined])
-  const lines = [head]
-  const where = line([ledger.branch, ledger.pr ?? item?.pr ?? undefined])
-  if (where) lines.push(`  ${where}`)
-  for (const t of ledger.tasks ?? []) {
-    const n = t.dispatches?.length ?? 0
-    lines.push(`  ${line([`${t.n}`, t.title, t.status, n ? `${n} dispatch${n === 1 ? '' : 'es'}` : undefined, t.review?.verdict])}`)
-  }
-  if (ledger.rulings?.length) {
-    lines.push('Rulings')
-    for (const r of ledger.rulings) lines.push(`  ${r.n}. ${r.text}`)
-  }
-  if (ledger.blockers?.length) {
-    lines.push('Blockers')
-    for (const b of ledger.blockers) lines.push(`  ${b}`)
-  }
-  if (ledger.final) lines.push(`Final: ${ledger.final.verdict}`)
-  if (ledger.tokens) lines.push(`Tokens: ${ledger.tokens}`)
-  return lines.join('\n')
 }

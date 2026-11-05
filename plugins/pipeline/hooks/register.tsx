@@ -6,7 +6,9 @@ import { addItem, emptyBacklog, moveItem, readiness, removeItem, renderBacklogMd
 import type { Readiness } from './backlog'
 import { DEFAULTS } from './config'
 import { parseJson, paths, serialize } from './files'
-import { itemText, statusText } from './status'
+import { ledgerText, mergeLedger, emptyLedger } from './ledger'
+import type { LedgerSet } from './ledger'
+import { statusText } from './status'
 
 const TOOL = 'mcp__pipeline__pipeline'
 const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `move`, `park`, `unpark`'
@@ -22,17 +24,19 @@ const TOOL_DESCRIPTION =
   '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title); ' +
   '`move` { id, to: "top" | { after: "<id>" } } → reorders; ' +
   '`remove` { id }; `park` { id }; `unpark` { id }; ' +
+  '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
+  '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers the ledger as text; ' +
   '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists. ' +
   'Every write re-reads backlog.json, merges, regenerates BACKLOG.md and answers the status text; a file that does not parse is refused with its line and left alone.'
 
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'init'] },
+    action: { type: 'string', enum: ['get', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init'] },
     id: { type: 'string', description: 'The item id, as p12.' },
     item: {
-      type: 'object',
-      description: 'For add: the new item; it starts as inbox.',
+      type: ['object', 'string'],
+      description: 'For add: the new item; it starts as inbox. For ledger: the item id, as p12.',
       properties: {
         title: { type: 'string' },
         size: { type: 'string', enum: ['S', 'M', 'L'] },
@@ -42,7 +46,7 @@ const TOOL_SCHEMA = {
       },
       required: ['title'],
     },
-    set: { type: 'object', description: 'For update: the fields to merge into the item.' },
+    set: { type: 'object', description: 'For update: the fields to merge into the item. For ledger: the fields to merge into the ledger.' },
     to: { description: 'For move: "top" or { after: "<id>" }.' },
   },
   required: ['action'],
@@ -163,8 +167,8 @@ function settle(b: Backlog, r: Record<string, Readiness>, now: string): Backlog 
 type ToolInput = {
   action: string
   id?: string
-  item?: Partial<Item> & { title?: string }
-  set?: Partial<Item>
+  item?: (Partial<Item> & { title?: string }) | string
+  set?: Partial<Item> | LedgerSet
   to?: 'top' | { after: string }
 }
 
@@ -174,10 +178,17 @@ async function nowIso($: EngineInterface): Promise<string> {
   return new Date(await $.clock.now()).toISOString()
 }
 
+const ledgerFile = (id: string) => `docs/pipeline/ledgers/${id}.json`
+
+/** The ledger of an item as it is on disk: missing gives null, bad JSON gives the error with its line. */
+async function readLedger($: EngineInterface, found: string, id: string): Promise<Loaded<Ledger>> {
+  return loadJson<Ledger>($, paths(found).ledger(id), ledgerFile(id))
+}
+
 /** The ledger of an item, when its file is on disk and parses. */
 async function loadLedger($: EngineInterface, found: string, id: string): Promise<Ledger | null> {
   try {
-    return (await loadJson<Ledger>($, paths(found).ledger(id), `docs/pipeline/ledgers/${id}.json`)).value
+    return (await readLedger($, found, id)).value
   } catch {
     return null
   }
@@ -237,8 +248,9 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     if (e.id === undefined) return statusNow($, found, c, loaded, error)
     const item = loaded?.items.find(i => i.id === e.id) ?? null
     if (!item) return `no item ${e.id}`
-    const ledger = await loadLedger($, found, item.id)
-    return ledger ? itemText(ledger, item) : `${[item.id, item.title, item.status].join(' · ')}\nno ledger`
+    const ledger = await readLedger($, found, item.id)
+    if (ledger.error) return `${[item.id, item.title, item.status].join(' · ')}\n${ledger.error}`
+    return ledger.value ? ledgerText(ledger.value, item) : `${[item.id, item.title, item.status].join(' · ')}\nno ledger`
   }
   if (e.action === 'get') {
     const r = loaded ? await judgeAll($, found, loaded) : {}
@@ -257,17 +269,33 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     return id
   }
   switch (e.action) {
+    case 'ledger': {
+      const id = need(typeof e.item === 'string' ? e.item : e.item?.id)
+      const set = e.set as LedgerSet | undefined
+      if (!set || typeof set !== 'object' || Array.isArray(set)) throw new Refused('ledger needs set')
+      const onDisk = await readLedger($, found, id)
+      if (onDisk.error) throw new Refused(onDisk.error)
+      const merged = mergeLedger(onDisk.value ?? emptyLedger(id), set, now)
+      await $.fs.write(p.ledger(id), serialize(merged))
+      // The item points at its ledger, and carries the branch, PR and plan the ledger names.
+      const item = current.items.find(i => i.id === id)!
+      const mirror: Partial<Item> = {}
+      if (item.ledger !== ledgerFile(id)) mirror.ledger = ledgerFile(id)
+      for (const k of ['branch', 'pr', 'plan'] as const) if (typeof set[k] === 'string' && item[k] !== set[k]) mirror[k] = set[k] as string
+      if (Object.keys(mirror).length) await writeBacklog($, found, c, updateItem(current, id, mirror, now))
+      return ledgerText(merged, { ...item, ...mirror })
+    }
     case 'add': {
-      const title = e.item?.title?.trim()
+      const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
       if (!title) throw new Refused('add needs item.title')
-      const next = addItem(current, { ...e.item, title }, now)
+      const next = addItem(current, { ...(e.item as Partial<Item>), title }, now)
       const id = next.items[next.items.length - 1]!.id
       return `added ${id}\n${await writeBacklog($, found, c, next)}`
     }
     case 'update': {
       const id = need(e.id)
       if (!e.set || typeof e.set !== 'object') throw new Refused('update needs set')
-      return writeBacklog($, found, c, updateItem(current, id, e.set, now))
+      return writeBacklog($, found, c, updateItem(current, id, e.set as Partial<Item>, now))
     }
     case 'move': {
       const id = need(e.id)

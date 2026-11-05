@@ -182,8 +182,8 @@ test('status renders the sections and status <id> renders the ledger', async ($,
   expect(status).toContain('Blocked\n  p3 · Blocked one · needs a credential')
   expect(status).toContain('Merged this week\n  p4 · Merged one · https://x/pull/4')
   const one = text(await call($, { action: 'status', id: 'p1' }))
-  expect(one.split('\n')[0]).toBe('p1 · Building one · building · task 2/3 · review dispatched')
-  expect(one).toContain('  2 · Two · running')
+  expect(one.split('\n')[0]).toBe('p1 · Building one · building · resume: task 2/3 · review dispatched · at 2026-11-05T09:00:00Z')
+  expect(one).toContain('Tasks\n  1 · One · accepted\n  2 · Two · running\n  3 · Three · pending')
   expect(text(await call($, { action: 'status', id: 'p2' }))).toBe('p2 · Ready one · ready\nno ledger')
   expect(text(await call($, { action: 'status', id: 'p9' }))).toBe('no item p9')
 })
@@ -217,4 +217,77 @@ test('session.start registers the tool and loads the backlog', async ($, on) => 
   expect(tools).toEqual(['pipeline'])
   expect(state.get('backlog')).toMatchObject({ items: [{ id: 'p1' }] })
   expect(state.get('fileError') ?? null).toBe(null)
+})
+
+const LEDGER = `${DIR}/ledgers/p1.json`
+const ledgerOf = (files: Map<string, string>) => JSON.parse(files.get(LEDGER)!)
+const dispatch = (tokens: number, result: string, role = 'implementer') => ({ role, model: 'sonnet', effort: 'medium', tokens, minutes: 1, result })
+
+test('ledger creates the file and links it from the item, mirroring branch, pr and plan', async ($, on) => {
+  const { files, writes } = world(on, { [CONFIG]: VALID_CONFIG })
+  await call($, { action: 'add', item: ITEM })
+  const r = text(await call($, { action: 'ledger', item: 'p1', set: { branch: 'feat/p1', worktree: '.claude/worktrees/p1', base: 'a3f91c2', plan: 'docs/pipeline/plans/p1.md' } }))
+  expect(r.split('\n')[0]).toBe('p1 · CSV export · inbox · no resume')
+  expect(r.split('\n')[1]).toBe('  branch feat/p1 · worktree .claude/worktrees/p1')
+  expect(writes.slice(2)).toEqual([LEDGER, BACKLOG, BACKLOG_MD])
+  expect(files.get(LEDGER)?.endsWith('\n')).toBe(true)
+  expect(ledgerOf(files)).toEqual({ item: 'p1', pr: null, tasks: [], rulings: [], blockers: [], final: null, tokens: 0, branch: 'feat/p1', worktree: '.claude/worktrees/p1', base: 'a3f91c2', plan: 'docs/pipeline/plans/p1.md' })
+  expect(items(files)[0]).toMatchObject({ ledger: 'docs/pipeline/ledgers/p1.json', branch: 'feat/p1', plan: 'docs/pipeline/plans/p1.md' })
+  await call($, { action: 'ledger', item: 'p1', set: { pr: '#31' } })
+  expect(items(files)[0]).toMatchObject({ pr: '#31' })
+  expect(ledgerOf(files).pr).toBe('#31')
+})
+
+test('a task entry merged twice keeps both dispatches and the later status; rulings number themselves; tokens sum', async ($, on) => {
+  const { files, writes } = world(on, { [CONFIG]: VALID_CONFIG })
+  await call($, { action: 'add', item: ITEM })
+  await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 1, title: 'One', status: 'pending', dispatches: [] }, { n: 2, title: 'Two', status: 'pending', dispatches: [] }], resume: { task: 1, state: 'planned', lastVerified: 'a3f91c2' } } })
+  await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 2, status: 'running' }], rulings: [{ task: 2, text: 'Keep the snapshot id', why: 'immutable', costIfWrong: 'exports change' }] } })
+  await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 2, dispatches: [dispatch(100, 'fix round 1')] }] } })
+  const r = text(await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 2, status: 'accepted', commits: 'a..b', dispatches: [dispatch(50, 'done'), dispatch(25, 'approved', 'reviewer')], review: { kind: 'independent', verdict: 'approved' } }], rulings: [{ text: 'B', why: 'b', costIfWrong: 'c' }], resume: { task: 3, state: 'task 2 accepted', lastVerified: 'b' } } }))
+  const l = ledgerOf(files)
+  expect(l.tasks).toEqual([
+    { n: 1, title: 'One', status: 'pending', dispatches: [] },
+    { n: 2, title: 'Two', status: 'accepted', commits: 'a..b', dispatches: [dispatch(100, 'fix round 1'), dispatch(50, 'done'), dispatch(25, 'approved', 'reviewer')], review: { kind: 'independent', verdict: 'approved' } },
+  ])
+  expect(l.rulings).toEqual([{ n: 1, task: 2, text: 'Keep the snapshot id', why: 'immutable', costIfWrong: 'exports change' }, { n: 2, text: 'B', why: 'b', costIfWrong: 'c' }])
+  expect(l.tokens).toBe(175)
+  expect(l.resume).toEqual({ task: 3, state: 'task 2 accepted', lastVerified: 'b', at: '2026-11-05T10:00:00.000Z' })
+  expect(r.split('\n')[0]).toBe('p1 · CSV export · inbox · resume: task 3/2 · task 2 accepted · verified b · at 2026-11-05T10:00:00.000Z')
+  expect(r).toContain('Tasks\n  1 · One · pending\n  2 · Two · accepted · a..b · 3 dispatches (implementer ×2, reviewer) · approved\n')
+  expect(r).toContain('Rulings\n  R1 (task 2): Keep the snapshot id — immutable — exports change\n  R2: B — b — c\n')
+  expect(r).toContain('Tokens: 175')
+  // Only the first ledger call touched the backlog (to link the file); the others wrote the ledger alone.
+  expect(writes.filter(w => w === BACKLOG).length).toBe(2)
+  const status = text(await call($, { action: 'status', id: 'p1' }))
+  expect(status).toBe(r)
+})
+
+test('ledger records the final verdict and the blockers without duplicates', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: VALID_CONFIG })
+  await call($, { action: 'add', item: ITEM })
+  await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 1, dispatches: [dispatch(10, 'done')] }], blockers: ['CI red'] } })
+  const r = text(await call($, { action: 'ledger', item: 'p1', set: { final: { verdict: 'approved', gate: 'green', tokens: 5 }, blockers: ['CI red', 'needs a credential'] } }))
+  expect(ledgerOf(files)).toMatchObject({ final: { verdict: 'approved', gate: 'green', tokens: 5 }, blockers: ['CI red', 'needs a credential'], tokens: 15 })
+  expect(r).toContain('Blockers\n  CI red\n  needs a credential\nFinal: approved · gate green · 5 tokens\nTokens: 15')
+})
+
+test('a parse error in the ledger file is refused and the file is left alone', async ($, on) => {
+  const broken = '{\n  "item": "p1",\n  tasks: []\n}\n'
+  const seed = { version: 1, items: [{ id: 'p1', title: 'A', status: 'building', ledger: 'docs/pipeline/ledgers/p1.json' }] }
+  const { files, writes } = world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: JSON.stringify(seed, null, 2) + '\n', [LEDGER]: broken })
+  const r = text(await call($, { action: 'ledger', item: 'p1', set: { pr: '#1' } }))
+  expect(r).toMatch(/^refused: docs\/pipeline\/ledgers\/p1\.json: line 3: /)
+  expect(writes).toEqual([])
+  expect(files.get(LEDGER)).toBe(broken)
+  expect(text(await call($, { action: 'status', id: 'p1' }))).toMatch(/^p1 · A · building\ndocs\/pipeline\/ledgers\/p1\.json: line 3: /)
+})
+
+test('ledger needs a known item and a set', async ($, on) => {
+  const { writes } = world(on, { [CONFIG]: VALID_CONFIG })
+  await call($, { action: 'add', item: ITEM })
+  expect(text(await call($, { action: 'ledger', item: 'p9', set: { pr: '#1' } }))).toBe('refused: no item p9')
+  expect(text(await call($, { action: 'ledger', item: 'p1' }))).toBe('refused: ledger needs set')
+  expect(text(await call($, { action: 'ledger', set: { pr: '#1' } }))).toBe('refused: an id is needed')
+  expect(writes.length).toBe(2)
 })

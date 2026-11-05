@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Backlog, Item, Ledger } from '../types'
 
 import { DEFAULTS } from './config'
-import { itemText, statusText, taskCounter } from './status'
+import { statusText, taskCounter } from './status'
 import type { StatusInput } from './status'
 
 const NOW = Date.parse('2026-11-05T12:00:00Z')
@@ -96,15 +96,4 @@ test('taskCounter reads the resume block and the task list', () => {
   expect(taskCounter(null)).toBe(undefined)
   expect(taskCounter({ ...LEDGER, resume: undefined, tasks: [] })).toBe(undefined)
   expect(taskCounter(LEDGER)).toBe('task 3/6')
-})
-
-test('itemText shows the resume line first, then the tasks and rulings', () => {
-  const text = itemText(LEDGER, item('p12', 'building', { title: 'CSV export' }))
-  const lines = text.split('\n')
-  expect(lines[0]).toBe('p12 · CSV export · building · task 3/6 · fix round 2 dispatched · verified b70de44')
-  expect(lines[1]).toBe('  feat/p12')
-  expect(text).toContain('  1 · Export job schema · accepted · 1 dispatch\n  2 · Export runner · accepted · approved\n  3 · The route · fix\n')
-  expect(text).toContain('Rulings\n  1. Keep the snapshot id')
-  expect(text).toContain('Tokens: 592000')
-  expect(text).not.toContain('Blockers')
 })
