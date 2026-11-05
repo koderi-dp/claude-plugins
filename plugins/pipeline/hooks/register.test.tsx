@@ -79,8 +79,8 @@ test('the session root is used without a repository', async ($, on) => {
   expect(state.get('root')).toBe(WORKTREE)
 })
 
-test('/pipeline answers a placeholder for now', async ($, on) => {
+test('/pipeline with an unknown subcommand answers the usage', async ($, on) => {
   world(on)
-  const r = (await $.command.run({ command: 'pipeline', args: 'status', origin: { kind: 'composer' } } as never)) as { text?: string }
-  expect(r.text).toBe('pipeline: not built yet')
+  const r = (await $.command.run({ command: 'pipeline', args: 'dance', origin: { kind: 'composer' } } as never)) as { text?: string }
+  expect(r.text).toMatch(/^pipeline: status \[id\] \| panel \| config/)
 })

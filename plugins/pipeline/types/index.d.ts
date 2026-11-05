@@ -15,7 +15,7 @@ export type Signal = { kind: SignalKind; agent: string; agentId?: string; detail
 export type AgentRun = { id: string; agentId?: string; name: string; model: string; status: 'running' | 'done' | 'failed'; startedAt: number; lastStepAt: number; endedAt?: number; calls: number; tokens: number; activity: string; lastCommands: string[]; failures: number }
 export type LiveEntry = { title: string; cwd: string; branch?: string; item?: string; startedAt: string; seenAt: string; agents: AgentRun[]; signals: Signal[]; [k: string]: unknown }
 export type Live = { sessions: Record<string, LiveEntry>; [k: string]: unknown }
-export type Panel = { isMoreShown: boolean; autoOpenedFor: string }
+export type Panel = { isMoreShown: boolean; isCompact: boolean; isDoneCollapsed: boolean; autoOpenedFor: string }
 declare module 'claude-code' {
   interface PluginState {
     pipeline: { root: string; config: Config | null; backlog: Backlog | null; fileError: string | null; agents: AgentRun[]; signals: Signal[]; panel: Panel; now: number }
