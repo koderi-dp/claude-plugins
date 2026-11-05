@@ -149,3 +149,11 @@ test('draftConfig prefers a script named check over the combination and reads a 
   expect(sources['checks.gate']).toBe('package script check')
   expect(config.stop).toEqual(['a destructive data change is needed'])
 })
+
+test('retain: defaults keep plans and drop briefs and superpowers; a wrong type is named', () => {
+  const a = normalizeConfig({})
+  expect(a.config.retain).toEqual({ plans: true, briefs: false, superpowers: false })
+  const b = normalizeConfig({ retain: { briefs: true, plans: 'yes' } })
+  expect(b.config.retain).toEqual({ plans: true, briefs: true, superpowers: false })
+  expect(b.problems).toContain('retain.plans: expected a boolean, got string')
+})

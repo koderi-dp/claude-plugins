@@ -21,6 +21,7 @@ export const DEFAULTS: Config = {
   limits: { fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000 },
   merge: 'pr',
   mergeMethod: 'merge',
+  retain: { plans: true, briefs: false, superpowers: false },
   stop: [
     'product decision the spec leaves open',
     'security trade-off',
@@ -114,7 +115,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
       }
   }
 
-  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'notify'])
+  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify'])
   const extra = Object.fromEntries(Object.entries(raw).filter(([k]) => !known.has(k)))
   const config: Config = {
     ...extra,
@@ -130,9 +131,27 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
     mergeMethod: oneOf('mergeMethod', ['merge', 'squash'] as const, DEFAULTS.mergeMethod),
     stop: strings('stop', DEFAULTS.stop),
     afterMerge: strings('afterMerge', DEFAULTS.afterMerge),
+    retain: retainOf(raw['retain'], problems),
     notify: oneOf('notify', ['off', 'milestones', 'all'] as const, DEFAULTS.notify),
   }
   return { config, problems }
+}
+
+/** The retain block: each flag a boolean, missing ones from the defaults, wrong types named. */
+function retainOf(raw: unknown, problems: string[]): Config['retain'] {
+  const out = { ...DEFAULTS.retain }
+  if (raw === undefined) return out
+  if (!isRecord(raw)) {
+    problems.push(`retain: expected an object, got ${kind(raw)}`)
+    return out
+  }
+  for (const key of ['plans', 'briefs', 'superpowers'] as const) {
+    const v = raw[key]
+    if (v === undefined) continue
+    if (typeof v === 'boolean') out[key] = v
+    else problems.push(`retain.${key}: expected a boolean, got ${kind(v)}`)
+  }
+  return out
 }
 
 export type Found = { scripts: Record<string, string>; makeTargets: string[]; ci: string; prose: string[] }
@@ -177,7 +196,7 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
   const make = found.makeTargets
   const npm = (name: string) => `npm run ${name}`
 
-  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'afterMerge', 'notify']) sources[key] = 'default'
+  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'afterMerge', 'retain', 'notify']) sources[key] = 'default'
 
   const fast = ['check:fast', 'lint:fast'].find(n => n in scripts)
   if (fast) {
