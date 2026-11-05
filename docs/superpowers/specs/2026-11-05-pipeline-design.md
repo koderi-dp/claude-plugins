@@ -38,7 +38,8 @@ Who it is for: the user, running several apps with Claude Code on two machines, 
 
 ```
 docs/pipeline/
-  config.json          the project's rules (section 4)
+  config.json          the project's rules the plugin enforces (section 4)
+  rules.md             project process rules the config cannot express, read by the run skill (section 4.1)
   backlog.json         items and their state (section 5)
   BACKLOG.md           generated view of backlog.json; never edited
   specs/<id>.md        one page per item: what, why, acceptance, out of scope
@@ -87,6 +88,10 @@ Everything under `docs/pipeline/` is committed on the item's branch and merges w
 - `merge`: `auto` merges on green CI with no open Critical or Important finding; `pr` stops at an open PR.
 - `stop`: the conditions on which the runner halts an item and asks. Free text: the skill reads it.
 - `notify`: `off`, `milestones` (item started, PR open, merged, blocked), `all` (every task).
+
+### 4.1 rules.md
+
+`docs/pipeline/rules.md` holds the project's process rules that are not a config key: short, numbered, one line each, grouped by when they apply (`before dispatch`, `in every implementer brief`, `in every reviewer brief`, `before the PR`, `after merge`). Examples from the two projects: "only one agent uses a browser at a time, through playwright-cli"; "sign up only once per fresh dev server, reuse qa@catalo.test"; "integration tests skip silently without OH_TEST_DATABASE_URL, check they ran"; "after each merged increment bring up the review stack with the increment-review-stack skill". The run skill reads it at item start and pastes each group into the brief or step it names. It is written by the migration from the project's prose and edited by the user or the lead when a rule is learned; the run skill may append a rule after a defect taught one, and says so in its one-line reply. Kept under about 40 lines: a rule nobody needs is deleted, not kept.
 
 ## 5. The backlog
 
@@ -151,7 +156,7 @@ Statuses, in order: `inbox` (written at intake, spec not yet confirmed to be com
 
 ## 7. The skills
 
-Three skills in the plugin. They call superpowers where it fits and do not repeat it.
+Four skills in the plugin. They call superpowers where it fits and do not repeat it.
 
 ### 7.1 `pipeline-intake`
 
@@ -188,7 +193,11 @@ Triggers on `/pipeline next`, `/pipeline run <id>`, `/pipeline run all` (until t
 
 Loaded in every session of a project that has `docs/pipeline/config.json`. Small: it tells the lead where the config, backlog and ledgers are, that only the tool writes them, that subagents never write them, and the one-line reply format. The 400 lines of workflow prose in the projects are retired by this skill and the two above; CLAUDE.md keeps code conventions.
 
-### 7.4 Briefs
+### 7.4 `pipeline-migrate`
+
+Triggers on `/pipeline migrate` and when a session starts in a project that has a queue, a workflow document or a ledger but no `docs/pipeline/`; then it offers the migration in one line and does nothing until asked. It is a skill, not only a tool action, because the work is reading how this project runs today and deciding what each piece becomes: a config key, a rules.md line, a backlog item, a ledger, or history. Section 12 is its procedure; the tool's `migrate` action does the file reading and the writes, the skill does the judgment and the one confirmation.
+
+### 7.5 Briefs
 
 Templates in the plugin, filled by the lead. They are the part of openhuddle's WORKFLOW §3 that worked:
 
@@ -257,12 +266,12 @@ Every write re-reads the file, merges, writes through a temp file and renames. A
 `/pipeline migrate` moves a project that already runs its own process (catalo, openhuddle) onto the pipeline in one session, without losing status or history. It is one command, run once, in the main checkout on a clean `mainBranch`.
 
 1. **Read the sources.** The command names what it found and reads, in this order: `CLAUDE.md` and every `*/CLAUDE.md`; `docs/WORKFLOW.md`, `docs/backlog.md`, `docs/SLICES.md` and any file CLAUDE.md links as a queue, status, workflow or ledger; `docs/superpowers/{specs,plans}/`; `.superpowers/sdd/**/progress.md` and `docs/superpowers/ledgers/`; project skills under `.claude/skills/` that concern dispatch, review or models; the Makefile, package scripts and the CI workflow; `git log --merges` and open `feat/*` branches.
-2. **Draft the config.** `checks` from the scripts and CI (catalo: `check:fast`, the workspace tests, the five-check gate; openhuddle: `make check`, `make gen-check`); `riskyPaths` from the prose that names risky code (auth, sessions, parsers, migrations, concurrency, money) mapped onto real directories; `models` from the project's dispatch rules (openhuddle §2: Sonnet implements, Opus reviews; catalo's `agent-dispatch` skill); `limits` from the prose (three fix rounds) or the defaults; `merge` from the stated mode (openhuddle: auto); `stop` from the project's own "ask the user only for" list. Every value carries a `source` line in the migration report so the user sees where it came from.
+2. **Draft the config and the rules.** `checks` from the scripts and CI (catalo: `check:fast`, the workspace tests, the five-check gate; openhuddle: `make check`, `make gen-check`); `riskyPaths` from the prose that names risky code (auth, sessions, parsers, migrations, concurrency, money) mapped onto real directories; `models` from the project's dispatch rules (openhuddle §2: Sonnet implements, Opus reviews; catalo's `agent-dispatch` skill); `limits` from the prose (three fix rounds) or the defaults; `merge` from the stated mode (openhuddle: auto); `stop` from the project's own "ask the user only for" list. Every value carries a `source` line in the migration report so the user sees where it came from. Every process rule in the prose that is not a config key (browser use, test accounts, environment traps, hand-off steps, standing user instructions) becomes a line in `rules.md` under the group where it applies, with the file it came from in the report; a rule the config already enforces is dropped, and a rule that contradicts another is shown to the user as a question in step 6.
 3. **Draft the items.** One backlog item per queue entry, in the queue's order: catalo from the unchecked items of `docs/backlog.md` and its named follow-ups; openhuddle from the "MVP queue" entries, each carrying the MVP rows it closes in `note`. Status: `merged` for what git proves is on `mainBranch` (a checked item with a PR, a struck slice with a merge sha); `building` for an open `feat/*` branch with a ledger, with `resume` reconstructed from the ledger's current-status block; `parked` for what the prose marks later or V1; everything else `inbox` with `note: "imported from <file>, unverified"`. A deferral that lives only in an old item's prose (openhuddle's lost-leftover problem) becomes its own `inbox` item with the source quoted. Existing specs and plans are linked from the items they belong to; nothing is moved or rewritten.
 4. **Keep the history.** Old ledgers, SLICES.md and the old backlog stay where they are, untouched; each gets one line at the top: "Historical. The queue is docs/pipeline/backlog.json since <date>." The migration report lists every file it read and what it took from it.
 5. **Retire the workflow prose.** In CLAUDE.md the sections about how work is run (the loop, roles and models, dispatch, approval gates, ledgers, resume, standing instructions on process) are replaced by one paragraph: the project runs on the pipeline plugin, the config is `docs/pipeline/config.json`, start with `/pipeline status`. Code conventions, layout, commands, decisions already made and the definition of done stay. Project skills that only restated dispatch rules (catalo's `agent-dispatch`) are deleted; skills that do something else (catalo's `increment-review-stack`) stay and the config's `afterMerge` names them. `docs/WORKFLOW.md` becomes the one-paragraph pointer with its "what the slices taught" section kept.
 6. **Show and confirm once.** The command answers with the status block, the config with its source lines, the list of removed and rewritten sections, and one sentence asking for corrections. This is the one interaction: the user answers in a sentence or two ("p3 is done, p7 before p5, merge stays manual") and the lead applies it. Then everything is committed on a branch `chore/pipeline-migration` with a PR, under the project's own merge rule.
-7. **First run.** `/pipeline status` in a fresh session must show the same picture the old docs gave; if it cannot (an item the old ledger calls done that git cannot prove), the item stays `inbox` with the note and the status block says how many are unverified.
+7. **First run.** `/pipeline status` in a fresh session must show the same picture the old docs gave, and the first item's briefs must carry the rules the old prose carried; if it cannot (an item the old ledger calls done that git cannot prove), the item stays `inbox` with the note and the status block says how many are unverified.
 
 The migration is idempotent: a second `/pipeline migrate` on a migrated project refreshes links and the config's sources and changes no status. Done for catalo first; openhuddle after a week of use, when the first migration's rough edges are fixed.
 
@@ -275,7 +284,7 @@ The migration is idempotent: a second `/pipeline migrate` on a migrated project 
 
 | Part | Name |
 | --- | --- |
-| Skills | `pipeline-intake`, `pipeline-run`, `pipeline-rules` |
+| Skills | `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
 | Brief templates | `templates/implementer.md`, `reviewer.md`, `fix.md`, `final.md` |
 | Tool | `mcp__pipeline__pipeline` |
 | Mod | `hooks/register.ts`: the tool, the commands, the watchdog, the panel, the live file |
