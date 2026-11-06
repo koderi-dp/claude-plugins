@@ -158,11 +158,12 @@ export type Found = { scripts: Record<string, string>; makeTargets: string[]; ci
 
 const RISKY = /\b(auth|session|migration|parser|concurrency|lock|payment|price|pricing|money|crypto|token)s?\b/i
 const GATE_NAMES = ['check', 'verify', 'gate', 'ci']
-const COMBO = ['build', 'typecheck', 'test', 'lint']
+const COMBO = ['build', 'typecheck', 'test', 'lint', 'format:check']
 const NUMBERS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 }
 const NONE = 'none found; fill in'
 
-const sentences = (prose: string[]) => prose.flatMap(p => p.split(/(?<=[.!?])\s+|\n+/)).map(s => s.trim()).filter(Boolean)
+/** Sentences, with hard-wrapped lines of a paragraph joined first. */
+const sentences = (prose: string[]) => prose.flatMap(p => p.split(/\n\s*\n/)).flatMap(p => p.replace(/\s*\n\s*/g, ' ').split(/(?<=[.!?])\s+/)).map(s => s.trim()).filter(Boolean)
 
 /** The directories a sentence names: tokens with a slash, as `dir/**` globs. */
 function dirsIn(sentence: string): string[] {
