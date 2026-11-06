@@ -114,7 +114,9 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 
 ## Limits
 
-- The mod API cannot delete files: `clean` and `migrate` list what may go, and the lead removes it with `git rm` and commits.
+- The mod API cannot delete files: `clean` and `migrate` list what may go, and the lead removes it with `git rm` and commits. Every write is a plain file write; the API has no rename.
+- A blocked item is resumed with `/pipeline run <id>`: the lead reads the note and your answer, sets the status back and continues from the ledger.
+- The branch is pushed at every accepted task, so a lost worktree costs at most the running task.
 - The live file is per machine: agents on another machine are not watched from this one; the backlog travels with git.
 - A `backlog.json`, config or ledger that does not parse is never overwritten: the tool refuses with the line, and the status block shows it.
 - One item at a time. The worktree-per-item layout leaves room for parallel items later.
