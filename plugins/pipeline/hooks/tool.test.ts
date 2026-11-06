@@ -291,3 +291,40 @@ test('ledger needs a known item and a set', async ($, on) => {
   expect(text(await call($, { action: 'ledger', set: { pr: '#1' } }))).toBe('refused: an id is needed')
   expect(writes.length).toBe(2)
 })
+
+test('I7: a removed id is not reused, and a stale ledger file of an unlinked item is refused by name', async ($, on) => {
+  const { files, writes } = world(on, { [CONFIG]: VALID_CONFIG })
+  await call($, { action: 'add', item: { title: 'Old thing' } })
+  files.set(`${DIR}/specs/p1.md`, '## What\n\nold spec\n\n## Open\n\n_Nothing._\n')
+  await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 1, title: 'old task', status: 'accepted', dispatches: [] }] } })
+  await call($, { action: 'remove', id: 'p1' })
+  const r = text(await call($, { action: 'add', item: { title: 'New thing' } }))
+  expect(r).toStartWith('added p2\n')
+  expect(items(files).map(i => i.id)).toEqual(['p2'])
+  // The old spec answers for nobody: p2 has no spec of its own.
+  expect(r).toContain('p2 · New thing · no spec')
+  expect(JSON.parse(files.get(BACKLOG)!).lastId).toBe(2)
+
+  // An item without a ledger link whose ledger file exists on disk (left by a removed item, or written by hand).
+  files.set(BACKLOG, JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'Again', status: 'inbox', ledger: null }] }))
+  const before = writes.length
+  const refused = text(await call($, { action: 'ledger', item: 'p1', set: { pr: '#2' } }))
+  expect(refused).toStartWith('refused: docs/pipeline/ledgers/p1.json exists but p1 has no ledger link')
+  expect(writes.length).toBe(before)
+  expect(JSON.parse(files.get(LEDGER)!).tasks[0].title).toBe('old task')
+  // Linked explicitly, the file is merged into.
+  await call($, { action: 'update', id: 'p1', set: { ledger: 'docs/pipeline/ledgers/p1.json' } })
+  expect(text(await call($, { action: 'ledger', item: 'p1', set: { pr: '#2' } }))).toContain('old task')
+})
+
+test('I4: get names a planning item as active, with resume null until its ledger has the block', async ($, on) => {
+  const backlog = JSON.stringify({ version: 1, items: [{ id: 'p12', title: 'CSV export', status: 'planning', ledger: 'docs/pipeline/ledgers/p12.json' }] })
+  const { files } = world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlog, [`${DIR}/ledgers/p12.json`]: JSON.stringify({ item: 'p12', branch: 'feat/p12', worktree: '.claude/worktrees/p12', tasks: [], rulings: [], blockers: [], tokens: 0 }) })
+  await start($)
+  const got = JSON.parse(text(await call($, { action: 'get' }))) as { active: unknown; resume: unknown }
+  expect(got.active).toBe('p12')
+  expect(got.resume).toBe(null)
+  files.set(`${DIR}/ledgers/p12.json`, JSON.stringify({ item: 'p12', tasks: [], rulings: [], blockers: [], tokens: 0, resume: { task: 1, state: 'planned', at: '2026-11-05T09:00:00Z' } }))
+  const again = JSON.parse(text(await call($, { action: 'get' }))) as { active: unknown; resume: unknown }
+  expect(again.resume).toMatchObject({ task: 1, state: 'planned' })
+})

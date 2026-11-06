@@ -17,7 +17,7 @@ import type { Bar } from './draw'
 import { BLOCKED, RUNNING, activeTitle, renderPanel } from './pane'
 import { statusText } from './status'
 import type { StatusInput } from './status'
-import { deadAgents, isProtected, onCall, onComplete, onResult, onSpawn, onStep, pathOf, signals as raiseSignals } from './watch'
+import { deadAgents, isProtected, mergeSignals, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
 import type { Call, Limits } from './watch'
 
 const TOOL = 'mcp__pipeline__pipeline'
@@ -407,7 +407,8 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
   if (e.action === 'get') {
     const r = loaded ? await judgeAll($, found, loaded) : {}
     const open = (await read($, signals)).filter(s => !s.delivered)
-    const active = loaded?.items.find(i => i.status === 'building' || i.status === 'review') ?? null
+    // The active item is the one in planning, building or review; resume is null until its ledger has the block.
+    const active = activeItem(loaded)
     const ledger = active ? await loadLedger($, found, active.id) : null
     const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open }
     if (error) out['error'] = error
@@ -456,6 +457,11 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       if (!set || typeof set !== 'object' || Array.isArray(set)) throw new Refused('ledger needs set')
       const onDisk = await readLedger($, found, id)
       if (onDisk.error) throw new Refused(onDisk.error)
+      // A ledger file the item does not link is a leftover of a removed item: never merged into silently.
+      const linked = current.items.find(i => i.id === id)?.ledger
+      if (onDisk.value && (linked === null || linked === undefined)) {
+        throw new Refused(`${ledgerFile(id)} exists but ${id} has no ledger link: a stale file of an earlier item; move or delete it, or link it with update { id: "${id}", set: { ledger: "${ledgerFile(id)}" } }`)
+      }
       const merged = mergeLedger(onDisk.value ?? emptyLedger(id), set, now)
       await $.fs.write(p.ledger(id), serialize(merged))
       // The item points at its ledger, and carries the branch, PR and plan the ledger names.
@@ -644,11 +650,12 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
   }
   const rules = (Array.isArray(e.rules) ? e.rules : []).filter((r): r is MigrateRule => isRecord(r) && typeof r['line'] === 'string' && typeof r['group'] === 'string')
 
-  // The config: merged over the file on a refresh, so unknown fields survive.
+  // The config: on a refresh the file on disk is the user's and stays as it is (the re-draft would overwrite
+  // keys they tuned); it is written only when missing.
   const onDisk = isRefresh ? await loadJson<Record<string, unknown>>($, p.config, CONFIG_FILE) : { value: null, error: null }
   if (onDisk.error) throw new Refused(onDisk.error)
-  const nextConfig = onDisk.value ? { ...onDisk.value, ...given } : given
-  await $.fs.write(p.config, serialize(nextConfig))
+  const nextConfig = onDisk.value ?? given
+  if (!onDisk.value) await $.fs.write(p.config, serialize(given))
   await update($, config, () => normalizeConfig(nextConfig).config)
   if (!isRefresh || !(await $.fs.exists(p.rules))) await $.fs.write(p.rules, renderRulesMd(rules))
 
@@ -805,7 +812,12 @@ async function entryOf($: EngineInterface, previous: LiveEntry | undefined, at: 
   }
 }
 
-/** Writes this session's entry after a fresh read of the file, throttled to one write per 2 s unless forced. */
+/**
+ * Writes this session's entry after a fresh read of the file, throttled to one write per 2 s unless forced.
+ * Every file this module writes (the live file, the backlog, a ledger, the config) goes through a direct
+ * `$.fs.write`: the API has no rename, so a write-to-temp-then-rename is not available; the reads parse
+ * defensively instead, and a file that does not parse is refused and left alone.
+ */
 async function heartbeat($: EngineInterface, isForced = false): Promise<void> {
   try {
     const at = await $.clock.now()
@@ -837,7 +849,11 @@ async function notify($: EngineInterface, c: Config | null, list: Signal[]): Pro
   }
 }
 
-/** Every 30 s: the signals due now join the atom and reach the person; the live file is refreshed. */
+/**
+ * Every 30 s: the signals due now join the atom and reach the person; an entry of another session that went
+ * stale since this session started (it died under STALE_MS before our start, say) gives its dead signals now,
+ * and is dropped from the file so it is reported once; the live file is refreshed.
+ */
 async function tick($: EngineInterface): Promise<void> {
   try {
     const at = await $.clock.now()
@@ -847,14 +863,34 @@ async function tick($: EngineInterface): Promise<void> {
       await update($, signals, list => [...list, ...fresh])
       await notify($, c, fresh)
     }
+    await reportGone($, at, c)
     await update($, now, () => at)
     await heartbeat($, true)
   } catch {}
 }
 
+/** The gone entries of other sessions in the live file: their signals restored and their agents dead, then dropped. */
+async function reportGone($: EngineInterface, at: number, c: Config | null): Promise<void> {
+  const path = await liveFile($)
+  const id = await $.session.id()
+  const current = parseLive((await readText($, path)) ?? '')
+  // This session's own entry is alive by definition: it is refreshed by the heartbeat right after.
+  const dead = deadAgents(withoutEntry(current, id), id, at)
+  if (!dead.sessions.length) return
+  let pruned = current
+  for (const gone of dead.sessions) pruned = withoutEntry(pruned, gone)
+  await $.fs.write(path, serialize(pruned))
+  const before = await read($, signals)
+  const added = mergeSignals(before, dead.signals).slice(before.length)
+  if (!added.length) return
+  await update($, signals, list => mergeSignals(list, added))
+  await notify($, c, added.filter(s => dead.fresh.includes(s)))
+}
+
 /**
- * At session start: agents the live file lists running under this session's id or
- * a stale entry are dead; then this session's fresh entry, and the ticker.
+ * At session start: the undelivered signals of the entries that are gone (this session's id, a restart, or a
+ * stale one) come back into the atom, and the agents they list running are dead; then this session's fresh
+ * entry, and the ticker.
  */
 async function arrive($: EngineInterface): Promise<void> {
   const at = await $.clock.now()
@@ -864,10 +900,15 @@ async function arrive($: EngineInterface): Promise<void> {
   const dead = deadAgents(current, id, at)
   // Nothing that ran before this start is still running.
   await update($, agents, list => list.map(a => (a.status === 'running' ? { ...a, status: 'failed', endedAt: at } : a)))
-  if (dead.signals.length) {
-    await update($, signals, list => [...list, ...dead.signals])
+  if (dead.sessions.length) {
+    // A signal the atom still holds (the state survived) is not doubled; the restored ones stay undelivered.
+    const before = await read($, signals)
+    const added = mergeSignals(before, dead.signals).slice(before.length)
+    if (added.length) await update($, signals, list => mergeSignals(list, added))
     for (const gone of dead.sessions) current = withoutEntry(current, gone)
-    await notify($, await read($, config), dead.signals)
+    // The person hears of the dead ones now; a restored signal was announced when it was raised.
+    const announced = added.filter(s => dead.fresh.includes(s))
+    if (announced.length) await notify($, await read($, config), announced)
   }
   self.startedAt = new Date(at).toISOString()
   self.lastWrite = at
@@ -959,7 +1000,13 @@ export const register: Register = (on, options) => {
     try {
       if (EDIT_TOOLS.has(e.tool)) {
         const path = pathOf(call)
-        if (path && isProtected(path, protectedOf(await read($, config)), [await read($, root), self.sessionRoot])) {
+        // The session's root is read now, not at session.start: the lead may have entered a worktree since.
+        let sessionRoot = self.sessionRoot
+        try {
+          sessionRoot = slashes(await $.session.root())
+          self.sessionRoot = sessionRoot
+        } catch {}
+        if (path && isProtected(path, protectedOf(await read($, config)), [sessionRoot, await read($, root)])) {
           return { deny: `pipeline: ${path} is protected by ${CONFIG_FILE} protectedPaths` }
         }
       }
@@ -968,12 +1015,15 @@ export const register: Register = (on, options) => {
       void heartbeat($)
     } catch {}
     const result = await next(e)
-    if (e.tool === 'Bash') {
-      try {
+    try {
+      // The call came back: a sign of life, so one long shell command is not flagged silent.
+      const at = await $.clock.now()
+      await update($, agents, list => onTouch(list, agentId, at))
+      if (e.tool === 'Bash') {
         const isError = Boolean(result && typeof result === 'object' && 'isError' in result && result.isError)
         await update($, agents, list => onResult(list, agentId, call, isError))
-      } catch {}
-    }
+      }
+    } catch {}
     return result
   })
 

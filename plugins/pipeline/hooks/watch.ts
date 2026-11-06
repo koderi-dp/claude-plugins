@@ -96,10 +96,15 @@ export function onStep(agents: AgentRun[], agentId: string, usage: Usage | null 
   return agents.map(a => (same(a, agentId) && a.status === 'running' ? { ...a, lastStepAt: at, tokens: a.tokens + used } : a))
 }
 
-/** A tool call of the agent: its activity line and call count. */
-export function onCall(agents: AgentRun[], agentId: string, call: Call, _at: number): AgentRun[] {
+/** A tool call of the agent: its activity line and call count; the call is a sign of life, so the silence resets too. */
+export function onCall(agents: AgentRun[], agentId: string, call: Call, at: number): AgentRun[] {
   const activity = activityOf(call)
-  return agents.map(a => (same(a, agentId) && a.status === 'running' ? { ...a, activity, calls: a.calls + 1 } : a))
+  return agents.map(a => (same(a, agentId) && a.status === 'running' ? { ...a, activity, calls: a.calls + 1, lastStepAt: at } : a))
+}
+
+/** A tool call of the agent came back: the silence resets, so one long shell command is not flagged. */
+export function onTouch(agents: AgentRun[], agentId: string, at: number): AgentRun[] {
+  return agents.map(a => (same(a, agentId) && a.status === 'running' ? { ...a, lastStepAt: at } : a))
 }
 
 /**
@@ -139,7 +144,7 @@ export function signals(agents: AgentRun[], limits: Limits, now: number, previou
   }
   for (const a of agents) {
     if (a.status !== 'running') continue
-    if (now - a.lastStepAt >= limits.silentMinutes * 60_000) raise(a, 'silent', `no step for ${minutes(now - a.lastStepAt)} min · last: ${a.activity}`)
+    if (now - a.lastStepAt >= limits.silentMinutes * 60_000) raise(a, 'silent', `no step or tool call for ${minutes(now - a.lastStepAt)} min · last: ${a.activity}`)
     const last = a.lastCommands
     if (last.length >= KEEP_COMMANDS && last.every(c => c === last[0])) raise(a, 'looping', `"${last[0]}" failed ${last.length} times in a row`)
     else if (a.failures > limits.fixRounds) raise(a, 'looping', `${a.failures} failed commands, over fixRounds ${limits.fixRounds}`)
@@ -149,27 +154,68 @@ export function signals(agents: AgentRun[], limits: Limits, now: number, previou
 }
 
 /**
- * Agents the live file lists as running under this session's id (a restart)
- * or under an entry no heartbeat refreshed for STALE_MS: each a dead signal,
- * with the entries they came from so the caller can drop them.
+ * What the live file holds of sessions that are gone: entries under this
+ * session's id (a restart) or that no heartbeat refreshed for STALE_MS. Their
+ * undelivered signals come back as they were (a silent signal survives the
+ * restart), and each agent still listed as running is a dead signal; with the
+ * entries they came from so the caller can drop them, each reported once.
+ * `fresh` is the dead signals made now, the ones to announce; a restored
+ * signal was announced when it was raised.
  */
-export function deadAgents(live: Live, thisSessionId: string, now: number): { signals: Signal[]; sessions: string[] } {
+export function deadAgents(live: Live, thisSessionId: string, now: number): { signals: Signal[]; fresh: Signal[]; sessions: string[] } {
   const out: Signal[] = []
+  const fresh: Signal[] = []
   const sessions: string[] = []
   for (const [id, entry] of Object.entries(live.sessions)) {
     const seen = Date.parse(entry.seenAt)
     const isGone = id === thisSessionId || Number.isNaN(seen) || now - seen > STALE_MS
     if (!isGone) continue
+    const undelivered = entry.signals.filter(s => !s.delivered)
     const running = entry.agents.filter(a => a.status === 'running')
-    if (!running.length) continue
+    if (!running.length && !undelivered.length) continue
     sessions.push(id)
+    out.push(...undelivered)
     for (const a of running) {
       const where = [entry.item ? `item ${entry.item}` : '', `session ${id}`, a.activity ? `last: ${a.activity}` : ''].filter(Boolean).join(' · ')
-      out.push({ kind: 'dead', agent: a.name, ...(a.agentId ? { agentId: a.agentId } : {}), detail: `was running when the session ended · ${where}`, at: now, delivered: false })
+      const s: Signal = { kind: 'dead', agent: a.name, ...(a.agentId ? { agentId: a.agentId } : {}), detail: `was running when the session ended · ${where}`, at: now, delivered: false }
+      out.push(s)
+      fresh.push(s)
     }
   }
-  return { signals: out, sessions }
+  return { signals: out, fresh, sessions }
 }
+
+/** The list with the incoming signals that are not already in it (same kind and agent), so a restored signal is never doubled. */
+export function mergeSignals(list: Signal[], incoming: Signal[]): Signal[] {
+  const seen = new Set(list.map(keyOf))
+  const out = [...list]
+  for (const s of incoming) {
+    const k = keyOf(s)
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(s)
+  }
+  return out
+}
+
+/** The path with `.` and `..` segments collapsed and repeated slashes dropped; a leading `..` of a relative path stays. */
+export function normalizePath(path: string): string {
+  const p = slashes(path)
+  const isAbsolute = p.startsWith('/')
+  const out: string[] = []
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') {
+      if (out.length && out[out.length - 1] !== '..') out.pop()
+      else if (!isAbsolute) out.push('..')
+      continue
+    }
+    out.push(seg)
+  }
+  return `${isAbsolute ? '/' : ''}${out.join('/')}`
+}
+
+const WORKTREE_PREFIX = /^\.claude\/worktrees\/[^/]+\//
 
 /** Whether a path matches a glob: `**` crosses directories, `*` and `?` stay within one segment. */
 export function matchesGlob(path: string, glob: string): boolean {
@@ -192,14 +238,35 @@ export function matchesGlob(path: string, glob: string): boolean {
   return new RegExp(`^${re}$`).test(p)
 }
 
-/** Whether the path, or the path relative to one of the roots, matches a protected glob. */
+/**
+ * Whether the path matches a protected glob: as given, or relative to one of
+ * the roots, or relative to a worktree under `.claude/worktrees/` of a root.
+ * `.` and `..` segments are collapsed first; a relative path is resolved
+ * against each root (the session's root first); one that escapes every root
+ * is matched as resolved.
+ */
 export function isProtected(path: string, globs: string[], roots: string[] = []): boolean {
   if (!globs.length) return false
-  const p = slashes(path)
-  const candidates = [p]
-  for (const root of roots) {
-    const r = slashes(root).replace(/\/+$/, '')
-    if (r && p.startsWith(`${r}/`)) candidates.push(p.slice(r.length + 1))
+  const p = normalizePath(path)
+  const candidates = new Set<string>()
+  const relative = (rel: string) => {
+    candidates.add(rel)
+    if (WORKTREE_PREFIX.test(rel)) candidates.add(rel.replace(WORKTREE_PREFIX, ''))
   }
-  return globs.some(g => candidates.some(c => matchesGlob(c, g)))
+  const under = (abs: string) => {
+    candidates.add(abs)
+    for (const root of roots) {
+      const r = normalizePath(root)
+      if (r && abs.startsWith(`${r}/`)) relative(abs.slice(r.length + 1))
+    }
+  }
+  if (p.startsWith('/') || /^[A-Za-z]:\//.test(p)) under(p)
+  else {
+    if (!p.startsWith('..')) relative(p)
+    for (const root of roots) {
+      const r = normalizePath(root)
+      if (r) under(normalizePath(`${r}/${p}`))
+    }
+  }
+  return globs.some(g => [...candidates].some(c => matchesGlob(c, g)))
 }

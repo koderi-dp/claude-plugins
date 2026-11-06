@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { AgentRun, Signal } from '../types'
-import { activityOf, deadAgents, isProtected, matchesGlob, normalizeCommand, onCall, onComplete, onResult, onSpawn, onStep, signals } from './watch'
+import { activityOf, deadAgents, isProtected, matchesGlob, mergeSignals, normalizeCommand, normalizePath, onCall, onComplete, onResult, onSpawn, onStep, onTouch, signals } from './watch'
 
 const LIMITS = { fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4_000_000 }
 const T0 = Date.parse('2026-11-05T10:00:00Z')
@@ -136,7 +136,62 @@ test('deadAgents: agents running under this session id or a stale entry; a fresh
   expect(dead.signals[0]!.detail).toContain('p12')
   expect(dead.signals[0]!.detail).toContain('editing a.ts')
   expect(dead.sessions).toEqual(['self', 'stale'])
-  expect(deadAgents({ sessions: {} }, 'self', now)).toEqual({ signals: [], sessions: [] })
+  expect(deadAgents({ sessions: {} }, 'self', now)).toEqual({ signals: [], fresh: [], sessions: [] })
+  expect(dead.fresh).toEqual(dead.signals)
+  // The ticker's view: this session's entry taken out first, so only the stale one is gone.
+  const { self: _s, ...others } = live.sessions
+  expect(deadAgents({ sessions: others }, 'self', now).sessions).toEqual(['stale'])
+})
+
+test('deadAgents restores the undelivered signals of a gone entry, before its dead ones, and lists an entry that has only signals', () => {
+  const run: AgentRun = { id: 'tu1', agentId: 'a1', name: 'Implement Task 2', model: 'm', status: 'running', startedAt: T0, lastStepAt: T0, calls: 1, tokens: 0, activity: 'editing a.ts', lastCommands: [], failures: 0 }
+  const silent: Signal = { kind: 'silent', agent: 'Implement Task 2', agentId: 'a1', detail: 'no step or tool call for 10 min', at: T0 + 10 * MIN, delivered: false }
+  const delivered: Signal = { kind: 'budget', agent: 'Implement Task 2', agentId: 'a1', detail: 'over', at: T0 + 45 * MIN, delivered: true }
+  const entry = (agents: AgentRun[], signals: Signal[]) => ({ title: 't', cwd: '/p', startedAt: new Date(T0).toISOString(), seenAt: new Date(T0).toISOString(), agents, signals })
+  const now = T0 + 60 * MIN
+  const r = deadAgents({ sessions: { self: entry([run], [silent, delivered]) } }, 'self', now)
+  expect(r.signals.map(s => [s.kind, s.delivered])).toEqual([
+    ['silent', false],
+    ['dead', false],
+  ])
+  expect(r.signals[0]).toEqual(silent)
+  expect(r.fresh).toEqual([r.signals[1]])
+  const only = deadAgents({ sessions: { stale: entry([], [silent]) } }, 'self', now)
+  expect(only.signals).toEqual([silent])
+  expect(only.sessions).toEqual(['stale'])
+  expect(only.fresh).toEqual([])
+  expect(deadAgents({ sessions: { stale: entry([], [delivered]) } }, 'self', now)).toEqual({ signals: [], fresh: [], sessions: [] })
+})
+
+test('mergeSignals adds what the list does not hold yet, by kind and agent', () => {
+  const silent: Signal = { kind: 'silent', agent: 'A', agentId: 'a1', detail: 'x', at: T0, delivered: false }
+  const dead: Signal = { kind: 'dead', agent: 'A', agentId: 'a1', detail: 'y', at: T0, delivered: false }
+  const merged = mergeSignals([silent], [{ ...silent, at: T0 + MIN }, dead, dead])
+  expect(merged).toEqual([silent, dead])
+  expect(mergeSignals([], [])).toEqual([])
+})
+
+test('a tool call and its return reset the silence, so one long shell command is not flagged', () => {
+  let list = spawn()
+  list = onCall(list, 'a1', { tool: 'Bash', command: 'npm run build' }, T0 + 8 * MIN)
+  expect(list[0]).toMatchObject({ lastStepAt: T0 + 8 * MIN, calls: 1 })
+  expect(signals(list, LIMITS, T0 + 15 * MIN, [])).toEqual([])
+  list = onTouch(list, 'a1', T0 + 17 * MIN)
+  expect(list[0]!.lastStepAt).toBe(T0 + 17 * MIN)
+  expect(signals(list, LIMITS, T0 + 26 * MIN, [])).toEqual([])
+  const s = signals(list, LIMITS, T0 + 27 * MIN, [])
+  expect(s.map(x => x.kind)).toEqual(['silent'])
+  expect(s[0]!.detail).toBe('no step or tool call for 10 min · last: running npm run build')
+  expect(onTouch(list, 'other', T0 + 30 * MIN)[0]!.lastStepAt).toBe(T0 + 17 * MIN)
+  expect(onTouch(onComplete(list, 'a1', 'answer', T0 + 18 * MIN), 'a1', T0 + 30 * MIN)[0]!.lastStepAt).toBe(T0 + 17 * MIN)
+})
+
+test('normalizePath collapses . and .. and repeated slashes', () => {
+  expect(normalizePath('/p/main/src/../.github/./workflows//ci.yml')).toBe('/p/main/.github/workflows/ci.yml')
+  expect(normalizePath('src/../../x')).toBe('../x')
+  expect(normalizePath('/a/../../x')).toBe('/x')
+  expect(normalizePath('./a/b/')).toBe('a/b')
+  expect(normalizePath('C:\\p\\main\\..\\x')).toBe('C:/p/x')
 })
 
 test('matchesGlob: *, ** and ?', () => {
@@ -165,4 +220,23 @@ test('isProtected matches the path, or the path relative to a root', () => {
   expect(isProtected('.github/workflows/ci.yml', globs, [])).toBe(true)
   expect(isProtected('/p/main/.github/workflows/ci.yml', ['/p/main/.github/**'], [])).toBe(true)
   expect(isProtected('/p/main/x', [], ['/p/main'])).toBe(false)
+})
+
+test('isProtected sees through .., a relative path and a worktree under .claude/worktrees', () => {
+  const globs = ['.github/workflows/**', 'package-lock.json']
+  expect(isProtected('/p/main/src/../.github/workflows/ci.yml', globs, ['/p/main'])).toBe(true)
+  expect(isProtected('/p/main/.github/../src/ci.yml', globs, ['/p/main'])).toBe(false)
+  // A relative path is resolved against the roots.
+  expect(isProtected('.github/workflows/ci.yml', globs, ['/p/main'])).toBe(true)
+  expect(isProtected('src/../.github/workflows/ci.yml', globs, ['/p/main'])).toBe(true)
+  // One that escapes the roots is matched as resolved: outside every root, the repo-relative glob does not apply.
+  expect(isProtected('../main/.github/workflows/ci.yml', globs, ['/p/wt'])).toBe(false)
+  expect(isProtected('../main/.github/workflows/ci.yml', globs, ['/p/wt', '/p/main'])).toBe(true)
+  // The worktree's copy of a protected path, with or without the worktree as a root.
+  expect(isProtected('/p/main/.claude/worktrees/p12/.github/workflows/ci.yml', globs, ['/p/main'])).toBe(true)
+  expect(isProtected('/p/main/.claude/worktrees/p12/package-lock.json', globs, ['/p/main', '/p/main/.claude/worktrees/p12'])).toBe(true)
+  expect(isProtected('/p/main/.claude/worktrees/p12/src/x.ts', globs, ['/p/main'])).toBe(false)
+  // Escaping every root: matched as resolved, so only an anchored-anywhere glob would hit.
+  expect(isProtected('/p/main/../other/.github/workflows/ci.yml', globs, ['/p/main'])).toBe(false)
+  expect(isProtected('/p/main/../other/package-lock.json', ['**/package-lock.json'], ['/p/main'])).toBe(true)
 })

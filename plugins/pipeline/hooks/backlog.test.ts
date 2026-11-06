@@ -12,11 +12,19 @@ test('emptyBacklog is version 1 with no items', () => {
   expect(emptyBacklog()).toEqual({ version: 1, items: [] })
 })
 
-test('nextId is p plus the smallest unused number', () => {
+test('nextId is p plus one more than the highest number used; a removed id is never reused', () => {
   expect(nextId(emptyBacklog())).toBe('p1')
   expect(nextId(backlog(item('p1', 'inbox'), item('p2', 'inbox')))).toBe('p3')
-  expect(nextId(backlog(item('p1', 'inbox'), item('p3', 'inbox')))).toBe('p2')
-  expect(nextId(backlog(item('x9', 'inbox'), item('p2', 'inbox')))).toBe('p1')
+  expect(nextId(backlog(item('p1', 'inbox'), item('p3', 'inbox')))).toBe('p4')
+  expect(nextId(backlog(item('x9', 'inbox'), item('p2', 'inbox')))).toBe('p3')
+  expect(nextId(backlog(item('p10', 'inbox'), item('p9', 'merged')))).toBe('p11')
+  const removed = removeItem(addItem(addItem(emptyBacklog(), { title: 'a' }, NOW), { title: 'b' }, NOW), 'p2')
+  expect(nextId(removed)).toBe('p3')
+  // The number is remembered in lastId, so even the last item's removal does not free its id.
+  const added = addItem(emptyBacklog(), { title: 'Old' }, NOW)
+  expect(added['lastId']).toBe(1)
+  expect(addItem(removeItem(added, 'p1'), { title: 'New' }, NOW).items[0]!.id).toBe('p2')
+  expect(nextId({ version: 1, items: [], lastId: 7 })).toBe('p8')
 })
 
 test('addItem appends with the next id, inbox status and the stamp, and leaves the input alone', () => {

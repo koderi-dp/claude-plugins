@@ -8,12 +8,21 @@ export function emptyBacklog(): Backlog {
   return { version: 1, items: [] }
 }
 
-/** `p` plus the smallest number no item uses. */
+/**
+ * `p` plus one more than the highest number any item uses or `lastId` records,
+ * so a removed id is never reused (its stale spec and ledger would answer for the new item).
+ */
 export function nextId(backlog: Backlog): string {
-  const used = new Set(backlog.items.map(i => i.id))
-  let n = 1
-  while (used.has(`p${n}`)) n++
-  return `p${n}`
+  return `p${highest(backlog) + 1}`
+}
+
+function highest(backlog: Backlog): number {
+  let max = typeof backlog['lastId'] === 'number' && Number.isFinite(backlog['lastId']) ? Math.max(0, Math.floor(backlog['lastId'])) : 0
+  for (const i of backlog.items) {
+    const m = /^p(\d+)$/.exec(i.id)
+    if (m) max = Math.max(max, Number(m[1]))
+  }
+  return max
 }
 
 /** Appends an item with the next id, every known field present, and the stamp; unknown fields are kept. */
@@ -32,7 +41,8 @@ export function addItem(backlog: Backlog, fields: Partial<Item> & { title: strin
     title: fields.title,
     updatedAt: now,
   }
-  return { ...backlog, items: [...backlog.items, item] }
+  // The number given is remembered, so the id stays unused once the item is removed.
+  return { ...backlog, lastId: highest(backlog) + 1, items: [...backlog.items, item] }
 }
 
 /** Merges fields into the item; `updatedAt` is stamped only when the status changes. Unknown id: unchanged. */

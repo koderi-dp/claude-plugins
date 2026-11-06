@@ -303,3 +303,28 @@ test("a subagent's migrate call is ignored", async ($, on) => {
   expect(await call($, { action: 'migrate', agentId: 'a1' })).toMatchObject({ result: 'ignored: subagents do not write the pipeline' })
   expect(writes).toEqual([])
 })
+
+test('migrate-apply with refresh leaves the config on disk as the user tuned it and writes it only when missing', async ($, on) => {
+  const { files, writes } = world(on, TREE)
+  const d = JSON.parse(text(await call($, { action: 'migrate' }))) as Draft
+  await call($, { action: 'migrate-apply', config: d.config, items: [...d.items, ...d.active], rules: d.rules })
+  const tuned = JSON.parse(files.get(`${DIR}/config.json`)!) as Record<string, unknown>
+  tuned['merge'] = 'auto'
+  tuned['limits'] = { ...(tuned['limits'] as Record<string, unknown>), fixRounds: 5 }
+  tuned['colour'] = 'red'
+  files.set(`${DIR}/config.json`, JSON.stringify(tuned, null, 2) + '\n')
+  const configWrites = writes.filter(w => w === `${DIR}/config.json`).length
+
+  const again = JSON.parse(text(await call($, { action: 'migrate', refresh: true }))) as Draft
+  await call($, { action: 'migrate-apply', refresh: true, config: { ...again.config, merge: 'pr' }, items: [...again.items, ...again.active], rules: again.rules })
+  expect(writes.filter(w => w === `${DIR}/config.json`).length).toBe(configWrites)
+  expect(JSON.parse(files.get(`${DIR}/config.json`)!)).toMatchObject({ merge: 'auto', limits: { fixRounds: 5 }, colour: 'red' })
+  // The config in force is the one on disk.
+  const got = JSON.parse(text(await call($, { action: 'get' }))) as { config: Record<string, unknown> }
+  expect(got.config).toMatchObject({ merge: 'auto' })
+
+  // Missing on a refresh: written from the draft.
+  files.delete(`${DIR}/config.json`)
+  await call($, { action: 'migrate-apply', refresh: true, config: again.config, items: [...again.items, ...again.active], rules: again.rules })
+  expect(files.has(`${DIR}/config.json`)).toBe(true)
+})
