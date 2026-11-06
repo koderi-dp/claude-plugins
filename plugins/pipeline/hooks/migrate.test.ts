@@ -7,10 +7,16 @@ import { activeFromBranches, bulkToRemove, findSources, historicalLine, incremen
 
 test('catalo: every unchecked top-level item is inbox with the file in its note, and nothing is invented', () => {
   const items = itemsFromBacklogMd(CATALO, 'docs/backlog.md')
-  // By hand from the fixture: 11 checkbox items under "Remaining delivery phase 1" and 5 follow-up rows.
-  expect(items).toHaveLength(16)
+  // By hand from the fixture: 9 current-position rows, 3 proposed-work rows, 5 follow-up rows and 11 checkbox items under "Remaining delivery phase 1".
+  expect(items).toHaveLength(28)
   const inbox = items.filter(i => i.status === 'inbox')
   expect(inbox.map(i => i.title)).toEqual([
+    'Empty grid areas refilled (bug)',
+    'Brand logos',
+    'Table element',
+    'Minor 5; Task 5 bootstrap retry',
+    'Task 4 membership-query cost',
+    'Task 4 organization plugin endpoints',
     'Brand and price-list filters',
     'Article editing and status',
     'Attributes, Catalogs and History tabs',
@@ -35,14 +41,18 @@ test('catalo: every unchecked top-level item is inbox with the file in its note,
 test('catalo: a checked item with a PR link is merged with the PR, without one it is merged with a note', () => {
   const items = itemsFromBacklogMd(CATALO, 'docs/backlog.md')
   const merged = items.filter(i => i.status === 'merged')
-  expect(merged).toHaveLength(6)
+  expect(merged).toHaveLength(10)
   const withPr = merged.filter(i => i.pr)
   expect(withPr.map(i => [i.title, i.pr])).toEqual([
+    ['Catalog UI fixes (Keraterm review)', 'https://github.com/koderi-dp/catalo/pull/9'],
+    ['Hybrid editor, Phase B: document v2', 'https://github.com/koderi-dp/catalo/pull/24'],
     ['Article families from code rules and manual grouping; family boxes, variant', 'https://github.com/koderi-dp/catalo/pull/22'],
     ['Catalog approval and immutable field/price snapshots, including family variants', 'https://github.com/koderi-dp/catalo/pull/23'],
   ])
   const withoutPr = merged.filter(i => !i.pr)
   expect(withoutPr.map(i => i.title)).toEqual([
+    'Foundation implementation plan, Tasks 1–9',
+    'Plan 1b: tenant isolation',
     'Reusable page templates, category defaults, and per-page template selection',
     'Catalog sections, deterministic auto-fill, template switching, and',
     'Draft autosave, undo/redo, and single-editor page locks/heartbeats',
@@ -58,6 +68,222 @@ test('catalo: a named follow-up becomes its own inbox item whose source names th
   expect(row?.note).toBe("imported from docs/backlog.md, unverified. The mocks' \"New article\" button needs a create form; articles come from import today")
   const phase = items.find(i => i.title?.startsWith('Draft version history'))
   expect(phase?.source).toBe('docs/backlog.md: Remaining delivery phase 1 — catalog builder and print')
+})
+
+// The catalo dry run (docs/superpowers/specs/2026-11-05-pipeline-dry-run.md): one test per mismatch.
+
+test('mismatch 1: a table with a Status column: Done with a PR link is merged, Queued is inbox, Later is parked, the third cell is the note', () => {
+  const items = itemsFromBacklogMd(CATALO, 'docs/backlog.md')
+  const rows = items.filter(i => i.source === 'docs/backlog.md: Current position')
+  expect(rows.map(i => [i.title, i.status])).toEqual([
+    ['Foundation implementation plan, Tasks 1–9', 'merged'],
+    ['Plan 1b: tenant isolation', 'merged'],
+    ['Catalog UI fixes (Keraterm review)', 'merged'],
+    ['Hybrid editor, Phase B: document v2', 'merged'],
+    ['Empty grid areas refilled (bug)', 'inbox'],
+    ['Brand logos', 'inbox'],
+    ['Table element', 'inbox'],
+    ['Card style across pages', 'parked'],
+    ['Integrations, ERP connectors, AI', 'parked'],
+  ])
+  expect(rows[0]?.pr).toBeUndefined()
+  expect(rows[0]?.note).toBe('imported from docs/backlog.md; no PR link')
+  expect(rows[2]).toMatchObject({ pr: 'https://github.com/koderi-dp/catalo/pull/9', spec: 'docs/superpowers/specs/2026-11-02-category-picker-and-article-page-design.md', note: 'imported from docs/backlog.md' })
+  expect(rows[3]).toMatchObject({ pr: 'https://github.com/koderi-dp/catalo/pull/24', spec: 'docs/superpowers/specs/2026-11-04-hybrid-editor-document-v2-design.md', plan: 'docs/superpowers/plans/2026-11-04-hybrid-editor-document-v2.md' })
+  expect(rows[5]?.note).toBe('imported from docs/backlog.md, unverified. Brands as records with a logo image, shown on product cards; `brand` is plain text today')
+  expect(rows[8]?.note).toBe('imported from docs/backlog.md, unverified. Delivery phases 2–4 of the platform spec')
+  // The "Work" header row and the rule row are not items.
+  expect(items.some(i => /^Work$|^---/.test(i.title ?? ''))).toBe(false)
+})
+
+test('mismatch 2: a follow-up row whose detail starts with Done or Delivered is merged, with the PR when the row links one', () => {
+  const text = [
+    '### Named follow-ups after the storage slice',
+    '',
+    '| Follow-up | Deferred work and reason |',
+    '| --- | --- |',
+    '| Image derivatives | Delivered on branch `claude/lucid-maxwell-80926c` (see the queue row). |',
+    '| Article list thumbnail column | Done in the catalog UI fixes (2026-11-02): the list shows thumbnails. |',
+    '| Images tool | Done in the Images tool increment ([PR #25](https://github.com/koderi-dp/catalo/pull/25)). |',
+    '| Purge of held versions | Not done: needs a retention design. |',
+  ].join('\n')
+  const items = itemsFromBacklogMd(text, 'docs/backlog.md')
+  expect(items.map(i => [i.title, i.status, i.pr, i.note])).toEqual([
+    ['Image derivatives', 'merged', undefined, 'imported from docs/backlog.md; no PR link'],
+    ['Article list thumbnail column', 'merged', undefined, 'imported from docs/backlog.md; no PR link'],
+    ['Images tool', 'merged', 'https://github.com/koderi-dp/catalo/pull/25', 'imported from docs/backlog.md'],
+    ['Purge of held versions', 'inbox', undefined, 'imported from docs/backlog.md, unverified. Not done: needs a retention design'],
+  ])
+})
+
+test('mismatch 3: plain bullets under a follow-ups heading are not items once the section has a table', () => {
+  const text = [
+    '### Named follow-ups after PDF delivery slice 3',
+    '',
+    '| Follow-up | Deferred work and reason |',
+    '| --- | --- |',
+    '| Published chip date | Final review M5: the chip shows the approval date. |',
+    '',
+    'Decisions taken in slice 3 that differ from the design text:',
+    '',
+    '- Re-approve is offered for any approved or published catalog, not only when drift exists.',
+    '- A catalog flips to Published only when the finished export belongs to its current approval.',
+    '- [ ] A checkbox bullet is still an item.',
+    '',
+    '### Named follow-ups after Phase C',
+    '',
+    '- Template version history: stored versions and restore.',
+  ].join('\n')
+  expect(itemsFromBacklogMd(text, 'docs/backlog.md').map(i => i.title)).toEqual([
+    'Published chip date',
+    'A checkbox bullet is still an item',
+    'Template version history: stored versions and restore',
+  ])
+})
+
+test('mismatch 4: a table whose second column header names work is read under any heading, and rows already implemented are dropped', () => {
+  const items = itemsFromBacklogMd(CATALO, 'docs/backlog.md')
+  const oneB = items.filter(i => i.source === 'docs/backlog.md: Plan 1b — tenant isolation (complete, merged)')
+  expect(oneB.map(i => [i.title, i.status])).toEqual([
+    ['Minor 5; Task 5 bootstrap retry', 'inbox'],
+    ['Task 4 membership-query cost', 'inbox'],
+    ['Task 4 organization plugin endpoints', 'inbox'],
+  ])
+  expect(oneB[0]?.note).toBe('imported from docs/backlog.md, unverified. Repair a missing default price list after a bootstrap failure')
+  const text = [
+    '## After 1b: plan 2 - UI system and deferred cleanup',
+    '',
+    '| References in final review | Work to plan or explicitly defer again |',
+    '| --- | --- |',
+    '| Minor 6 | Implemented in Task 4: reject every backslash in sign-in destinations. |',
+    '| Minor 14 | Deferred to Auth dependency maintenance: Better Auth 1.7. |',
+    '',
+    '## Reference catalogs',
+    '',
+    '| Catalog | Pages |',
+    '| --- | --- |',
+    '| Keraterm autumn | 48 |',
+  ].join('\n')
+  expect(itemsFromBacklogMd(text, 'docs/backlog.md').map(i => [i.title, i.status, i.source])).toEqual([
+    ['Minor 14', 'inbox', 'docs/backlog.md: After 1b: plan 2 - UI system and deferred cleanup'],
+  ])
+})
+
+test('mismatch 5: a scope table under a later-phases heading is parked', () => {
+  const text = [
+    '## Delivery phases 2–4',
+    '',
+    '| Delivery phase | Queued scope |',
+    '| --- | --- |',
+    '| 2: integration and mapping | Connector framework/contracts; file feeds (CSV/Excel/XML), REST. |',
+    '| 3: ERP connectors | Add adapters one ERP at a time once the actual systems and priority are known. |',
+    '| 4: AI and sales | Sales import; deterministic article scoring. |',
+  ].join('\n')
+  const items = itemsFromBacklogMd(text, 'docs/backlog.md')
+  expect(items.map(i => [i.title, i.status])).toEqual([
+    ['2: integration and mapping', 'parked'],
+    ['3: ERP connectors', 'parked'],
+    ['4: AI and sales', 'parked'],
+  ])
+  expect(items[1]?.note).toBe('imported from docs/backlog.md, unverified. Add adapters one ERP at a time once the actual systems and priority are known')
+  // The fixture's "Later" rows of the status table are parked too.
+  expect(itemsFromBacklogMd(CATALO, 'docs/backlog.md').filter(i => i.status === 'parked').map(i => i.title)).toEqual(['Card style across pages', 'Integrations, ERP connectors, AI'])
+})
+
+const CATALO_EXECUTION = [
+  '## Execution and verification',
+  '',
+  '- Standing user instruction (2026-10-30): work through the backlog in order. Ask only when blocked by missing information,',
+  '  destructive data changes, new costs, or external actions requiring authorization.',
+  '  Do not deploy or send messages without asking. This overrides approval pauses below.',
+  '- Independent parallel tasks use separate git worktrees. Only one agent uses a browser',
+  '  at a time, through `playwright-cli`.',
+  '- Before dispatch, check plan instructions against the spec, existing behavior, and data',
+  '  preservation. Record and resolve conflicts through the applicable Superpowers workflow.',
+  '- Record dependency commits for each task. Label reviews on an earlier base as provisional;',
+  '  verify the integrated result before declaring the dependent task complete.',
+  '- For data writes, verify relevant client/server/database boundaries: validation limits,',
+  '  omitted versus blank fields, preservation of existing values, rollback behavior, and',
+  '  partial completion. Use tests for the risks the change introduces or touches.',
+  '- Search existing helpers, components, and translation keys before adding equivalents.',
+  '  Reconcile shared-file changes during integration, including message wording and reuse.',
+  '- Verify in tiers, not with a full gate after every edit:',
+  '  - **Per edit/fix:** focused tests for the touched files, plus ESLint and Prettier on',
+  '    changed files (`npm run check:fast`).',
+  '  - **Per task:** typecheck the affected workspaces and run the affected package tests.',
+  '  - **Per increment / before push:** the full gate: build, typecheck, test, lint,',
+  '    format:check, plus `npm run test:renderer-images` when the renderer changed and',
+  '    `npm run test:storage-integration -w @catalo/web` when storage changes.',
+  '  Full builds are only needed when routes, messages, or bundling change (Paraglide',
+  '  regeneration); CSS/class-only edits do not require one.',
+  '- Independent review is required for logic, schema, security, and behaviour changes. For',
+  '  token/class-only visual changes, one review per increment is enough.',
+].join('\n')
+
+test('mismatch 10: the eight rules missed from the execution section land in their groups', () => {
+  const rules = rulesFromProse([{ file: 'CLAUDE.md', text: CATALO_EXECUTION }])
+  const of = (start: string) => rules.find(r => r.line.startsWith(start))
+  expect(of('Independent parallel tasks use separate git worktrees.')?.group).toBe('before dispatch')
+  expect(of('Before dispatch, check plan instructions against the spec, existing behavior, and data preservation.')?.group).toBe('before dispatch')
+  expect(of('Independent review is required for logic, schema, security, and behaviour changes.')?.group).toBe('before dispatch')
+  expect(of('Label reviews on an earlier base as provisional; verify the integrated result')?.group).toBe('in every reviewer brief')
+  expect(of('For data writes, verify relevant client/server/database boundaries:')?.group).toBe('in every reviewer brief')
+  expect(of('Search existing helpers, components, and translation keys before adding equivalents.')?.group).toBe('in every implementer brief')
+  const gate = of('Per increment / before push:')
+  expect(gate?.group).toBe('before the PR')
+  expect(gate?.line).toBe('Per increment / before push: the full gate: build, typecheck, test, lint, format:check, plus `npm run test:renderer-images` when the renderer changed and `npm run test:storage-integration -w @catalo/web` when storage changes.')
+  // "Do not ... without asking" is a stop entry of the config, not a rule; the list label is not a rule either.
+  expect(rules.some(r => /without asking/.test(r.line))).toBe(false)
+  expect(rules.some(r => /^Verify in tiers/.test(r.line))).toBe(false)
+  expect(rules.some(r => /^Ask only when/.test(r.line))).toBe(false)
+})
+
+test('mismatch 11: short sentences, a label with a date and command documentation are not rules', () => {
+  const text = [
+    'Standing user instruction (2026-10-31). After each completed backlog increment, rebuild and bring up all implemented services.',
+    '',
+    'Never share `node_modules`.',
+    '',
+    '- `npm run db:migrate` — apply `migrations/*.sql` using only `MIGRATION_DATABASE_URL`',
+    '  (`catalo_owner`); it never falls back to `DATABASE_URL`. Skips only when neither URL is set.',
+    '- `src/ui` never imports `*.server.ts`, so Vite never ships server modules to the browser.',
+  ].join('\n')
+  const lines = rulesFromProse([{ file: 'apps/web/CLAUDE.md', text }]).map(r => r.line)
+  expect(lines).not.toContain('Standing user instruction (2026-10-31).')
+  expect(lines).not.toContain('Never share `node_modules`.')
+  expect(lines.some(l => l.startsWith('`npm run db:migrate`'))).toBe(false)
+  expect(lines).toContain('After each completed backlog increment, rebuild and bring up all implemented services.')
+  expect(lines).toContain('Skips only when neither URL is set (MIGRATION_DATABASE_URL).')
+  expect(lines).toContain('`src/ui` never imports `*.server.ts`, so Vite never ships server modules to the browser.')
+})
+
+test('mismatch 10: a skill front matter is not a rule even when it says verify', () => {
+  const text = [
+    '---',
+    'name: increment-review-stack',
+    'description: Procedure for bringing up the local Docker Compose stack after a completed backlog increment, including what to verify and record.',
+    '---',
+    '',
+    '# Increment review stack',
+    '',
+    '- Verify migrations complete, long-running services are ready, and the web app loads; smoke-test the delivered behavior.',
+  ].join('\n')
+  const rules = rulesFromProse([{ file: '.claude/skills/increment-review-stack/SKILL.md', text }])
+  expect(rules.map(r => [r.group, r.line])).toEqual([
+    ['in every reviewer brief', 'Verify migrations complete, long-running services are ready, and the web app loads; smoke-test the delivered behavior.'],
+  ])
+})
+
+test('mismatch 12: a rule keeps its first sentence whole under 240 characters and is cut at 200 otherwise', () => {
+  const whole = 'Standing user instruction (2026-10-31): after each completed backlog increment/phase (not every internal task), bring up the local Docker Compose stack for user review by following the `increment-review-stack` skill.'
+  expect(whole.length).toBeGreaterThan(160)
+  const long = 'Never ' + 'repeat this many times '.repeat(12).trim() + ' because the sentence runs past two hundred and forty characters, which is the point where a line is cut at a word boundary instead.'
+  expect(long.length).toBeGreaterThan(240)
+  const rules = rulesFromProse([{ file: 'CLAUDE.md', text: `- ${whole}\n- ${long}` }])
+  expect(rules.map(r => r.line)).toContain(whole)
+  const cut = rules.find(r => r.line.startsWith('Never repeat'))
+  expect(cut?.line.length).toBeLessThan(200)
+  expect(cut?.line.endsWith(' ')).toBe(false)
 })
 
 test('catalo: items keep the document order', () => {
@@ -149,7 +375,7 @@ test('rules land in the right group with their source', () => {
   const rules = rulesFromProse([{ file: 'CLAUDE.md', text: claude }, { file: 'docs/WORKFLOW.md', text: OH_WORKFLOW }])
   const by = (group: string) => rules.filter(r => r.group === group)
   for (const r of rules) {
-    expect(r.line.length).toBeLessThan(160)
+    expect(r.line.length).toBeLessThan(240)
     expect(r.line).not.toMatch(/\n/)
     expect(['CLAUDE.md', 'docs/WORKFLOW.md']).toContain(r.source)
   }

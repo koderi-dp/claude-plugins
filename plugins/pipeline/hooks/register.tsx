@@ -580,7 +580,8 @@ async function migrateDraft($: EngineInterface, found: string): Promise<Record<s
   const ci = sources.filter(isWorkflow).map(f => texts.get(f) ?? '').join('\n')
   for (const f of sources.filter(isWorkflow)) yielded(f, 'CI workflow')
   const prose = sources.filter(f => isMd(f) && texts.has(f)).map(f => texts.get(f)!)
-  const { config: drafted, sources: sourcesOfConfig } = draftConfig({ scripts, makeTargets, ci, prose })
+  const dirs = listing.filter(p => /^[^/]+\/$/.test(p)).map(p => p.slice(0, -1))
+  const { config: drafted, sources: sourcesOfConfig } = draftConfig({ scripts, makeTargets, ci, dirs, prose })
 
   // The items: the markdown queue, the MVP queue of each CLAUDE.md.
   const items: Partial<Item>[] = []

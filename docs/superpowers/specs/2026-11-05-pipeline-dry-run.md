@@ -42,3 +42,15 @@ Mismatches:
 ## Follow-ups
 
 Items 1 to 5, 7, 8, 10 to 12 are parser changes over ten lines each; they go into this repository's own backlog once `/pipeline init` has run here (plan Task 10, dogfooding). Item 1 is the one that blocks a real catalo migration: without the Status-column table the migrated backlog would show no open queue. Items 6 and 9 need no code.
+
+## After the fix round
+
+Date: 2026-11-06. Items 1 to 5, 7, 8, 10 to 12 are implemented in `migrate.ts` and `config.ts` (a test per item in `migrate.test.ts` and `config.test.ts`, the catalo fixture extended with nine current-position rows and three plan 1b rows); the stub mod was re-run on the same catalo files, still read-only.
+
+Items: 192 drafted (61 merged, 126 inbox, 5 parked). The "Current position" table gives all 45 rows: 27 Done merged (18 with a PR link, 22 with a spec and 20 with a plan link for `incrementsOf`), 16 Queued inbox (the first note said 18; the table has 16), 2 Later parked. The four Done or Delivered follow-up rows are merged; the four decision bullets of slice 3 are gone; plan 1b's four "Proposed work" rows are inbox; the three "Delivery phases 2–4" rows are parked.
+
+Config: `riskyPaths` is `apps/web/migrations/**` and `packages/domain/src/family/**` (`apps/web/src/server/**` is not named by any sentence that also names risky code, so it does not appear); `limits.fixRounds` is 2 from "two failed reviews" (the earlier "each fix round" no longer wins); `stop` gains "deploy or send messages".
+
+Rules: 28 candidates. The eight missed rules are present in their groups (worktrees, before dispatch and independent review before dispatch; the two `verify` rules in the reviewer brief; search existing in the implementer brief; the full gate with `test:renderer-images` before the PR, whole); the label with a date, the `npm run db:migrate` documentation and the skill front matter are gone; no line is cut under 240 characters.
+
+Still open: plan 2's deferred-findings table yields 12 inbox rows, ten of them done ("Task 3 implemented ...", "Tasks 1/4 consolidated ...") because only a detail starting with `Implemented` is dropped; "Never share `node_modules`", the server-side-authentication code rule, the fresh-machine browser install and "If only one suitable model is available" remain candidates (the migrate skill's step 2 prunes them); one apps/web rule over 240 characters (the visual check list) is cut at a word boundary; `checks.task` and the "Hybrid editor" title stay as items 6 and 9 say.

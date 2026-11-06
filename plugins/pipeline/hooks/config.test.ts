@@ -71,6 +71,7 @@ const CATALO = {
   },
   makeTargets: [],
   ci: 'name: ci\non: [push]\njobs:\n  check:\n    steps:\n      - run: npm run build\n      - run: npm run test\n',
+  dirs: ['apps', 'packages', 'docs', 'tooling'],
   prose: [
     'The auth code under apps/web/src/server/auth is risky: every change gets an independent review.',
     'Migrations in apps/web/migrations need a reviewer who probes.',
@@ -103,6 +104,7 @@ const OPENHUDDLE = {
   scripts: {},
   makeTargets: ['build', 'test', 'check', 'gen-check', 'lint'],
   ci: 'jobs:\n  check:\n    steps:\n      - run: make check\n',
+  dirs: ['cmd', 'internal', 'docs'],
   prose: [
     'Sonnet implements, Opus reviews.',
     'Merges are auto-merge on green CI.',
@@ -126,7 +128,7 @@ test('draftConfig maps openhuddle-like make targets, auto-merge and the stop lis
 })
 
 test('draftConfig with nothing found answers the defaults with every source named', () => {
-  const { config, sources } = draftConfig({ scripts: {}, makeTargets: [], ci: '', prose: [] })
+  const { config, sources } = draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: [], prose: [] })
   expect(config.checks).toEqual({})
   expect(config.riskyPaths).toEqual([])
   expect(config.stop).toEqual(DEFAULTS.stop)
@@ -142,12 +144,59 @@ test('draftConfig prefers a script named check over the combination and reads a 
     scripts: { build: 'b', test: 't', check: 'npm run build && npm run test', 'test:unit': 'vitest' },
     makeTargets: [],
     ci: '',
+    dirs: [],
     prose: ['Ask only when a destructive data change is needed.'],
   })
   expect(config.checks.gate).toBe('npm run check')
   expect(config.checks.task).toBe('npm run test')
   expect(sources['checks.gate']).toBe('package script check')
   expect(config.stop).toEqual(['a destructive data change is needed'])
+})
+
+// The catalo dry run (docs/superpowers/specs/2026-11-05-pipeline-dry-run.md): one test per mismatch.
+
+test('mismatch 7: riskyPaths keeps only tokens whose first segment is a top-level directory, with a file segment dropped', () => {
+  const { config, sources } = draftConfig({
+    scripts: {},
+    makeTargets: [],
+    ci: '',
+    dirs: ['apps', 'packages', 'docs'],
+    prose: [
+      'Draft autosave, undo/redo, and single-editor page locks/heartbeats on branch claude/sale-pricing-415cba; formats A3/A4/A5/custom at €/m².',
+      'Use Kysely for every query. SQL belongs in `apps/web/migrations/*.sql`; the auth tables live in apps/web/src/server/auth/ and pricing in packages/domain/src/pricing.',
+      'Migration/runtime notes and the token/class-only rule are in docs/ops/migrations.md.',
+    ],
+  })
+  expect(config.riskyPaths).toEqual(['apps/web/migrations/**', 'apps/web/src/server/auth/**', 'packages/domain/src/pricing/**'])
+  expect(sources['riskyPaths']).toBe('prose naming risky code (3 directories)')
+  expect(draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: [], prose: ['The auth code under apps/web/src/server/auth is risky.'] }).config.riskyPaths).toEqual([])
+})
+
+test('mismatch 8: "after two failed reviews" sets fixRounds', () => {
+  const { config, sources } = draftConfig({
+    scripts: {},
+    makeTargets: [],
+    ci: '',
+    dirs: [],
+    prose: [
+      'For token/class-only visual changes, one review per increment is enough; do not re-run full screenshot sets for each fix round.',
+      'Escalation: after two failed reviews or a blocked task, switch coder models or increase reasoning capability.',
+    ],
+  })
+  expect(config.limits.fixRounds).toBe(2)
+  expect(sources['limits.fixRounds']).toBe('prose: "two failed reviews"')
+})
+
+test('mismatch 10: "do not ... without asking" is a stop entry', () => {
+  const { config, sources } = draftConfig({
+    scripts: {},
+    makeTargets: [],
+    ci: '',
+    dirs: [],
+    prose: ['Ask only when blocked by missing information, conflicting requirements, destructive data changes, new costs, or external actions requiring authorization.\nDo not deploy or send messages without asking. This overrides approval pauses below.'],
+  })
+  expect(config.stop).toEqual(['blocked by missing information', 'conflicting requirements', 'destructive data changes', 'new costs', 'external actions requiring authorization', 'deploy or send messages'])
+  expect(sources['stop']).toContain('prose')
 })
 
 test('retain: defaults keep plans and drop briefs and superpowers; a wrong type is named', () => {

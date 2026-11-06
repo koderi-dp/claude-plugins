@@ -154,7 +154,8 @@ function retainOf(raw: unknown, problems: string[]): Config['retain'] {
   return out
 }
 
-export type Found = { scripts: Record<string, string>; makeTargets: string[]; ci: string; prose: string[] }
+/** What the project shows: package scripts, make targets, the CI text, its top-level directory names and the prose files. */
+export type Found = { scripts: Record<string, string>; makeTargets: string[]; ci: string; dirs: string[]; prose: string[] }
 
 const RISKY = /\b(auth|session|migration|parser|concurrency|lock|payment|price|pricing|money|crypto|token)s?\b/i
 const GATE_NAMES = ['check', 'verify', 'gate', 'ci']
@@ -165,21 +166,25 @@ const NONE = 'none found; fill in'
 /** Sentences, with hard-wrapped lines of a paragraph joined first. */
 const sentences = (prose: string[]) => prose.flatMap(p => p.split(/\n\s*\n/)).flatMap(p => p.replace(/\s*\n\s*/g, ' ').split(/(?<=[.!?])\s+/)).map(s => s.trim()).filter(Boolean)
 
-/** The directories a sentence names: tokens with a slash, as `dir/**` globs. */
-function dirsIn(sentence: string): string[] {
+/** The directories a sentence names: tokens with a slash whose first segment is a top-level directory of the project, as `dir/**` globs; a trailing file glob is dropped, a file name skips the token. */
+function dirsIn(sentence: string, dirs: string[]): string[] {
   const out: string[] = []
   for (const raw of sentence.split(/[\s,;:()`'"]+/)) {
     const t = raw.replace(/[.!?]+$/, '')
     if (!t.includes('/') || /^https?:/.test(t) || t.startsWith('/')) continue
-    const dir = t.replace(/\/\*\*$/, '').replace(/\/$/, '')
-    if (/\.[a-z]+$/i.test(dir)) continue
-    out.push(`${dir}/**`)
+    const segments = t.replace(/\/\*\*$/, '').replace(/\/$/, '').split('/')
+    if (segments.at(-1)?.includes('*')) segments.pop()
+    if (segments.length === 0 || !dirs.includes(segments[0] ?? '')) continue
+    if (/\.[a-z]+$/i.test(segments.at(-1) ?? '')) continue
+    out.push(`${segments.join('/')}/**`)
   }
   return out
 }
 
-/** The stop conditions a sentence lists after "ask the user only for", "stop and ask" or "ask only when". */
+/** The stop conditions a sentence lists after "ask the user only for", "stop and ask" or "ask only when", or the action of "do not ... without asking". */
 function stopsIn(sentence: string): string[] {
+  const asking = /\bdo not\s+(.+?)\s+without asking\b/i.exec(sentence)
+  if (asking?.[1]) return [asking[1].trim()]
   const m = /(?:ask the user only for|stop and ask|ask only when|ask only for)\s*(?:when\s+|for\s+)?(.*)$/i.exec(sentence)
   if (!m?.[1]) return []
   return m[1]
@@ -233,7 +238,7 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
   } else sources['checks.gate'] = NONE
 
   const lines = sentences(found.prose)
-  const risky = [...new Set(lines.filter(s => RISKY.test(s)).flatMap(dirsIn))]
+  const risky = [...new Set(lines.filter(s => RISKY.test(s)).flatMap(s => dirsIn(s, found.dirs)))]
   config.riskyPaths = risky
   sources['riskyPaths'] = risky.length ? `prose naming risky code (${risky.length} director${risky.length === 1 ? 'y' : 'ies'})` : NONE
 
@@ -243,11 +248,14 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
     sources['stop'] = 'prose: the "ask only for" list'
   } else sources['stop'] = 'default'
 
-  const rounds = lines.map(s => /\b(\w+)\s+fix[- ]rounds?\b/i.exec(s)).find(Boolean)
-  const n = rounds?.[1] ? (NUMBERS[rounds[1].toLowerCase()] ?? Number(rounds[1])) : NaN
-  if (Number.isInteger(n) && n > 0) {
-    config.limits.fixRounds = n
-    sources['limits.fixRounds'] = `prose: "${rounds![0]}"`
+  // The first sentence that puts a number before "fix rounds" or "failed reviews"; "each fix round" names none.
+  const rounds = lines
+    .map(s => /\b(\w+)\s+(?:fix[- ]rounds?|failed reviews)\b/i.exec(s))
+    .map(m => (m ? { text: m[0], n: NUMBERS[(m[1] ?? '').toLowerCase()] ?? Number(m[1]) } : null))
+    .find(m => m !== null && Number.isInteger(m.n) && m.n > 0)
+  if (rounds) {
+    config.limits.fixRounds = rounds.n
+    sources['limits.fixRounds'] = `prose: "${rounds.text}"`
   } else sources['limits.fixRounds'] = 'default'
 
   const auto = lines.find(s => /\bauto[- ]merge/i.test(s))

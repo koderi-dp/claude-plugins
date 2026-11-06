@@ -12,7 +12,8 @@ export type ActiveItem = { id?: string; title: string; status: 'building'; branc
 export const RULE_GROUPS: RuleGroup[] = ['before dispatch', 'in every implementer brief', 'in every reviewer brief', 'before the PR', 'after merge']
 
 const TITLE_MAX = 80
-const LINE_MAX = 160
+const LINE_MAX = 200
+const SENTENCE_MAX = 240
 
 // ---------- text helpers ----------
 
@@ -45,41 +46,47 @@ function sentences(paragraph: string): string[] {
     .filter(s => s.length >= 15)
 }
 
-/** A line cut to under `max` characters at a word boundary. */
+/** A line under `max` characters: whole when it is, else its first sentence when that is under `SENTENCE_MAX`, else cut at a word boundary. */
 function oneLine(s: string, max = LINE_MAX): string {
   const t = s.replace(/\s+/g, ' ').trim()
   if (t.length < max) return t
+  const first = t.split(/(?<=[.!?])\s+/)[0] ?? ''
+  if (first.length < SENTENCE_MAX) return first
   const cut = t.lastIndexOf(' ', max - 1)
   return (cut > 0 ? t.slice(0, cut) : t.slice(0, max - 1)).replace(/[\s,;:]+$/, '')
 }
 
-/** The bullet or table-row units of a markdown text, continuation lines joined, with the heading each sits under. */
-function units(text: string): { kind: 'bullet' | 'row' | 'other'; text: string; heading: string; rowIndex: number }[] {
-  const out: { kind: 'bullet' | 'row' | 'other'; text: string; heading: string; rowIndex: number }[] = []
+type Unit = { kind: 'bullet' | 'row' | 'other'; text: string; heading: string; section: number; rowIndex: number }
+
+/** The bullet or table-row units of a markdown text, continuation lines joined and nested bullets their own units, with the heading and the section number each sits under. */
+function units(text: string): Unit[] {
+  const out: Unit[] = []
   let heading = ''
+  let section = 0
   let rowIndex = 0
-  let current: { kind: 'bullet' | 'row' | 'other'; text: string; heading: string; rowIndex: number } | null = null
+  let current: Unit | null = null
   const flush = () => { if (current) out.push(current); current = null }
   for (const raw of text.split('\n')) {
     const line = raw.replace(/\r$/, '')
     const h = /^#{1,6}\s+(.*)$/.exec(line)
-    if (h) { flush(); heading = (h[1] ?? '').trim(); rowIndex = 0; continue }
+    if (h) { flush(); heading = (h[1] ?? '').trim(); section += 1; rowIndex = 0; continue }
     if (!line.trim()) { flush(); rowIndex = 0; continue }
     if (/^\|/.test(line)) {
       flush()
-      out.push({ kind: 'row', text: line, heading, rowIndex })
+      out.push({ kind: 'row', text: line, heading, section, rowIndex })
       rowIndex += 1
       continue
     }
-    if (/^(?:[-*+]|\d+\.)\s+/.test(line)) {
+    const bullet = /^\s*(?:[-*+]|\d+\.)\s+/.exec(line)
+    if (bullet) {
       flush()
-      current = { kind: 'bullet', text: line.replace(/^(?:[-*+]|\d+\.)\s+/, ''), heading, rowIndex: 0 }
+      current = { kind: 'bullet', text: line.slice(bullet[0].length), heading, section, rowIndex: 0 }
       continue
     }
     if (/^\s+/.test(line) && current) { current.text += ' ' + line.trim(); continue }
     if (current?.kind === 'other') { current.text += ' ' + line.trim(); continue }
     flush()
-    current = { kind: 'other', text: line.trim(), heading, rowIndex: 0 }
+    current = { kind: 'other', text: line.trim(), heading, section, rowIndex: 0 }
   }
   flush()
   return out
@@ -124,7 +131,11 @@ export function findSources(listing: string[], claudeMd: string): string[] {
 
 const PR_LINK = /https?:\/\/\S+?\/pull\/\d+/
 const DEFERRED = /\b(later|V1|phase 2)\b/i
+const DEFERRED_HEADING = /\blater\b|\bphases?\s+[2-9]\b/i
 const FOLLOW_UPS = /^named follow-ups\b/i
+const WORK_HEADER = /\b(?:work|scope)\b/i
+const STATUS_OF: Record<string, Item['status']> = { done: 'merged', queued: 'inbox', later: 'parked' }
+const RULE_ROW = /^\|\s*:?-{2,}/
 
 /** The first spec and the first plan a bullet links (`.../specs/x.md`, `.../plans/x.md`), resolved against the queue file's folder. */
 function linksOf(body: string, file: string): { spec?: string; plan?: string } {
@@ -140,11 +151,30 @@ function linksOf(body: string, file: string): { spec?: string; plan?: string } {
   return out
 }
 
-/** Backlog items from a markdown queue of `- [ ]` / `- [x]` items and "Named follow-ups" lists or tables, in document order. */
+/** The cells of a table row, markdown stripped. */
+const cellsOf = (row: string) => row.split('|').slice(1, -1).map(c => stripMd(c))
+
+/**
+ * Backlog items from a markdown queue, in document order: `- [ ]` / `- [x]` bullets; the rows of a table with a `Status`
+ * column (Done is merged, Later parked, the rest inbox; the first cell is the title, the third the note); the rows of a
+ * table whose second column names work or scope, or that sits under a "Named follow-ups" heading (Done or Delivered rows
+ * merged, Implemented rows dropped, the rest parked under a later-phases heading and inbox elsewhere); and the plain
+ * bullets of a "Named follow-ups" section that has no table.
+ */
 export function itemsFromBacklogMd(text: string, file: string): Partial<Item>[] {
   const out: Partial<Item>[] = []
   const unverified = `imported from ${file}, unverified`
-  for (const u of units(text)) {
+  const merged = (title: string, body: string, source: string, links: { spec?: string; plan?: string }): Partial<Item> => {
+    const pr = PR_LINK.exec(body)?.[0]
+    return pr
+      ? { title, status: 'merged', pr, source, ...links, note: `imported from ${file}` }
+      : { title, status: 'merged', source, ...links, note: `imported from ${file}; no PR link` }
+  }
+  const all = units(text)
+  const sectionsWithTable = new Set(all.filter(u => u.kind === 'row').map(u => u.section))
+  // The shape of the table being read, from its header row: the index of its Status column, or whether it lists work.
+  let table: { status: number; work: boolean } | null = null
+  for (const u of all) {
     const source = `${file}: ${u.heading}`
     if (u.kind === 'bullet') {
       const box = /^\[([ xX])\]\s+(.*)$/s.exec(u.text)
@@ -154,30 +184,49 @@ export function itemsFromBacklogMd(text: string, file: string): Partial<Item>[] 
         if (!title) continue
         const links = linksOf(body, file)
         if (box[1] !== ' ') {
-          const pr = PR_LINK.exec(body)?.[0]
-          out.push(pr
-            ? { title, status: 'merged', pr, source, ...links, note: `imported from ${file}` }
-            : { title, status: 'merged', source, ...links, note: `imported from ${file}; no PR link` })
+          out.push(merged(title, body, source, links))
           continue
         }
         const deferred = DEFERRED.test(title) || /\((?:later|V1|phase 2)\)|\b(?:deferred|moved|parked)\s+(?:to|for)\s+(?:later|V1|phase 2)\b/i.test(body)
         out.push({ title, status: deferred ? 'parked' : 'inbox', source, ...links, note: unverified })
         continue
       }
-      if (FOLLOW_UPS.test(u.heading)) {
+      if (FOLLOW_UPS.test(u.heading) && !sectionsWithTable.has(u.section)) {
         const title = firstSentence(u.text)
         if (title) out.push({ title, status: 'inbox', source, note: unverified })
       }
       continue
     }
-    if (u.kind === 'row' && FOLLOW_UPS.test(u.heading)) {
-      if (u.rowIndex === 0 || /^\|\s*:?-{2,}/.test(u.text)) continue
-      const cells = u.text.split('|').slice(1, -1).map(c => stripMd(c))
-      const title = firstSentence(cells[0] ?? '')
-      if (!title) continue
-      const detail = firstSentence(cells[1] ?? '', LINE_MAX)
-      out.push({ title, status: 'inbox', source, note: detail ? `${unverified}. ${detail}` : unverified })
+    if (u.kind !== 'row') continue
+    if (u.rowIndex === 0) {
+      const header = cellsOf(u.text).map(c => c.toLowerCase())
+      table = { status: header.indexOf('status'), work: WORK_HEADER.test(header[1] ?? '') || FOLLOW_UPS.test(u.heading) }
+      continue
     }
+    if (!table || RULE_ROW.test(u.text)) continue
+    const cells = cellsOf(u.text)
+    const title = firstSentence(cells[0] ?? '')
+    if (!title) continue
+    if (table.status >= 0) {
+      const status = STATUS_OF[(cells[table.status] ?? '').toLowerCase()] ?? 'inbox'
+      const links = linksOf(u.text, file)
+      if (status === 'merged') {
+        out.push(merged(title, u.text, source, links))
+        continue
+      }
+      const detail = firstSentence(cells[2] ?? cells[1] ?? '', LINE_MAX)
+      out.push({ title, status, source, ...links, note: detail ? `${unverified}. ${detail}` : unverified })
+      continue
+    }
+    if (!table.work) continue
+    const detail = firstSentence(cells[1] ?? '', LINE_MAX)
+    if (/^Implemented\b/.test(detail)) continue
+    if (/^(?:Done|Delivered)\b/.test(detail)) {
+      out.push(merged(title, u.text, source, {}))
+      continue
+    }
+    const status = DEFERRED_HEADING.test(u.heading) ? 'parked' : 'inbox'
+    out.push({ title, status, source, note: detail ? `${unverified}. ${detail}` : unverified })
   }
   return out
 }
@@ -244,10 +293,22 @@ const AFTER_MERGE = /\bafter (?:each|every) (?:merge|merged|completed)\b/i
 const BROWSER = /\b(?:browser|playwright)\b/i
 const ACCOUNT = /\b(?:test account|sign[ -]?up|credentials)\b/i
 const STANDING = /\bstanding user instruction\b|\bnever\b|\bonly one\b|\balways\b.*\bbefore\b/i
-const STOP_LIST = /\b(?:stop and ask|ask the user only|ask only (?:when|for))\b/i
+const STOP_LIST = /\b(?:stop and ask|ask the user only|ask only (?:when|for))\b|\bdo not\b.*\bwithout asking\b/i
 const PR_VERB = /\b(?:merge[sd]?|merging|PRs?|pull requests?|push(?:es|ed)?|commits?|committed)\b/
+const DISPATCH = /\bbefore dispatch\b|\bindependent review\b|\bworktrees?\b/i
+const SEARCH_FIRST = /\bsearch existing\b/i
+const VERIFY = /\bverify\b/i
+const WHEN_CHANGED = /\bwhen (?:the )?\w+ changed\b/i
+const RULE_MIN = 30
+const LABEL_DATE = /^[\w\s]+\(\d{4}-\d{2}-\d{2}\)\.?$/
+const COMMAND_DOC = /^`[^`]+`\s*(?:[—–:-]|$)/
+const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n/
 
-/** Candidate rules.md lines from workflow prose, grouped by when they apply, each with its source file. */
+/**
+ * Candidate rules.md lines from workflow prose, grouped by when they apply, each with its source file. Config material
+ * (stop lists), sentences under 30 characters, a label with a date, a list label ending in a colon, the sentence that
+ * documents a command and a skill's front matter are left out.
+ */
 export function rulesFromProse(texts: SourceText[]): MigrateRule[] {
   const out: MigrateRule[] = []
   const seen = new Set<string>()
@@ -258,11 +319,11 @@ export function rulesFromProse(texts: SourceText[]): MigrateRule[] {
     out.push({ group, line, source })
   }
   for (const { file, text } of texts) {
-    for (const u of units(text)) {
+    for (const u of units(text.replace(FRONTMATTER, ''))) {
       if (u.kind === 'row') continue
       const paragraphVar = ENV_VAR.exec(u.text)?.[0]
       for (const s of sentences(u.text)) {
-        if (STOP_LIST.test(s)) continue
+        if (STOP_LIST.test(s) || s.length < RULE_MIN || LABEL_DATE.test(s) || s.endsWith(':') || COMMAND_DOC.test(s)) continue
         if (AFTER_MERGE.test(s)) { push('after merge', oneLine(s), file); continue }
         if (/\bskip/i.test(s) && (ENV_VAR.test(s) || paragraphVar)) {
           const suffix = ENV_VAR.test(s) ? '' : ` (${paragraphVar})`
@@ -271,7 +332,10 @@ export function rulesFromProse(texts: SourceText[]): MigrateRule[] {
           push('before the PR', line, file)
           continue
         }
-        if (BROWSER.test(s) || ACCOUNT.test(s)) { push('in every implementer brief', oneLine(s), file); continue }
+        if (BROWSER.test(s) || ACCOUNT.test(s) || SEARCH_FIRST.test(s)) { push('in every implementer brief', oneLine(s), file); continue }
+        if (DISPATCH.test(s)) { push('before dispatch', oneLine(s), file); continue }
+        if (VERIFY.test(s)) { push('in every reviewer brief', oneLine(s), file); continue }
+        if (WHEN_CHANGED.test(s)) { push('before the PR', oneLine(s), file); continue }
         if (STANDING.test(s)) push(PR_VERB.test(s) ? 'before the PR' : 'before dispatch', oneLine(s), file)
       }
     }

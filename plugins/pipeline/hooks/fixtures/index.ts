@@ -5,12 +5,44 @@
 /** catalo-backlog.md */
 export const CATALO_BACKLOG = `# Catalo work queue
 
-Trimmed copy of catalo's docs/backlog.md (2026-11-05) for the migration tests: the Statuses line, one named follow-ups section and the remaining delivery phase 1 section.
+Trimmed copy of catalo's docs/backlog.md (2026-11-05) for the migration tests: the Statuses line, nine rows of the current position table, three rows of plan 1b's proposed work table, one named follow-ups section and the remaining delivery phase 1 section.
 
 Statuses: **Queued** → **Brainstorming** → **Planning** → **Ready** → **Implementing** →
 **Review** → **Done**. Ready means the design/plan gates are satisfied; Done means the
 required verification/reviews and recorded integration are complete. Record **Blocked**
 with the cause and next action when needed. A proposal listed here remains unapproved.
+
+## Current position
+
+AstroVista theme preset (\`735cec7\`) and verification speedups (\`7acb7f2\`) are merged to
+\`main\` and pushed. Next queue item: catalog builder and PDF delivery (delivery phase 1).
+
+| Work | Status | Evidence / next action |
+| --- | --- | --- |
+| Foundation implementation plan, Tasks 1–9 | Done | Reviewed, merged, and pushed; foundation plus deletion guard at \`5ff7fd0\`. |
+| Plan 1b: tenant isolation | Done | Tasks 1–4 and final review complete; merged locally to main (\`36da4b2\`); no push. |
+| Catalog UI fixes (Keraterm review) | Done | From the user's review of the Keraterm data on 2026-11-02; merged as \`9564f3e\` ([PR #9](https://github.com/koderi-dp/catalo/pull/9)). [Design note](superpowers/specs/2026-11-02-category-picker-and-article-page-design.md). Category counts include subcategories and a category filter covers its subtree. |
+| Hybrid editor, Phase B: document v2 | Done | From the parent session's brief (2026-11-04), branch \`claude/editor-phase-b-559ab4\`, [PR #24](https://github.com/koderi-dp/catalo/pull/24). [Design](superpowers/specs/2026-11-04-hybrid-editor-document-v2-design.md), [plan](superpowers/plans/2026-11-04-hybrid-editor-document-v2.md), [ledger](../.superpowers/sdd/2026-11-04-hybrid-editor-document-v2/progress.md). Page document v2: four margins, slot styles, padding, image fit (contain/cover), card box, visible fields and a code (\`sku\`) field. |
+| Empty grid areas refilled (bug) | Queued | Cells emptied with Remove card are refilled with new empty cards by the next card resize, column/row change in the Page tab, or Add a row: \`resizeSlot\` (\`apps/web/src/catalog/slot-resize-model.ts\`) and \`setGridTracks\` (\`apps/web/src/catalog/page-geometry-model.ts\`) both call \`fillUncoveredCells\`, which fills every uncovered cell on the page. This breaks Phase C's rule that removed cards leave empty areas. |
+| Brand logos | Queued | Brands as records with a logo image, shown on product cards; \`brand\` is plain text today. The Keraterm pages show a manufacturer logo per card. |
+| Table element | Queued | A free-layer table for specification and price tables (thermostats, radiators). A text box stands in until then. |
+| Card style across pages | Later | Apply a card's style to every card that uses the same style in its section or the whole catalog, so a design change (for example the price colour on the tile card) reaches pages already built from a template. Revisit if one design has to be shared by many templates. |
+| Integrations, ERP connectors, AI | Later | Delivery phases 2–4 of the platform spec. |
+
+The completed **foundation plan** is only part of the spec's broader **delivery phase 1**.
+
+## Plan 1b — tenant isolation (complete, merged)
+
+Deferred findings from the final review, kept here as proposed work:
+
+| Reference in final review | Proposed work |
+| --- | --- |
+| Minor 5; Task 5 bootstrap retry | Repair a missing default price list after a bootstrap failure. |
+| Task 4 membership-query cost | Revisit repeated organization/membership queries during \`context.db\` integration. |
+| Task 4 organization plugin endpoints | Review the boundary between cross-organization auth tables and tenant data; keep deletion disabled. |
+
+Migration decision: there are no existing deployments. If the composite-FK migration finds
+invalid links, stop with clear diagnostics and leave data unchanged.
 
 ### Named follow-ups after the Keraterm review
 
