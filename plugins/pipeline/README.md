@@ -74,6 +74,7 @@ The mod follows every subagent of the session and keeps a live file (`.git/pipel
 
 - `pipeline-intake`: a request in any wording becomes an item and a spec; at most one question, never a build.
 - `pipeline-run`: one item from pick to merge, with the brief templates, the ledger and one line per turn; resumes from the ledger's `resume` block after a restart.
+- `pipeline-init`: sets a new project up: config fitted to its scripts and layout, an empty backlog, a rules.md; hands over to migrate when a queue exists. Also reachable as the `/pipeline-init` skill when the `/pipeline` command is not listed.
 - `pipeline-rules`: loaded in every session of a project with a pipeline; where the files are, who writes them, the reply shape.
 - `pipeline-migrate`: moves a project that runs its own process onto the pipeline in one session.
 
@@ -126,7 +127,7 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 
 | Part | Name |
 | --- | --- |
-| Skills | `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
+| Skills | `pipeline-init`, `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
 | Templates | `templates/spec.md`, `implementer.md`, `reviewer.md`, `fix.md`, `final.md` |
 | Tool | `mcp__pipeline__pipeline` |
 | Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the panel, the bar, the live file; with `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `migrate.ts`, `clean.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |

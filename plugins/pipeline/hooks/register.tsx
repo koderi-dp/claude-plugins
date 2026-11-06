@@ -143,8 +143,7 @@ const RUN_PROMPT = (target: string) =>
 const MIGRATE_PROMPT = `Use the pipeline-migrate skill. First tool call: ${call({ action: 'migrate' })}, which reads the project's queue, workflow prose and ledgers and drafts the config, the rules and the items without writing. Then finish the mapping, ask once, and apply as the skill says.`
 
 const INIT_PROMPT =
-  `Set the pipeline up in this project, under the pipeline-rules skill. If the project already has a queue, a workflow document or a ledger (docs/backlog.md, an "MVP queue" in CLAUDE.md, docs/WORKFLOW.md, .superpowers/sdd/**/progress.md), use the pipeline-migrate skill instead; its first tool call is ${call({ action: 'migrate' })}. ` +
-  `Otherwise the first tool call is ${call({ action: 'init' })}, which writes docs/pipeline/config.json with the defaults and an empty backlog. Then fill checks from the project's scripts and CI through /pipeline config, and answer the status text in one line.`
+  `Set the pipeline up in this project with the pipeline-init skill: read it and follow its steps. If the project already has a queue, a workflow document or a ledger, it hands over to the pipeline-migrate skill, whose first tool call is ${call({ action: 'migrate' })}; otherwise its first tool call is ${call({ action: 'init' })}.`
 
 const STOP_PROMPT =
   `Pipeline stop, under the pipeline-run skill. First tool call: ${call({ action: 'get' })} for the active item and its resume block. Finish the task that is running: let a dispatched subagent finish or stop it at a safe point, start no other task. ` +
