@@ -25,9 +25,8 @@ function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: b
   const toasts: string[] = []
   const wakeups: Record<string, unknown>[] = []
   const passed: string[] = []
-  // `w.root` is what session.root answers (EnterWorktree moves it); `wipe()` plays a process restart: every
-  // state value the previous instance held is gone until this instance writes it again.
-  const w = { root: WORKTREE, wiped: false, written: new Set<string>() }
+  // `w.root` is what session.root answers (EnterWorktree moves it).
+  const w = { root: WORKTREE }
   const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
@@ -49,16 +48,8 @@ function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: b
   on('state.set', async (_$, e, next) => {
     const r = await next(e)
     const ev = e as { plugin: string; key: string; value: unknown }
-    if (ev.plugin === 'pipeline') {
-      state.set(ev.key, ev.value)
-      w.written.add(ev.key)
-    }
+    if (ev.plugin === 'pipeline') state.set(ev.key, ev.value)
     return r
-  })
-  on('state.get', async (_$, e, next) => {
-    const ev = e as { plugin: string; key: string }
-    if (w.wiped && ev.plugin === 'pipeline' && !w.written.has(ev.key)) return { value: { value: undefined, version: 0 } } as never
-    return next(e)
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
@@ -87,12 +78,7 @@ function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: b
       return cmd.includes('fail') ? ({ result: 'exit 1', isError: true } as never) : { result: 'ok' }
     })
   }
-  const wipe = () => {
-    w.wiped = true
-    w.written.clear()
-    state.clear()
-  }
-  return { clock, files, state, pushes, toasts, wakeups, passed, w, wipe }
+  return { clock, files, state, pushes, toasts, wakeups, passed, w }
 }
 
 const text = (r: unknown) => String((r as { result: unknown }).result)
@@ -325,33 +311,35 @@ test('I2: an entry that died under STALE_MS before a new session started is repo
 })
 
 test('I3: the undelivered silent signal in the live file survives a process restart', async ($, on) => {
-  const backlog = JSON.stringify({ version: 1, items: [{ id: 'p12', title: 'CSV export', status: 'building' }] })
-  const { clock, files, state, pushes, wipe } = world(on, { [CONFIG]: config(), [BACKLOG]: backlog })
-  await start($)
-  await spawn($, 'Implement Task 1')
-  await step($, 'agent-t1')
-  await clock.advance(10 * MIN)
-  expect(live(files).sessions['self']!.signals.map(s => [s['kind'], s['delivered']])).toEqual([['silent', false]])
-  expect(pushes).toHaveLength(1)
-
-  wipe()
+  // The previous instance raised silent at 09:50 and never delivered it; its entry is stale by the time this one starts.
+  const agent = { id: 't1', agentId: 'agent-t1', name: 'Implement Task 1', model: 'm', status: 'running', startedAt: NOW - 25 * MIN, lastStepAt: NOW - 20 * MIN, calls: 3, tokens: 15, activity: 'editing a.ts', lastCommands: [], failures: 0 }
+  const silent = { kind: 'silent', agent: 'Implement Task 1', agentId: 'agent-t1', detail: 'no step or tool call for 10 min', at: NOW - 10 * MIN, delivered: false }
+  const old = { title: 'p12 · x', cwd: WORKTREE, item: 'p12', startedAt: new Date(NOW - 30 * MIN).toISOString(), seenAt: new Date(NOW - 5 * MIN).toISOString(), agents: [agent], signals: [silent] }
+  const { clock, files, state, pushes } = world(on, { [CONFIG]: config(), [LIVE]: JSON.stringify({ sessions: { old } }) }, { sessionId: 'new' })
   await start($)
   const after = state.get('signals') as Record<string, unknown>[]
   expect(after.map(s => [s['kind'], s['delivered']])).toEqual([
     ['silent', false],
     ['dead', false],
   ])
-  expect(after[0]).toMatchObject({ agentId: 'agent-t1', at: NOW + 10 * MIN })
+  expect(after[0]).toMatchObject({ agentId: 'agent-t1', agent: 'Implement Task 1', at: NOW - 10 * MIN, detail: 'no step or tool call for 10 min' })
+  expect(after[1]).toMatchObject({ agentId: 'agent-t1', agent: 'Implement Task 1' })
+  expect(String(after[1]!['detail'])).toContain('p12')
+  expect(Object.keys(live(files).sessions)).toEqual(['new'])
   // The restored signal is not announced again; the dead one is.
-  expect(pushes).toHaveLength(2)
-  expect(pushes[1]).toContain('dead')
+  expect(pushes).toHaveLength(1)
+  expect(pushes[0]).toContain('dead')
   const r = await got($)
   expect(r.signals.map(s => s['kind'])).toEqual(['silent', 'dead'])
-  expect(live(files).sessions['self']!.signals.every(s => s['delivered'] === true)).toBe(true)
-  // A restart with the state kept (the same instance) doubles nothing.
+  expect(r.signals[0]).toMatchObject({ kind: 'silent', agentId: 'agent-t1', at: NOW - 10 * MIN })
+  expect((await got($)).signals).toEqual([])
+  expect(live(files).sessions['new']!.signals.every(s => s['delivered'] === true)).toBe(true)
+  // A restart with the state kept (the same instance) doubles nothing, and the ticker raises neither again.
   await start($)
   expect(state.get('signals')).toHaveLength(2)
-  expect(pushes).toHaveLength(2)
+  await clock.advance(20 * MIN)
+  expect(state.get('signals')).toHaveLength(2)
+  expect(pushes).toHaveLength(1)
 })
 
 test('a long tool call is a sign of life: silent is not raised while or right after one shell command', async ($, on) => {
