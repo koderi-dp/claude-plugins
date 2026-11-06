@@ -1,6 +1,6 @@
 {
   "name": "pipeline",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Owns a project's workflow: a structured backlog, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel.",
   "author": {
     "name": "Danijel Peric"
