@@ -1,0 +1,135 @@
+# pipeline
+
+Owns a project's workflow: a structured backlog in `docs/pipeline`, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel. The project keeps a small config file and its code conventions; the plugin keeps the backlog, drives an item from request to merged PR with no approval gates, watches the workers, and shows where things stand. It is for the person who wants to say what to build and read a status line, not operate the process.
+
+## The files in a project
+
+```
+docs/pipeline/
+  config.json          the rules the plugin enforces (table below)
+  rules.md             process rules the config cannot express, grouped by when they apply
+  backlog.json         the items and their status; array order is priority
+  BACKLOG.md           generated view of backlog.json, never edited
+  specs/<id>.md        one page per item: what, why, acceptance, out of scope, open
+  plans/<id>.md        the superpowers plan for the item
+  ledgers/<id>.json    the item's record: tasks, dispatches, rulings, resume block
+  ledgers/<id>/        briefs and reports, for the record
+```
+
+Only the plugin's tool writes `backlog.json` and the ledgers; a subagent's call is ignored. Everything under `docs/pipeline/` goes on the item's branch except `backlog.json` and `BACKLOG.md`, which the lead commits on the main branch, so two worktrees never carry diverging copies.
+
+## The loop
+
+A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording that asks for something to be built). It is `ready` once the spec has no open question and its `needs` are merged. `/pipeline next` picks the first ready item: a worktree and branch, a plan with `superpowers:writing-plans`, then task by task an implementer from the brief templates, fix rounds up to the limit, an independent reviewer only when the diff touches a risky path, a final review over the whole branch, the gate, the PR, the merge, the ledger, the clean-up, and one line to you. Statuses: `inbox`, `ready`, `planning`, `building`, `review`, `merged`, `blocked`, `parked`.
+
+## Commands
+
+| Command | Does |
+| --- | --- |
+| `/pipeline init` | Config and an empty backlog for a new project; offers `migrate` when the project has a queue |
+| `/pipeline migrate` | Move an existing project onto the pipeline (below) |
+| `/pipeline add <text>` | Intake: an item and its spec, in one line back; never starts the build |
+| `/pipeline next` | Run the first ready item |
+| `/pipeline run <id>` / `run all` | Run one item, or until nothing is ready or a stop condition fires |
+| `/pipeline status [id]` | The status block, or one item's ledger as text; works on a phone over Remote Control |
+| `/pipeline move <id> top` / `after <id>` | Reorder |
+| `/pipeline park <id>` / `unpark <id>` | Take out of, back into, the queue |
+| `/pipeline stop` | Finish the running task, leave the branch pushed and the ledger current, stop |
+| `/pipeline clean` | List and remove what `retain` says may go for every merged item |
+| `/pipeline panel` | Toggle the panel |
+| `/pipeline config [key=value]` | Show or change the project config |
+
+## The config
+
+`docs/pipeline/config.json`, written by `/pipeline init` or `/pipeline migrate` and edited by you or the lead when a rule changes. Every key has a default; a wrong type is named and the default used; unknown keys survive.
+
+| Key | Default | Means |
+| --- | --- | --- |
+| `mainBranch` | `main` | Where items branch from and merge to |
+| `branch` | `feat/<id>` | The branch name per item |
+| `checks` | `{}` | `fast` per edit, `task` before each hand-back, `gate` before the PR; any tier may be omitted |
+| `riskyPaths` | `[]` | Globs; a task whose diff touches one gets an independent reviewer who probes |
+| `protectedPaths` | `[".github/workflows/**"]` | Globs; a subagent's Edit or Write there is denied by the mod |
+| `models` | sonnet medium, opus high, opus xhigh, opus high | `implementer`, `reviewer`, `final`, `escalate`, each `{ model, effort }` |
+| `limits` | `fixRounds` 3, `silentMinutes` 10, `taskMinutes` 45, `itemTokens` 4000000 | What the watchdog and the run skill enforce |
+| `merge` | `pr` | `auto` merges on green CI with no open Critical or Important finding; `pr` stops at an open PR |
+| `mergeMethod` | `merge` | `merge` (a merge commit) or `squash` |
+| `stop` | six conditions | Free text the run skill reads: when it blocks the item and asks instead of deciding |
+| `afterMerge` | `["docs/pipeline/BACKLOG.md"]` | Paths to regenerate, commands to run or skills to invoke after a merge |
+| `retain` | `plans` true, `briefs` false, `superpowers` false | What stays after an item merges; the spec and the ledger always stay |
+| `notify` | `milestones` | `off`, `milestones` (started, PR open, merged, blocked, a watchdog signal) or `all` |
+
+## The watchdog
+
+The mod follows every subagent of the session and keeps a live file (`.git/pipeline-live.json`, never committed). It cannot stop an agent itself: a signal reaches the lead through the tool's `get` on its next turn, and as a push notification per `notify`. Between items under `run all` it schedules a wake-up every `silentMinutes` where the host offers one.
+
+| Signal | Detection | Action |
+| --- | --- | --- |
+| Silent | no step from the agent for `limits.silentMinutes` | once: the lead asks the agent to report, then stops and re-dispatches it |
+| Dead | the session restarted while the live file lists running agents | the lead re-dispatches from the surviving working tree |
+| Looping | the same failing shell command three times in a row, or more failed commands than `fixRounds` | the lead stops the agent and re-dispatches once at `models.escalate` with the failures in the brief |
+| Over budget | the task passes `limits.taskMinutes` or the item passes `limits.itemTokens` | the lead finishes the running task, then blocks the item |
+
+## The skills
+
+- `pipeline-intake`: a request in any wording becomes an item and a spec; at most one question, never a build.
+- `pipeline-run`: one item from pick to merge, with the brief templates, the ledger and one line per turn; resumes from the ledger's `resume` block after a restart.
+- `pipeline-rules`: loaded in every session of a project with a pipeline; where the files are, who writes them, the reply shape.
+- `pipeline-migrate`: moves a project that runs its own process onto the pipeline in one session.
+
+## The panel and the progress bar
+
+In the desktop app a panel shows the status block live: the active item with its task counter, the running agents with what each is doing in words and its minutes, open signals, the queue, blocked and inbox items, and what merged. It opens the first time a session starts in a project with a pipeline and when a subagent starts (`autoOpen` setting; `never` leaves it to `/pipeline panel`). While an item is building, a bar above the prompt counts accepted tasks over the total, with the running agent and its minutes. In a terminal the bar is text and `/pipeline status` is the panel; nothing is only in the panel.
+
+## Migration
+
+`/pipeline migrate` reads the project's `CLAUDE.md` files, `docs/backlog.md`, `docs/WORKFLOW.md`, `docs/SLICES.md`, the files `CLAUDE.md` links as a queue or ledger, the superpowers specs and plans, every `.superpowers/sdd/**/progress.md`, the project skills, the Makefile, the package scripts, the CI workflows and the branches, and drafts the config with the source of every key, the `rules.md` lines by group, one item per queue entry (`merged` when the queue proves it, `parked` for what it marks later, otherwise `inbox` marked unverified) and a `building` item per open `feat/*` branch with a ledger. It asks one question, for corrections, then writes the files, prepends a Historical line to the old queue and ledgers, and lists the bulk of merged increments under `.superpowers/sdd/` (briefs, reports, logs, screenshots) to remove with `git rm`; `retain.superpowers: true` keeps it. The lead then retires the workflow prose in `CLAUDE.md` to one paragraph and deletes skills that only restated dispatch rules. A second `migrate` refreshes titles, sources and links and changes no status.
+
+## Install
+
+Needs Claude Code v2.1.287 or later, for mods; `claude --version` shows yours and `claude update` updates it. Tested on v2.1.318. The mod API is early access: an engine release may rename an event, and this note names the version it was tested on. The run skill calls [superpowers](https://github.com/obra/superpowers) for plans and the subagent loop; neither board nor superpowers-flow is needed.
+
+At the prompt of a terminal session:
+
+```
+/plugin install pipeline --marketplace koderi-dp/claude-plugins
+```
+
+From a shell:
+
+```bash
+claude plugin install pipeline --marketplace koderi-dp/claude-plugins
+```
+
+In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
+
+## Update
+
+```bash
+claude plugin marketplace update code101-plugins
+claude plugin update pipeline@code101-plugins
+```
+
+Then start a new session (or run `/reload-plugins`). `claude plugin list` shows the installed version.
+
+## Limits
+
+- The mod API cannot delete files: `clean` and `migrate` list what may go, and the lead removes it with `git rm` and commits. Every write is a plain file write; the API has no rename.
+- A blocked item is resumed with `/pipeline run <id>`: the lead reads the note and your answer, sets the status back and continues from the ledger.
+- The branch is pushed at every accepted task, so a lost worktree costs at most the running task.
+- The live file is per machine: agents on another machine are not watched from this one; the backlog travels with git.
+- A `backlog.json`, config or ledger that does not parse is never overwritten: the tool refuses with the line, and the status block shows it.
+- One item at a time. The worktree-per-item layout leaves room for parallel items later.
+- No GitHub issues or external tracker.
+
+## What it contains
+
+| Part | Name |
+| --- | --- |
+| Skills | `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
+| Templates | `templates/spec.md`, `implementer.md`, `reviewer.md`, `fix.md`, `final.md` |
+| Tool | `mcp__pipeline__pipeline` |
+| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the panel, the bar, the live file; with `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `migrate.ts`, `clean.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |
+| Tests | `claude plugin test plugins/pipeline` |
+
+License: MIT.

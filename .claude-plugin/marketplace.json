@@ -34,6 +34,11 @@
       "name": "board",
       "source": "./plugins/board",
       "description": "A panel of this session's tasks, subagents (what each is doing, in words) and sibling sessions, plus a project board of milestones and tasks Claude keeps in docs/superpowers/board.json."
+    },
+    {
+      "name": "pipeline",
+      "source": "./plugins/pipeline",
+      "description": "Owns a project's workflow: a structured backlog in docs/pipeline, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel."
     }
   ]
 }
