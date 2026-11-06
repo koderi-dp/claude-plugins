@@ -1110,7 +1110,18 @@ const ID = /^[a-z][a-z0-9-]*$/i
 async function runCommand($: EngineInterface, args: string): Promise<CommandAnswer> {
   const [sub = '', ...rest] = args.trim().split(/\s+/).filter(Boolean)
   const arg = rest.join(' ')
-  const prompt = (text: string, context: string): CommandAnswer => ({ text, context: [context] })
+  // The engine refuses a submit from inside the command's own hook (it would wait on
+  // the turn the hook holds), so the submit goes out from a timer once this hook is done.
+  const prompt = (text: string, instruction: string): CommandAnswer => {
+    $.clock.after(50, async () => {
+      try {
+        await $.prompt.submit({ text: instruction })
+      } catch (err) {
+        $.ui.toast(`pipeline: could not start the step: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })
+    return { text }
+  }
   switch (sub) {
     case 'status':
       return { text: await runTool($, { action: 'status', ...(arg ? { id: arg } : {}) }) }

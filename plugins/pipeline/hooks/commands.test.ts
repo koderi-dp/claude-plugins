@@ -16,7 +16,7 @@ type Entry = { name: string; kind: 'file' | 'dir' | 'other'; size: number; mtime
 
 /** A main checkout at /p/main, files in memory; `fs.list` answers from the file map's paths. */
 function world(on: On, seed: Record<string, string> = {}) {
-  mock.clock(on, { now: NOW })
+  clock = mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
   const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
@@ -53,11 +53,23 @@ function world(on: On, seed: Record<string, string> = {}) {
   on('ui.close', () => ({ value: undefined }))
   on('ui.panes', () => ({ value: [] }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
-  return { files, writes }
+  const submitted: string[] = []
+  on('prompt.submit', (_$, e) => {
+    submitted.push(e.text)
+    return { text: e.text } as never
+  })
+  return { files, writes, submitted }
 }
 
 type Answer = { text?: string; context?: readonly string[] }
-const run = async ($: { command: { run: (e: never) => Promise<unknown> } }, args: string) => (await $.command.run({ command: 'pipeline', args, origin: { kind: 'composer' } } as never)) as Answer
+// A prompt the command submits goes out from a timer after the hook returns; the mock clock runs it.
+let clock: { advance: (ms: number) => Promise<void> } | null = null
+const run = async ($: { command: { run: (e: never) => Promise<unknown> } }, args: string) => {
+  const answer = (await $.command.run({ command: 'pipeline', args, origin: { kind: 'composer' } } as never)) as Answer
+  if (clock) await clock.advance(100)
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  return answer
+}
 const call = async ($: { tool: { call: (e: never) => Promise<unknown> } }, input: Record<string, unknown>) => String(((await $.tool.call({ tool: TOOL, ...input } as never)) as { result: unknown }).result)
 
 const item = (id: string, title: string, status: string, extra: Record<string, unknown> = {}) => ({ id, title, status, size: 'M', updatedAt: '2026-11-05T09:00:00Z', ...extra })
@@ -113,41 +125,49 @@ test('/pipeline config with a config that does not parse names the line and writ
   expect(writes).toEqual([])
 })
 
-test('the prompts: each names its skill and its first tool call', async ($, on) => {
-  world(on, { [CONFIG]: VALID_CONFIG })
+test('the prompts: each submits a turn that names its skill and its first tool call', async ($, on) => {
+  const { submitted } = world(on, { [CONFIG]: VALID_CONFIG })
+  const last = () => submitted[submitted.length - 1] ?? ''
   const add = await run($, 'add csv export of catalogs')
   expect(add.text).toContain('intake')
-  expect(add.context).toHaveLength(1)
-  expect(add.context![0]).toContain('pipeline-intake')
-  expect(add.context![0]).toContain('"csv export of catalogs"')
-  expect(add.context![0]).toContain(`${TOOL} {"action":"get"}`)
-  expect((await run($, 'add')).context).toBeUndefined()
+  expect(add.context).toBeUndefined()
+  expect(submitted).toHaveLength(1)
+  expect(last()).toContain('pipeline-intake')
+  expect(last()).toContain('"csv export of catalogs"')
+  expect(last()).toContain(`${TOOL} {"action":"get"}`)
+  await run($, 'add')
+  expect(submitted).toHaveLength(1)
 
-  const next = await run($, 'next')
-  expect(next.context![0]).toContain('pipeline-run')
-  expect(next.context![0]).toContain('run the first ready item')
-  expect((await run($, 'run p12')).context![0]).toContain('run item p12')
-  expect((await run($, 'run all')).context![0]).toContain('until none is left')
-  expect((await run($, 'run')).context).toBeUndefined()
-  expect((await run($, 'migrate')).context![0]).toContain('pipeline-migrate')
-  expect((await run($, 'migrate')).context![0]).toContain(`${TOOL} {"action":"migrate"}`)
-  const init = await run($, 'init')
-  expect(init.context![0]).toContain(`${TOOL} {"action":"init"}`)
-  expect(init.context![0]).toContain('pipeline-migrate')
-  const stop = await run($, 'stop')
-  expect(stop.context![0]).toContain('pipeline-run')
-  expect(stop.context![0]).toMatch(/Finish the task that is running/)
-  expect(stop.context![0]).toMatch(/branch pushed and the ledger current/)
-  expect(stop.context![0]).toContain('"resume"')
-  const clean = await run($, 'clean')
-  expect(clean.context![0]).toContain(`${TOOL} {"action":"clean"}`)
-  expect(clean.context![0]).toContain('git rm -r')
-  expect(clean.context![0]).toContain('mainBranch')
-  expect((await run($, 'move p3 top')).context![0]).toContain('{"action":"move","id":"p3","to":"top"}')
-  expect((await run($, 'move p3 after p5')).context![0]).toContain('{"action":"move","id":"p3","to":{"after":"p5"}}')
+  await run($, 'next')
+  expect(last()).toContain('pipeline-run')
+  expect(last()).toContain('run the first ready item')
+  await run($, 'run p12')
+  expect(last()).toContain('run item p12')
+  await run($, 'run all')
+  expect(last()).toContain('until none is left')
+  const before = submitted.length
+  await run($, 'run')
+  expect(submitted).toHaveLength(before)
+  await run($, 'migrate')
+  expect(last()).toContain('pipeline-migrate')
+  expect(last()).toContain(`${TOOL} {"action":"migrate"}`)
+  await run($, 'init')
+  expect(last()).toContain(`${TOOL} {"action":"init"}`)
+  expect(last()).toContain('pipeline-migrate')
+  await run($, 'stop')
+  expect(last()).toContain('pipeline-run')
+  expect(last()).toMatch(/Finish the task that is running/)
+  expect(last()).toMatch(/branch pushed and the ledger current/)
+  expect(last()).toContain('"resume"')
+  await run($, 'clean')
+  expect(last()).toContain(`${TOOL} {"action":"clean"}`)
+  expect(last()).toContain('git rm -r')
+  expect(last()).toContain('mainBranch')
+  expect((await (async () => { await run($, 'move p3 top'); return last() })())).toContain('{"action":"move","id":"p3","to":"top"}')
+  expect((await (async () => { await run($, 'move p3 after p5'); return last() })())).toContain('{"action":"move","id":"p3","to":{"after":"p5"}}')
   expect((await run($, 'move p3')).context).toBeUndefined()
-  expect((await run($, 'park p3')).context![0]).toContain('{"action":"park","id":"p3"}')
-  expect((await run($, 'unpark p3')).context![0]).toContain('{"action":"unpark","id":"p3"}')
+  expect((await (async () => { await run($, 'park p3'); return last() })())).toContain('{"action":"park","id":"p3"}')
+  expect((await (async () => { await run($, 'unpark p3'); return last() })())).toContain('{"action":"unpark","id":"p3"}')
   expect((await run($, 'park')).context).toBeUndefined()
   expect((await run($, 'dance')).text).toMatch(/^pipeline: status \[id\] \| panel \| config/)
   expect((await run($, '')).text).toMatch(/^pipeline: status/)
