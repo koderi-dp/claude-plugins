@@ -741,7 +741,8 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
 
   // The Historical line, once, on the old queue and ledger files.
   const { listing, increments } = await scanProject($, found)
-  const old = ['docs/backlog.md', 'docs/SLICES.md', ...listing.filter(f => /^\.superpowers\/sdd\/.*\/(?:progress\.md|final-review[^/]*\.md)$/.test(f))]
+  // The old queue, the top-level ledger and its archive, and every nested progress.md and final review.
+  const old = ['docs/backlog.md', 'docs/SLICES.md', ...listing.filter(f => /^\.superpowers\/sdd\/(?:.*\/)?(?:progress\.md|progress-archive\.md|final-review[^/]*\.md)$/.test(f))]
   let added = 0
   for (const f of old) {
     const text = await readText($, `${found}/${f}`)

@@ -118,7 +118,7 @@ export function findSources(listing: string[], claudeMd: string): string[] {
   }
   addMatching(p => /^docs\/superpowers\/specs\/[^/]+$/.test(p))
   addMatching(p => /^docs\/superpowers\/plans\/[^/]+$/.test(p))
-  addMatching(p => /^\.superpowers\/sdd\/(?:.*\/)?progress\.md$/.test(p))
+  addMatching(p => /^\.superpowers\/sdd\/(?:.*\/)?progress(?:-archive)?\.md$/.test(p))
   addMatching(p => /^docs\/superpowers\/ledgers\/[^/]+$/.test(p))
   addMatching(p => /^\.claude\/skills\/[^/]+\/SKILL\.md$/.test(p))
   add('Makefile')

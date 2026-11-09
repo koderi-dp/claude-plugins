@@ -440,7 +440,7 @@ test('renderRulesMd numbers the lines under one heading per group, each ending w
 test('findSources picks only present files, in the order of the spec', () => {
   const listing = [
     './CLAUDE.md', 'apps/web/CLAUDE.md', 'docs/backlog.md', 'docs/superpowers/specs/a.md', 'docs/superpowers/plans/b.md',
-    '.superpowers/sdd/progress.md', '.superpowers/sdd/2026-11-03-slice/progress.md', '.superpowers/sdd/final-review.md',
+    '.superpowers/sdd/progress.md', '.superpowers/sdd/progress-archive.md', '.superpowers/sdd/2026-11-03-slice/progress.md', '.superpowers/sdd/final-review.md',
     '.claude/skills/agent-dispatch/SKILL.md', '.claude/skills/x/notes.md', 'package.json', '.github/workflows/ci.yml',
     'docs/storage.md', 'src/index.ts', 'README.md',
   ]
@@ -454,10 +454,12 @@ test('findSources picks only present files, in the order of the spec', () => {
   expect(findSources(listing, claudeMd)).toEqual([
     'CLAUDE.md', 'apps/web/CLAUDE.md', 'docs/backlog.md', '.superpowers/sdd/progress.md',
     'docs/superpowers/specs/a.md', 'docs/superpowers/plans/b.md',
-    '.superpowers/sdd/2026-11-03-slice/progress.md',
+    '.superpowers/sdd/progress-archive.md', '.superpowers/sdd/2026-11-03-slice/progress.md',
     '.claude/skills/agent-dispatch/SKILL.md', 'package.json', '.github/workflows/ci.yml',
   ])
   expect(findSources([], '')).toEqual([])
+  // The top-level ledger and its archive are sources without a link from CLAUDE.md too.
+  expect(findSources(['.superpowers/sdd/progress-archive.md', '.superpowers/sdd/progress.md'], '')).toEqual(['.superpowers/sdd/progress-archive.md', '.superpowers/sdd/progress.md'])
 })
 
 // Active items

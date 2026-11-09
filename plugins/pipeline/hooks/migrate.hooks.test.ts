@@ -111,6 +111,8 @@ const EXPORT_LEDGER = [
 ].join('\n')
 
 const SDD = `${MAIN}/.superpowers/sdd`
+const TOP_LEDGER = '# Progress ledger\n\nCurrent entries are in the increment folders; the archive holds the rest.\n'
+const ARCHIVE = '# Progress archive\n\n## Historical status — catalog builder core merged — 2026-11-01\n'
 
 /** The catalo-like tree: CLAUDE.md links the queue, package.json has scripts, one merged and one open increment, two branches. */
 const TREE: Record<string, string> = {
@@ -119,6 +121,8 @@ const TREE: Record<string, string> = {
   [`${MAIN}/docs/backlog.md`]: BACKLOG_MD,
   [`${MAIN}/docs/superpowers/plans/2026-11-01-search.md`]: '# Search plan\n',
   [`${MAIN}/docs/superpowers/plans/2026-11-03-export.md`]: '# Export plan\n',
+  [`${SDD}/progress.md`]: TOP_LEDGER,
+  [`${SDD}/progress-archive.md`]: ARCHIVE,
   [`${SDD}/2026-11-01-search/progress.md`]: SEARCH_LEDGER,
   [`${SDD}/2026-11-01-search/task-1-brief.md`]: 'brief\n',
   [`${SDD}/2026-11-01-search/logs/task-1.log`]: 'log\n',
@@ -142,6 +146,8 @@ test('migrate drafts the config with sources, the items, the rules, the active i
     'docs/backlog.md',
     'docs/superpowers/plans/2026-11-01-search.md',
     'docs/superpowers/plans/2026-11-03-export.md',
+    '.superpowers/sdd/progress.md',
+    '.superpowers/sdd/progress-archive.md',
     '.superpowers/sdd/2026-11-01-search/progress.md',
     '.superpowers/sdd/2026-11-03-export/progress.md',
     'package.json',
@@ -221,7 +227,7 @@ test('migrate-apply writes the four files, the ledger of the building item, maps
   const r = text(await call($, { action: 'migrate-apply', config: d.config, items, rules: d.rules }))
   expect(r.startsWith('pipeline: 6 items · 2 ready')).toBe(true)
   expect(r).toContain('\nspec stubs written for 4 items\n')
-  expect(r).toContain('\nhistorical line added to 4 files\n')
+  expect(r).toContain('\nhistorical line added to 6 files\n')
   expect(r).toContain('bulk: 2 files of merged increments to remove')
   expect(r.endsWith('\n.superpowers/sdd/2026-11-01-search/task-1-brief.md\n.superpowers/sdd/2026-11-01-search/logs/task-1.log')).toBe(true)
 
@@ -262,6 +268,9 @@ test('migrate-apply writes the four files, the ledger of the building item, maps
   expect(files.get(`${SDD}/2026-11-01-search/final-review.md`)).toBe(`${line}\n\nfinal\n`)
   expect(files.get(`${SDD}/2026-11-01-search/progress.md`)).toBe(`${line}\n\n${SEARCH_LEDGER}`)
   expect(files.get(`${SDD}/2026-11-03-export/progress.md`)).toBe(`${line}\n\n${EXPORT_LEDGER}`)
+  // The top-level ledger and its archive too, not only the nested progress.md files.
+  expect(files.get(`${SDD}/progress.md`)).toBe(`${line}\n\n${TOP_LEDGER}`)
+  expect(files.get(`${SDD}/progress-archive.md`)).toBe(`${line}\n\n${ARCHIVE}`)
   expect(files.get(`${SDD}/2026-11-01-search/logs/task-1.log`)).toBe('log\n')
   expect(files.get(`${MAIN}/docs/superpowers/plans/2026-11-01-search.md`)).toBe('# Search plan\n')
   expect(files.has(`${SDD}/2026-11-01-search/task-1-brief.md`)).toBe(true)
@@ -352,6 +361,8 @@ test('a second apply is refused without refresh; with refresh it changes no stat
   // Exactly one historical line.
   expect(files.get(`${MAIN}/docs/backlog.md`)!.split('Historical.').length).toBe(2)
   expect(files.get(`${SDD}/2026-11-03-export/progress.md`)!.split('Historical.').length).toBe(2)
+  expect(files.get(`${SDD}/progress.md`)!.split('Historical.').length).toBe(2)
+  expect(files.get(`${SDD}/progress-archive.md`)!.split('Historical.').length).toBe(2)
   // The ledger of the building item is not written twice, and its link stays the tool's own.
   expect(writes.filter(w => w === `${DIR}/ledgers/p4.json`).length).toBe(1)
   expect(after.items[3]).toMatchObject({ id: 'p4', status: 'building', ledger: 'docs/pipeline/ledgers/p4.json' })
