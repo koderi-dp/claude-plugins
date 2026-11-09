@@ -690,3 +690,23 @@ test('a risky diff gets its review with the matched path; a project template rep
   expect(buildLedger(files).tasks[0]!.dispatches[0]).toMatchObject({ role: 'reviewer', risky: 'db/schema.sql' })
   expect(text(await call($, { action: 'brief', item: 'p1', kind: 'review', task: 1, commits: 'b..c', findings: 'the fix commit' }))).toContain('task 1/2 · review 2 ·')
 })
+
+test('several sessions on one repository: the active item is the one this session works on, not the first in the backlog', async ($, on) => {
+  const { state } = world(on, {
+    [CONFIG]: VALID_CONFIG,
+    [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'Sections', status: 'building' }, { id: 'p2', title: 'Themes', status: 'ready' }] }),
+    [`${DIR}/specs/p2.md`]: '## What\n\nx\n',
+  })
+  const active = async () => (JSON.parse(text(await call($, { action: 'get' }))) as { active: { id: string } | null }).active?.id
+  // Nothing says whose p1 is: the first active item, as before.
+  expect(await active()).toBe('p1')
+  // This session starts p2: p2 is its item from then on, in get and in its live entry.
+  await call($, { action: 'update', id: 'p2', set: { status: 'planning' } })
+  expect(await active()).toBe('p2')
+  await call($, { action: 'ledger', item: 'p2', set: { resume: { task: 1, state: 'planned' } } })
+  const got = JSON.parse(text(await call($, { action: 'get' }))) as { active: { id: string }; resume: { state: string } }
+  expect(got.active.id).toBe('p2')
+  expect(got.resume.state).toBe('planned')
+  expect(text(await call($, { action: 'status' }))).toContain('p1')
+  void state
+})

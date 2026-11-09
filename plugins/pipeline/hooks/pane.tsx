@@ -79,8 +79,8 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
 /** The active item's line for the band: `p12 · Export · task 3/6`. */
-export function activeTitle(d: Pick<StatusInput, 'backlog' | 'ledger'>): string {
-  const active = d.backlog?.items.find(i => ACTIVE.includes(i.status))
+export function activeTitle(d: Pick<StatusInput, 'backlog' | 'ledger' | 'activeId'>): string {
+  const active = d.activeId !== undefined ? d.backlog?.items.find(i => i.id === d.activeId) : d.backlog?.items.find(i => ACTIVE.includes(i.status))
   if (!active) return ''
   const own = d.ledger && d.ledger.item === active.id ? d.ledger : null
   return line([active.id, displayTitle(active.title), taskCounter(own)])
@@ -340,7 +340,7 @@ function card(u: Desk, rows: Element[]): Element {
 /** One view: the running dashboard while an item is in flight, the idle summary otherwise. */
 function renderOverview(u: Desk, d: PanelInput, W: number): Element {
   const items = d.backlog?.items ?? []
-  const active = items.find(i => ACTIVE.includes(i.status)) ?? null
+  const active = (d.activeId !== undefined ? items.find(i => i.id === d.activeId && ACTIVE.includes(i.status)) : items.find(i => ACTIVE.includes(i.status))) ?? null
   return active ? renderRunning(u, d, W, active) : renderIdle(u, d, W)
 }
 

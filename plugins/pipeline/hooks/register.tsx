@@ -225,6 +225,8 @@ const self = {
   lastFetch: -Infinity,
   mergedPending: [] as MergedPending[],
   // The items this session was named after, so an item renames it once, and the name waiting for the turn's end.
+  // The item this session runs: the last one it started, planned, briefed or wrote a ledger for.
+  item: '',
   renamed: new Set<string>(),
   pendingRename: '',
   // The running child processes by item: the stream whose end kills the child, the unread tail of a line, the log throttle.
@@ -396,8 +398,9 @@ async function loadLedger($: EngineInterface, found: string, id: string): Promis
 
 /** Everything the status text and the panel draw from, for the files as given. */
 async function gather($: EngineInterface, found: string, c: Config | null, b: Backlog | null, error: string | null): Promise<StatusInput> {
-  const active = b?.items.find(i => i.status === 'planning' || i.status === 'building' || i.status === 'review') ?? null
+  const active = await activeItem($, b)
   return {
+    activeId: active?.id ?? null,
     config: c,
     backlog: b,
     readiness: b ? await judgeAll($, found, b) : {},
@@ -561,7 +564,7 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     const r = loaded ? await judgeAll($, found, loaded) : {}
     const open = (await read($, signals)).filter(s => !s.delivered)
     // The active item is the one in planning, building or review; resume is null until its ledger has the block.
-    const active = activeItem(loaded)
+    const active = await activeItem($, loaded)
     const ledger = active ? await loadLedger($, found, active.id) : null
     // A child's record without its log (up to 200 KB each): `log { item }` answers the text.
     const kids = (await read($, children)).map(({ log: _log, ...rest }) => rest)
@@ -1323,13 +1326,37 @@ async function branchOf($: EngineInterface): Promise<string | undefined> {
   }
 }
 
-const activeItem = (b: Backlog | null): Item | null => b?.items.find(i => (ACTIVE_STATUSES as readonly string[]).includes(i.status)) ?? null
+/**
+ * The active item of this session, with several sessions on one repository each running their own: the item this
+ * session last worked on through the tool; else the one whose worktree or branch this session is in; else one a
+ * child of this session runs; else the first active item no other live session claims. Null when every active item
+ * is another session's.
+ */
+async function activeItem($: EngineInterface, b: Backlog | null): Promise<Item | null> {
+  const actives = (b?.items ?? []).filter(i => (ACTIVE_STATUSES as readonly string[]).includes(i.status))
+  if (!actives.length) return null
+  const mine = actives.find(i => i.id === self.item)
+  if (mine) return mine
+  try {
+    const name = /\/\.claude\/worktrees\/([^/]+)/.exec(`${slashes(await $.session.cwd())}/`)?.[1]
+    const inTree = name ? actives.find(i => i.id === name) : undefined
+    if (inTree) return inTree
+  } catch {}
+  const branch = await branchOf($)
+  const onBranch = branch ? actives.find(i => i.branch === branch) : undefined
+  if (onBranch) return onBranch
+  const kids = new Set((await read($, children)).map(ch => ch.item))
+  const ofChild = actives.find(i => kids.has(i.id))
+  if (ofChild) return ofChild
+  const claimed = new Set((await read($, siblings)).filter(x => !x.isStale && x.item).map(x => x.item))
+  return actives.find(i => !claimed.has(i.id)) ?? null
+}
 
 /** This session's live entry: the active item, the running agents and every signal of this session. */
 async function entryOf($: EngineInterface, previous: LiveEntry | undefined, at: number): Promise<LiveEntry> {
   const nowIso = new Date(at).toISOString()
   if (!self.startedAt) self.startedAt = nowIso
-  const active = activeItem(await read($, backlog))
+  const active = await activeItem($, await read($, backlog))
   // An item a child session runs, or ran, is the child's: its own entry names it, and a child that exited with the
   // item still building leaves it to the dead signal, not to this session's entry.
   const owned = new Set((await read($, children)).map(ch => ch.item))
@@ -1689,7 +1716,12 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: TOOL }, async ($, e) => {
     if (e.agentId) return { result: 'ignored: subagents do not write the pipeline' }
     try {
-      return { result: await runTool($, e as unknown as ToolInput) }
+      const input = e as unknown as ToolInput
+      const result = await runTool($, input)
+      // The lead's own work on an item makes it this session's: the panel, the band and `get` follow it.
+      const worked = input.action === 'ledger' || input.action === 'plan' || input.action === 'brief' ? (typeof input.item === 'string' ? input.item : input.item?.id ?? input.id) : input.action === 'update' && ['planning', 'building'].includes(String((input.set as Partial<Item> | undefined)?.status)) ? input.id : undefined
+      if (worked && !(await read($, children)).some(ch => ch.item === worked)) self.item = worked
+      return { result }
     } catch (err) {
       return { result: `refused: ${err instanceof Error ? err.message : String(err)}` }
     }
@@ -1984,7 +2016,7 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
     children: kids,
     siblings: await read($, siblings),
     ledgers,
-    activeLine: await specLine($, found, activeItem(b)),
+    activeLine: await specLine($, found, await activeItem($, b)),
     limitMs: limitsOf(c).taskMinutes * 60_000,
     fixRounds: limitsOf(c).fixRounds,
     taskReview: c ? normalizeConfig(c).config.taskReview : DEFAULTS.taskReview,
@@ -2022,7 +2054,7 @@ const bandHold = { item: '', sawIdle: false }
  */
 async function bandNow($: EngineInterface, isWorking: boolean): Promise<Band | null> {
   const b = await read($, backlog)
-  let item = activeItem(b)
+  let item = await activeItem($, b)
   if (item) {
     bandHold.item = item.id
     bandHold.sawIdle = false
