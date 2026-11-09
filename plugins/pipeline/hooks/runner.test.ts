@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Backlog, ChildSession, Item, LiveEntry } from '../types'
-import { ALLOWED_MODES, LOG_CAP, LOG_KEEP, appendOutput, branchOf, childArgv, childPrompt, childSignals, exitNote, parseChildLine, runningOf, startable, tail, withExit, withStopped, worktreeOf } from './runner'
+import { ALLOWED_MODES, CHILD_SYSTEM, LOG_CAP, LOG_KEEP, appendOutput, branchOf, childArgv, childPrompt, childSignals, exitNote, parseChildLine, runningOf, startable, tail, withExit, withStopped, worktreeOf } from './runner'
 import { STALE_MS } from './watch'
 
 const T0 = Date.parse('2026-11-09T10:00:00Z')
@@ -37,7 +37,7 @@ test('childPrompt names the item, the run skill, the subagent runner, the worktr
   expect(p).toContain('runner subagent')
   expect(p).toContain('this directory')
   expect(p).toMatch(/already .*building/)
-  expect(p).toContain('mcp__pipeline__pipeline {"action":"get"}')
+  expect(p).toContain('mcp__pipeline__pipeline {"action":"begin","item":"p12"}')
   expect(p).not.toMatch(/EnterWorktree(?!.*(?:not|never|skip))/i)
   expect(childPrompt('p12', { isResume: true })).toContain('Resume')
 })
@@ -127,4 +127,10 @@ test('worktreeOf and branchOf', () => {
   expect(branchOf('feat/<id>', 'p12')).toBe('feat/p12')
   expect(branchOf('pipeline/<id>-x', 'p12')).toBe('pipeline/p12-x')
   expect(branchOf('plain', 'p12')).toBe('plain/p12')
+})
+
+test('0.3.2: a child is told in its system prompt to write nothing between tool calls', () => {
+  const argv = childArgv({ prompt: 'x', permissionMode: 'auto' })
+  expect(argv[argv.indexOf('--append-system-prompt') + 1]).toBe(CHILD_SYSTEM)
+  expect(CHILD_SYSTEM).toContain('Write no text between tool calls')
 })

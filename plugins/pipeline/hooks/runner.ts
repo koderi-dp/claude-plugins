@@ -25,19 +25,22 @@ export type ChildArgvInput = { prompt: string; permissionMode: string; sessionId
  * chose, so the child's live entry is found by it. No plugin flag: a child started on the same machine loads
  * the installed plugins as the parent did.
  */
+/** Appended to a child's system prompt: nobody reads a headless run as it goes, and every word between calls is paid for. */
+export const CHILD_SYSTEM = 'This is a headless run nobody watches live. Write no text between tool calls: after a tool result, the next thing you emit is the next tool call. Your only text is the one closing line the pipeline-run skill asks for.'
+
 export function childArgv({ prompt, permissionMode, sessionId, name }: ChildArgvInput): string[] {
-  return ['claude', '-p', prompt, '--permission-mode', permissionMode, '--permission-prompts', 'none', '--output-format', 'stream-json', '--verbose', ...(sessionId ? ['--session-id', sessionId] : []), ...(name ? ['--name', name] : [])]
+  return ['claude', '-p', prompt, '--permission-mode', permissionMode, '--permission-prompts', 'none', '--output-format', 'stream-json', '--verbose', '--append-system-prompt', CHILD_SYSTEM, ...(sessionId ? ['--session-id', sessionId] : []), ...(name ? ['--name', name] : [])]
 }
 
 /** What the child is told: the item, the skill, that the parent already set the status and made the worktree it runs in. */
 export function childPrompt(item: string, options: { isResume?: boolean } = {}): string {
   const head = options.isResume
-    ? `Resume item ${item} with the pipeline-run skill (its Resume section), runner subagent, from where its ledger's resume block says to merge.`
-    : `Run item ${item} with the pipeline-run skill, runner subagent, from pick to merge.`
+    ? `Resume item ${item} with the pipeline-run skill (its resume.md), as runner subagent whatever the config says, from where its ledger's resume block says to merge.`
+    : `Run item ${item} with the pipeline-run skill, as runner subagent whatever the config says, from begin to merge.`
   return (
     `${head} The worktree is this directory, on the item's branch: never run EnterWorktree, never create another worktree, never change directory. ` +
-    `The session runner already set ${item} to building (its note says so), so skip the pick's status change and worktree step and continue with the ledger call that records the branch and worktree, then the plan. ` +
-    `First tool call: ${TOOL} {"action":"get"}. Answer one line per turn; a stop condition sets the item blocked with the reason and ends this run.`
+    `The session runner already set ${item} to building (its note says so). ` +
+    `First tool call: ${TOOL} {"action":"begin","item":"${item}"}, which answers where the item stands; then the plan, or the resume it names. Answer one line per turn; a stop condition sets the item blocked with the reason and ends this run.`
   )
 }
 

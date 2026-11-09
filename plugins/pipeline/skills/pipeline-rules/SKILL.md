@@ -11,7 +11,7 @@ This project runs on the pipeline plugin. The files live under `docs/pipeline/`.
 - `rules.md`: process rules the config cannot express, numbered, grouped by when they apply (`before dispatch`, `in every implementer brief`, `in every reviewer brief`, `before the PR`, `after merge`). The run skill pastes each group into the brief or step it names. Keep it under about 40 lines; delete a rule nobody needs.
 - `backlog.json`: the items and their status; array order is priority. `BACKLOG.md` is its generated view, never edited.
 - `specs/<id>.md` and `plans/<id>.md`: one spec and one plan per item, ordinary files you write with Write.
-- `ledgers/<id>.json`: the item's record; `ledgers/<id>/`: briefs and reports for the record.
+- `ledgers/<id>.json`: the item's record; `ledgers/<id>/`: briefs and reports for the record. The tool renders every brief (`brief`) and checks the plan (`plan`); the lead writes neither a brief nor a ledger task list by hand.
 
 ## Rules
 

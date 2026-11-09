@@ -479,6 +479,6 @@ test('attemptsOf: a dispatch without a result is the running one, drawn as in pr
   const lines = attemptsOf(task, 2).map(attemptText)
   expect(lines[0]).toMatch(/^Build · .* ✓$/)
   expect(lines[1]).toContain('FIX REQUIRED')
-  expect(lines[2]).toBe(`Fix 1 of 2 · ${lines[2].split(' · ')[1]} · in progress`)
+  expect(lines[2]).toBe(`Fix 1 of 2 · ${lines[2]!.split(' · ')[1]} · in progress`)
   expect(lines[2]).not.toContain('✓')
 })

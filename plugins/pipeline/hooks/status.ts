@@ -6,6 +6,8 @@ import type { MergedPending } from './merged'
 import { mergedLine } from './merged'
 
 export type StatusInput = {
+  /** The item this session runs, when the caller knows it; without it the first active item counts. */
+  activeId?: string | null
   config: Config | null
   backlog: Backlog | null
   readiness: Record<string, Readiness>

@@ -4,7 +4,7 @@ import type { Dispatch, Final, Item, Ledger, Resume, Ruling, TaskRecord } from '
 
 /** What a `ledger` call may carry: every field optional, task entries partial and merged by `n`, rulings unnumbered. */
 export type LedgerSet = {
-  tasks?: Array<Partial<TaskRecord> & { n: number }>
+  tasks?: Array<Partial<TaskRecord> & { n: number; close?: Partial<Dispatch> }>
   rulings?: Array<Omit<Ruling, 'n'> & { n?: number }>
   resume?: Omit<Resume, 'at'> & { at?: string }
   final?: Final | null
@@ -31,16 +31,31 @@ export function totalTokens(ledger: Pick<Ledger, 'tasks' | 'final'>): number {
   return dispatched + (Number(ledger.final?.tokens) || 0)
 }
 
-function mergeTask(current: TaskRecord | undefined, set: Partial<TaskRecord> & { n: number }): TaskRecord {
-  const { dispatches, ...rest } = set
+/** Whether a dispatch is still running: opened by a `brief` call, with no result and no minutes yet. */
+export const isOpenDispatch = (d: Partial<Dispatch>): boolean => !(d.result ?? '').trim() && !(d.minutes ?? 0)
+
+function mergeTask(current: TaskRecord | undefined, set: Partial<TaskRecord> & { n: number; close?: Partial<Dispatch> }): TaskRecord {
+  const { dispatches, close, ...rest } = set
   const base: TaskRecord = current ?? { n: set.n, title: '', status: 'pending', dispatches: [] }
-  return { ...base, ...rest, dispatches: [...(base.dispatches ?? []), ...((dispatches ?? []) as Dispatch[])] }
+  const list = [...(base.dispatches ?? [])]
+  // `close` ends the dispatch a `brief` call opened: the last open one, else the last one.
+  if (close && typeof close === 'object' && list.length) {
+    let at = list.length - 1
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (isOpenDispatch(list[i]!)) {
+        at = i
+        break
+      }
+    }
+    list[at] = { ...list[at]!, ...close }
+  }
+  return { ...base, ...rest, dispatches: [...list, ...((dispatches ?? []) as Dispatch[])] }
 }
 
 /**
  * `set` merged into `current`, which is left untouched: tasks by `n` with dispatches appended, rulings appended and
  * numbered, `resume` replaced whole (stamped `at: now` when it carries none), `final` replaced, blockers appended without
- * duplicates, `tokens` recomputed, the item id kept, every other field copied over.
+ * duplicates, a task's `close` merged into its open dispatch, `tokens` recomputed, the item id kept, every other field copied over.
  */
 export function mergeLedger(current: Ledger, set: LedgerSet, now: string): Ledger {
   const out: Ledger = structuredClone(current)

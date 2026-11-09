@@ -266,7 +266,7 @@ test('Review Focus 4: start makes the worktree, spawns the child there, marks th
   expect(cwd).toBe(WORKTREE)
   expect(env).toEqual({ PIPELINE_CHILD: '1' })
   expect(argv.slice(0, 2)).toEqual(['claude', '-p'])
-  expect(argv[2]).toContain('Run item p12 with the pipeline-run skill, runner subagent')
+  expect(argv[2]).toContain('Run item p12 with the pipeline-run skill, as runner subagent')
   expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('acceptEdits')
   const sessionId = argv[argv.indexOf('--session-id') + 1]!
   expect(sessionId).toMatch(UUID)

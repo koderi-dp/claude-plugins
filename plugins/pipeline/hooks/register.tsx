@@ -9,6 +9,9 @@ import { cleanList, planOf } from './clean'
 import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
+import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
+import { PLAN_FORMAT } from './templates'
+import type { BriefKind } from './templates'
 import type { LedgerSet } from './ledger'
 import { parseLive, siblingsOf, withEntry, withoutEntry } from './live'
 import { candidates as mergeCandidates, fetchArgv, findMerged, isFetchDue, mergedLine } from './merged'
@@ -21,7 +24,7 @@ import { SEGMENT_COLORS, bandOf, idleLine, sessionName, specWhat, statusText, ta
 import type { Band } from './status'
 import type { StatusInput } from './status'
 import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
-import { STALE_MS, deadAgents, isProtected, mergeSignals, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
+import { STALE_MS, deadAgents, isProtected, mergeSignals, normalizeCommand, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
 import type { Call } from './watch'
 
 const TOOL = 'mcp__pipeline__pipeline'
@@ -29,7 +32,7 @@ const PANE = 'pipeline'
 const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
 const USAGE =
   'pipeline: status [id] | panel | config [key=value] | init | add <text> | next | run <id> | run all | migrate | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
-const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'stop', 'afterMerge', 'retain', 'notify']
+const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers']
 const CONFIG_FILE = 'docs/pipeline/config.json'
 const BACKLOG_FILE = 'docs/pipeline/backlog.json'
 const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
@@ -47,33 +50,24 @@ const ACTIVE_STATUSES = ['planning', 'building', 'review'] as const
 const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', 'review', 'merged', 'blocked', 'parked']
 
 const TOOL_DESCRIPTION =
-  'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
-  '`get` { id?, titles?, full? } → compact JSON { active: { id, title, status, note, spec, plan, branch, worktree } | null, resume, signals, children, siblings, counts, next, config }: the active item (planning, building or review), its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (no log), the other sessions on the repository in short, the count per status (planning counts as building), the first three ready (else inbox) items with the reason, and the config keys a run reads (runner, merge, mergeMethod, checks, limits, riskyPaths, protectedPaths, models, taskReview), plus `mergedPending` [{ id, branch, pr }] when a review item\'s (or a building item with a pr) branch tip is on origin/mainBranch (fetched at most once a minute): its PR was merged by hand and its Close is pending, so the run skill closes it first; with `id` also `item`, that item\'s full record and readiness; with `titles` also `titles`, every item as `<id> <status> <title>`; `full: true` answers the whole { config, backlog, readiness, active, resume, signals, children, siblings } instead, large on a long backlog, never needed during a run; ' +
-  '`signals` → only the open watchdog signals as compact JSON [{ kind, agent, agentId?, detail, at }], marked delivered, or `no signals`: the watchdog check; with a merged PR whose Close is pending it answers { signals, mergedPending } instead; ' +
-  '`status` { id? } → the status block, or one item\'s ledger as text; ' +
-  '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers one line, `added p29 · inbox · no spec` (the status after settling, with the reason an inbox item is not ready); ' +
-  '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title) and answers `p1 · building` (with `set <fields>` for the others); ' +
-  '`move` { id, to: "top" | { after: "<id>" } } → reorders and answers `p3 · moved to the top · ready`; ' +
-  '`remove` { id } → `removed p2 · 70 items left`; `park` { id } → `p2 · parked`; `unpark` { id } → `p2 · ready`; ' +
-  '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
-  '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers one line, `ledger p1 · task 3/6 running · 2 rulings · 674k tokens` (`final approved` once recorded); `status { id }` answers the whole ledger; ' +
-  '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists, and ends with the line to commit docs/pipeline/ on mainBranch now (the tool\'s files are versioned, never gitignored); ' +
-  '`start` { item: "<id>" } (runner session only) → makes the item\'s worktree (.claude/worktrees/<id>, branch from config.branch off mainBranch, reused when there), marks the item building with the note `session runner`, records branch and worktree in its ledger and starts a headless Claude Code child in the worktree in this session\'s permission mode (acceptEdits, auto, dontAsk or bypassPermissions; otherwise refused with what to switch to; refused too past limits.parallel, for an item that is not ready, blocked or building with the note `session runner` and no child, for a building item run in-session, while a child runs it, and from a child session, which starts no children), answering one line with the session id and the log path; the child runs the item with the run skill and leaves the item as it ends it, a non-zero exit blocks it with the code and the log tail; ' +
-  '`stop` { item } → kills the item\'s child session and sets the item blocked with `stopped by the user` unless it had merged; ' +
-  '`log` { item } → the last 60 lines of the child\'s log; ' +
-  '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/ and its local branch as `branch:<name>`, each when it exists), for one merged item or for every merged item; it deletes nothing, the caller removes the paths with git rm -r (git worktree remove for the worktree, git branch -D for a branch: line) and commits; ' +
-  '`migrate` { refresh? } → JSON { sources, config, sourcesOfConfig, items, rules, active, bulk: { files, count }, unsure, report }: reads the project\'s queue, workflow prose, ledgers, scripts and CI and drafts the config, the items, the rules (the queue\'s open decisions among them, as before-dispatch stops) and the active item, writing nothing; refused when config.json exists unless refresh; ' +
-  '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger, a spec stub from the title and note for every inbox or building item without one, so the needs-free ones settle to ready), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of spec stubs, the count of files given the line, the bulk files to git rm and the line to commit docs/pipeline/ on mainBranch; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
-  'Every write re-reads backlog.json, merges, regenerates BACKLOG.md and answers one line; `status` is the way to read the status block; a file that does not parse is refused with its line and left alone.'
+  'The pipeline of this project: backlog, ledgers and the build loop. Main session only; a subagent\'s call is ignored. Every write answers one line. The pipeline-run and pipeline-rules skills say when to call what. Actions: ' +
+  '`get` { id?, titles?, full? } → JSON: the active item of this session, its resume block, open watchdog signals (each delivered once), children, siblings, counts, the next three items, the config keys a run reads, and `mergedPending` (items whose PR was merged by hand; close them first). `signals` → the open signals only. `status` { id? } → the status block, or one item\'s ledger as text. ' +
+  'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set }, `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
+  'Run, in order: `begin` { item } claims the item, makes its worktree and branch, records the base and answers the worktree to enter. `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
+  '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
+  '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. ' +
+  '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?, final?, blockers?, pr?, branch?, worktree?, base? } } merges anything else into the ledger. ' +
+  'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain says may go and deletes nothing. ' +
+  'A file that does not parse is refused with its line and left alone.'
 
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
-      description: 'For add: the new item; it starts as inbox. For ledger, start, stop and log: the item id, as p12.',
+      description: 'For add: the new item. For every other action that takes one: the item id, as p12.',
       properties: {
         title: { type: 'string' },
         size: { type: 'string', enum: ['S', 'M', 'L'] },
@@ -90,6 +84,18 @@ const TOOL_SCHEMA = {
     refresh: { type: 'boolean', description: 'For migrate and migrate-apply: go on although docs/pipeline/ exists; the apply then refreshes titles, sources and links and changes no status.' },
     config: { type: 'object', description: 'For migrate-apply: the corrected config, as migrate drafted it.' },
     items: { type: 'array', description: 'For migrate-apply: the corrected items in queue order (title, status, size, needs, source, spec, plan, pr, note; a building item with branch and resume), as migrate drafted them; needs may name the queue labels.', items: { type: 'object' } },
+    close: { type: 'object', description: 'For brief: closes the dispatch before this one: { tokens, minutes, result }.' },
+    tokens: { type: 'number', description: 'For accept and gate: the tokens of the Agent result.' },
+    minutes: { type: 'number', description: 'For accept: the minutes of the Agent result.' },
+    fact: { type: 'string', description: 'For accept: one line a later implementer must know about working in this repository (a command\'s working spelling, a step that must come first); kept in docs/pipeline/facts.md and given to every brief.' },
+    verdict: { type: 'string', description: 'For accept: how the task was approved. For gate: the final review\'s verdict.' },
+    kind: { type: 'string', enum: ['implementer', 'fix', 'review', 'final'], description: 'For brief: which brief to render.' },
+    task: { type: 'number', description: 'For brief: the task number (not for final).' },
+    findings: { type: 'string', description: 'For brief: the findings, verbatim (required for fix; for a re-review or a second final review, its scope).' },
+    carried: { type: 'string', description: 'For an implementer brief: minor findings carried from the previous task.' },
+    commits: { type: 'string', description: 'For a review brief: the commit range, as <sha>..<sha>.' },
+    attribution: { type: 'string', description: 'For plan or brief: the attribution lines this session was given; kept in the ledger, so once per item is enough.' },
+    escalate: { type: 'boolean', description: 'For an implementer or fix brief: dispatch at config.models.escalate.' },
     rules: { type: 'array', description: 'For migrate-apply: the corrected rules, each { group, line, source }.', items: { type: 'object' } },
   },
   required: ['action'],
@@ -213,6 +219,12 @@ const self = {
   lastFetch: -Infinity,
   mergedPending: [] as MergedPending[],
   // The items this session was named after, so an item renames it once, and the name waiting for the turn's end.
+  // The item this session runs: the last one it started, planned, briefed or wrote a ledger for.
+  item: '',
+  // The lead's own model use since the ledger last recorded it: fresh tokens and the share read from cache.
+  lead: { tokens: 0, cached: 0 },
+  // What a redraw would read from disk again and again, kept for a few seconds.
+  memo: new Map<string, { at: number; ref: unknown; value: unknown }>(),
   renamed: new Set<string>(),
   pendingRename: '',
   // The running child processes by item: the stream whose end kills the child, the unread tail of a line, the log throttle.
@@ -344,6 +356,19 @@ type ToolInput = {
   config?: unknown
   items?: unknown
   rules?: unknown
+  kind?: string
+  task?: number
+  findings?: string
+  carried?: string
+  commits?: string
+  attribution?: string
+  escalate?: boolean
+  close?: { tokens?: number; minutes?: number; result?: string }
+  tokens?: number
+  minutes?: number
+  verdict?: string
+  review?: string
+  fact?: string
 }
 
 class Refused extends Error {}
@@ -376,13 +401,29 @@ async function loadLedger($: EngineInterface, found: string, id: string): Promis
 }
 
 /** Everything the status text and the panel draw from, for the files as given. */
-async function gather($: EngineInterface, found: string, c: Config | null, b: Backlog | null, error: string | null): Promise<StatusInput> {
-  const active = b?.items.find(i => i.status === 'planning' || i.status === 'building' || i.status === 'review') ?? null
+/**
+ * A value a redraw would read from disk again, kept for `ttlMs` while `ref` (the backlog the atom holds) is the same
+ * object. The panel and the band redraw on every step of a subagent; the tool's own answers never go through here.
+ */
+async function memo<T>($: EngineInterface, key: string, ref: unknown, ttlMs: number, make: () => Promise<T>): Promise<T> {
+  const at = await $.clock.now()
+  const hit = self.memo.get(key)
+  if (hit && hit.ref === ref && at - hit.at < ttlMs && at >= hit.at) return hit.value as T
+  const value = await make()
+  self.memo.set(key, { at, ref, value })
+  return value
+}
+const DRAW_TTL_MS = 3000
+const drawnLedger = ($: EngineInterface, found: string, id: string) => memo($, `ledger:${id}`, null, DRAW_TTL_MS, () => loadLedger($, found, id))
+
+async function gather($: EngineInterface, found: string, c: Config | null, b: Backlog | null, error: string | null, isDraw = false): Promise<StatusInput> {
+  const active = await activeItem($, b)
   return {
+    activeId: active?.id ?? null,
     config: c,
     backlog: b,
-    readiness: b ? await judgeAll($, found, b) : {},
-    ledger: active ? await loadLedger($, found, active.id) : null,
+    readiness: !b ? {} : isDraw ? await memo($, 'readiness', b, 10_000, () => judgeAll($, found, b)) : await judgeAll($, found, b),
+    ledger: !active ? null : isDraw ? await drawnLedger($, found, active.id) : await loadLedger($, found, active.id),
     agents: await read($, agents),
     signals: await read($, signals),
     now: await $.clock.now(),
@@ -542,7 +583,7 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     const r = loaded ? await judgeAll($, found, loaded) : {}
     const open = (await read($, signals)).filter(s => !s.delivered)
     // The active item is the one in planning, building or review; resume is null until its ledger has the block.
-    const active = activeItem(loaded)
+    const active = await activeItem($, loaded)
     const ledger = active ? await loadLedger($, found, active.id) : null
     // A child's record without its log (up to 200 KB each): `log { item }` answers the text.
     const kids = (await read($, children)).map(({ log: _log, ...rest }) => rest)
@@ -628,6 +669,7 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       }
       const merged = mergeLedger(onDisk.value ?? emptyLedger(id), set, now)
       await $.fs.write(p.ledger(id), serialize(merged))
+      self.memo.delete(`ledger:${id}`)
       // The item points at its ledger, and carries the branch, PR and plan the ledger names.
       const item = current.items.find(i => i.id === id)!
       const mirror: Partial<Item> = {}
@@ -636,6 +678,16 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       if (Object.keys(mirror).length) await writeBacklog($, found, updateItem(current, id, mirror, now))
       return ledgerLine(merged)
     }
+    case 'begin':
+      return beginAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
+    case 'accept':
+      return acceptAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+    case 'gate':
+      return gateAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+    case 'plan':
+      return planAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+    case 'brief':
+      return briefAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'add': {
       const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
       if (!title) throw new Refused('add needs item.title')
@@ -681,6 +733,305 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     default:
       throw new Refused(`unknown action "${String(e.action)}"`)
   }
+}
+
+const BRIEF_KINDS: readonly string[] = ['implementer', 'fix', 'review', 'final']
+
+/** The item's worktree as an absolute path: the ledger's, under the main checkout when relative; the main checkout without one. */
+const worktreePath = (found: string, ledger: Ledger | null): string => {
+  const w = typeof ledger?.worktree === 'string' ? slashes(ledger.worktree) : ''
+  return !w ? found : /^(?:\/|[A-Za-z]:)/.test(w) ? w : `${found}/${w}`
+}
+
+/** A file of the item, read from its worktree first and from the main checkout otherwise. */
+async function readItemFile($: EngineInterface, found: string, wt: string, rel: string): Promise<string | null> {
+  return (await readText($, `${wt}/${rel}`)) ?? (wt === found ? null : await readText($, `${found}/${rel}`))
+}
+
+/** One git answer in the worktree, trimmed; null when git fails. */
+async function gitOut($: EngineInterface, wt: string, args: string[]): Promise<string | null> {
+  try {
+    const r = await $.process.run(['git', '-C', wt, ...args], { cwd: wt, timeoutMs: 30_000 })
+    return r.exitCode === 0 ? r.stdout.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/** The plan of an item, parsed and sound, or refused with the format or the problems. */
+async function loadPlan($: EngineInterface, found: string, wt: string, id: string, ledger: Ledger | null) {
+  const rel = typeof ledger?.plan === 'string' && ledger.plan ? ledger.plan : `docs/pipeline/plans/${id}.md`
+  const text = await readItemFile($, found, wt, rel)
+  if (text === null) throw new Refused(`no plan at ${rel}; write it in this format, then call plan again:\n\n${PLAN_FORMAT}`)
+  const plan = parsePlan(text)
+  const problems = checkPlan(plan)
+  if (problems.length) throw new Refused(`${rel} cannot be built:\n${problems.map(x => `- ${x}`).join('\n')}\n\nThe format:\n\n${PLAN_FORMAT}`)
+  return { plan, rel }
+}
+
+/** A brief's answer without its leading item id, for joining onto another answer. */
+const withoutId = (id: string, line: string) => (line.startsWith(`${id} · `) ? line.slice(id.length + 3) : line)
+
+const FACTS_FILE = 'docs/pipeline/facts.md'
+const FACTS_MAX = 12
+
+/**
+ * What a run learned about working in this repository (a command's working spelling, a step that must come first):
+ * one line per fact in docs/pipeline/facts.md, the newest twelve kept, given to every implementer and reviewer.
+ */
+async function addFact($: EngineInterface, found: string, fact: string): Promise<void> {
+  const line = fact.replace(/\s+/g, ' ').trim().slice(0, 240)
+  if (!line) return
+  const path = `${found}/${FACTS_FILE}`
+  const lines = ((await readText($, path)) ?? '').split('\n').map(l => l.replace(/^[-*]\s+/, '').trim()).filter(l => l && !l.startsWith('#'))
+  if (lines.some(l => l.toLowerCase() === line.toLowerCase())) return
+  const kept = [...lines, line].slice(-FACTS_MAX)
+  await $.fs.write(path, `# Facts\n\nWhat runs learned about working in this repository; the tool keeps the newest ${FACTS_MAX} and gives them to every brief. Delete a line that stopped being true.\n\n${kept.map(l => `- ${l}`).join('\n')}\n`)
+}
+
+/** Stages the paths and commits them in the worktree with the attribution lines; false when there was nothing to commit or git failed. */
+async function commitPaths($: EngineInterface, wt: string, rels: string[], message: string, attribution: string): Promise<boolean> {
+  if ((await gitOut($, wt, ['add', '--', ...rels])) === null) return false
+  return (await gitOut($, wt, ['commit', '-q', '-m', message, ...(attribution.trim() ? ['-m', attribution.trim()] : []), '--', ...rels])) !== null
+}
+
+/** The lead's model use since the last record, added to the ledger's `lead` and reset. */
+async function recordLead($: EngineInterface, ledger: Ledger | null): Promise<Record<string, unknown>> {
+  const before = (ledger?.['lead'] ?? {}) as { tokens?: number; cached?: number }
+  const lead = { tokens: (Number(before.tokens) || 0) + self.lead.tokens, cached: (Number(before.cached) || 0) + self.lead.cached }
+  self.lead = { tokens: 0, cached: 0 }
+  return lead.tokens || lead.cached ? { lead } : {}
+}
+
+/**
+ * `begin`: the item is this session's. The claim check, the worktree on the item's branch (made here, reused when
+ * there), the base, the status and the ledger in one call; the answer names the worktree to enter and what is next.
+ */
+async function beginAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string): Promise<string> {
+  const item = current.items.find(i => i.id === id)!
+  const isChild = await isChildSession($)
+  const isActive = (ACTIVE_STATUSES as readonly string[]).includes(item.status)
+  if (!isActive && item.status !== 'ready' && item.status !== 'blocked') {
+    const why = item.status === 'inbox' ? (await judgeAll($, found, current))[id] : undefined
+    throw new Refused(`${id} is ${item.status}${why && !why.ready ? `: ${why.reason}` : ''}, not ready`)
+  }
+  // An item another live session runs is not taken over: two sessions asking for the next item get two items.
+  if (isActive && self.item !== id && !isChild) {
+    const other = (await read($, siblings)).find(x => !x.isStale && x.item === id)
+    if (other) throw new Refused(`${id} is run by another session (${other.title}); pick the next item`)
+    if (runningOf(await read($, children)).some(ch => ch.item === id)) throw new Refused(`${id} is run by a child session of this one`)
+  }
+  const mainBranch = c?.mainBranch ?? DEFAULTS.mainBranch
+  const ledger = await loadLedger($, found, id)
+  const branch = typeof ledger?.branch === 'string' && ledger.branch ? ledger.branch : itemBranchOf(c?.branch ?? DEFAULTS.branch, id)
+  const rel = typeof ledger?.worktree === 'string' && ledger.worktree ? slashes(ledger.worktree) : `.claude/worktrees/${id}`
+  const wt = worktreePath(found, { ...(ledger ?? emptyLedger(id)), worktree: rel })
+  // Off the remote's main when it is known, so the branch starts from what a PR will be compared with.
+  await gitOut($, found, ['fetch', '-q', 'origin', mainBranch])
+  const from = (await gitOut($, found, ['rev-parse', '--verify', '-q', `origin/${mainBranch}`])) !== null ? `origin/${mainBranch}` : mainBranch
+  await ensureWorktree($, found, wt, branch, from)
+  const base = ledger?.base ?? (await gitOut($, wt, ['merge-base', 'HEAD', from])) ?? (await gitOut($, wt, ['rev-parse', 'HEAD'])) ?? undefined
+  const hasTasks = (ledger?.tasks ?? []).length > 0
+  const status = item.status === 'ready' || (item.status === 'blocked' && !hasTasks) ? 'planning' : item.status === 'blocked' ? 'building' : item.status
+  self.item = id
+  await runTool($, { action: 'ledger', item: id, set: { branch, worktree: rel, ...(base ? { base: base.slice(0, 12) } : {}) } })
+  if (status !== item.status) await runTool($, { action: 'update', id, set: { status } })
+  await heartbeat($, true)
+  const spec = item.spec ?? `docs/pipeline/specs/${id}.md`
+  const r = ledger?.resume
+  const next = hasTasks && r ? `resume: task ${r.task}/${ledger!.tasks.length} · ${r.state}${r.lastVerified ? ` · verified ${r.lastVerified}` : ''}` : `next: read ${spec}, write docs/pipeline/plans/${id}.md, then plan`
+  return `${id} · ${status} · branch ${branch} · base ${(base ?? '?').slice(0, 7)} · ${isChild ? 'this directory is the worktree' : `EnterWorktree { "path": "${wt}" }`} · ${next}`
+}
+
+/**
+ * `accept`: a verified task is recorded and saved in one call. The open dispatch closed, the task accepted with its
+ * commit range, the briefs and reports committed, the branch pushed, the resume block moved to the next task.
+ */
+async function acceptAction($: EngineInterface, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
+  const ledger = await loadLedger($, found, id)
+  if (!ledger?.tasks.length) throw new Refused(`${id} has no tasks: call plan first`)
+  const n = Number(e.task)
+  const task = ledger.tasks.find(t => t.n === n)
+  if (!task) throw new Refused(`accept needs task: 1 to ${ledger.tasks.length}`)
+  const wt = worktreePath(found, ledger)
+  const from = ledger.resume?.lastVerified ?? ledger.base ?? ''
+  const head = (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? ''
+  if (!head) throw new Refused(`git could not read HEAD in ${wt}`)
+  if (from && (await gitOut($, wt, ['rev-parse', '--short', from])) === head) throw new Refused(`task ${n} has no commit after ${from}: nothing to accept`)
+  // The pipeline's own files (a brief rendered again, a report rewritten) are committed below, not the implementer's to commit.
+  const dirty = await gitOut($, wt, ['status', '--porcelain', '--untracked-files=no', '--', '.', ':(exclude)docs/pipeline'])
+  if (dirty) throw new Refused(`uncommitted changes in the worktree, the implementer did not commit:\n${dirty.split('\n').slice(0, 8).join('\n')}`)
+  const wasReviewed = (task.dispatches ?? []).some(d => d.role === 'reviewer')
+  // The review the config asks for is checked here, so the lead calls accept straight after its own verification.
+  const cfg = normalizeConfig(c ?? DEFAULTS).config
+  if (!wasReviewed && cfg.taskReview !== 'off' && from) {
+    const names = await gitOut($, wt, ['diff', '--name-only', `${from}..${head}`])
+    const risky = names === null ? [] : riskyMatches(names.split('\n').map(l => l.trim()).filter(Boolean), cfg.riskyPaths)
+    if (cfg.taskReview === 'always' || risky.length) {
+      throw new Refused(`review first: ${risky.length ? `task ${n} touches ${risky[0]}` : 'taskReview is always'} · brief { kind: "review", task: ${n}, commits: "${from}..${head}", close: { tokens, minutes, result } }, then accept`)
+    }
+  }
+  const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
+  const isRecorded = await commitPaths($, wt, [`docs/pipeline/ledgers/${id}`], `${id}: task ${n} record`, attribution)
+  const after = isRecorded ? (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? head : head
+  const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
+  const next = ledger.tasks.find(t => t.n !== n && t.status !== 'accepted')?.n
+  const close = { ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}), ...(typeof e.minutes === 'number' ? { minutes: e.minutes } : {}), result: 'done' }
+  const carried = typeof e.carried === 'string' && e.carried.trim() ? [e.carried.trim()] : undefined
+  const review = { kind: (wasReviewed ? 'independent' : 'lead-diff') as 'independent' | 'lead-diff', verdict: e.verdict?.trim() || 'approved', ...(carried ? { carried } : {}) }
+  await runTool($, { action: 'ledger', item: id, set: { tasks: [{ n, close, status: 'accepted', commits: `${from || 'base'}..${head}`, review }], resume: { task: next ?? n, state: `task ${n} accepted`, lastVerified: after }, ...(await recordLead($, ledger)) } })
+  const done = ledger.tasks.filter(t => t.status === 'accepted' || t.n === n).length
+  if (typeof e.fact === 'string' && e.fact.trim()) await addFact($, found, e.fact)
+  const line = `${id} · task ${n} accepted · ${done}/${ledger.tasks.length} · ${from ? `${from.slice(0, 7)}..` : ''}${head} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'}`
+  // The next Agent call comes with the answer: the next task's implementer, or the final review after the last.
+  try {
+    const current = (await loadBacklog($, found)).value
+    if (current) return `${line} · ${withoutId(id, await briefAction($, found, c, current, id, next ? { action: 'brief', kind: 'implementer', task: next, ...(carried ? { carried: carried[0]! } : {}) } : { action: 'brief', kind: 'final' }))}`
+  } catch {}
+  return `${line} · next: ${next ? `brief task ${next}` : 'brief final'}`
+}
+
+/**
+ * A command run to its end with no time limit of the host's (a gate may take longer than the ten minutes one
+ * `process.run` gets): the exit code and the last of its output. Null code when it was killed by a signal.
+ */
+async function runLong($: EngineInterface, argv: string[], cwd: string): Promise<{ code: number | null; out: string }> {
+  const stream = $.process.spawn({ argv, cwd })
+  let out = ''
+  for (;;) {
+    const r = await stream.next()
+    if (r.done) return { code: r.value?.code ?? null, out }
+    out = (out + r.value.text).slice(-20_000)
+  }
+}
+
+/**
+ * `gate`: the tool runs `checks.gate` in the worktree itself and records what happened with the final verdict, so
+ * a gate is never green by assumption. Green: the records committed and the branch pushed. Red: the output's tail.
+ */
+async function gateAction($: EngineInterface, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
+  const ledger = await loadLedger($, found, id)
+  if (!ledger) throw new Refused(`${id} has no ledger`)
+  const wt = worktreePath(found, ledger)
+  const command = normalizeConfig(c ?? DEFAULTS).config.checks.gate?.trim()
+  let gate = 'none configured'
+  let output = ''
+  if (command) {
+    try {
+      const r = await runLong($, ['sh', '-c', command], wt)
+      gate = r.code === 0 ? 'green' : `red (exit ${r.code ?? 'signal'})`
+      if (r.code !== 0) output = tail(r.out.trim(), 20)
+    } catch (err) {
+      throw new Refused(`the gate could not be run here (${err instanceof Error ? err.message : String(err)}): run \`${command}\` yourself and record it with ledger { final: { verdict, gate } }`)
+    }
+  }
+  const verdict = e.verdict?.trim() || ledger.final?.verdict || 'not reviewed'
+  const final = { ...(ledger.final ?? {}), verdict, gate, ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}) }
+  await runTool($, { action: 'ledger', item: id, set: { final, resume: { task: ledger.resume?.task ?? ledger.tasks.length, state: gate.startsWith('red') ? 'gate red' : 'gate run', ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) }, ...(await recordLead($, ledger)) } })
+  if (gate.startsWith('red')) return `${id} · gate ${gate} · \`${command}\`\n${output}`
+  const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
+  await commitPaths($, wt, [`docs/pipeline/ledgers/${id}`], `${id}: final review record`, attribution)
+  const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
+  return `${id} · gate ${gate} · final ${verdict} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${/approved/i.test(verdict) ? 'open the PR' : 'the final review'}`
+}
+
+/** `plan`: the checked plan becomes the ledger's tasks and resume block, and the item is building. */
+async function planAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const ledger = await loadLedger($, found, id)
+  const wt = worktreePath(found, ledger)
+  const { plan, rel } = await loadPlan($, found, wt, id, ledger)
+  const known = new Map((ledger?.tasks ?? []).map(t => [t.n, t]))
+  const tasks = plan.tasks.map(t => (known.has(t.n) ? { n: t.n, title: t.title } : { n: t.n, title: t.title, status: 'pending' as const, dispatches: [] }))
+  const next = plan.tasks.find(t => known.get(t.n)?.status !== 'accepted')?.n ?? plan.tasks.length
+  const lastVerified = ledger?.resume?.lastVerified ?? ledger?.base ?? (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? undefined
+  const set: LedgerSet = { plan: rel, tasks, resume: { task: next, state: known.size ? ledger?.resume?.state ?? 'planned' : 'planned', ...(lastVerified ? { lastVerified } : {}) } }
+  if (typeof e.attribution === 'string') set['attribution'] = e.attribution
+  await runTool($, { action: 'ledger', item: id, set })
+  const item = current.items.find(i => i.id === id)!
+  if (item.status !== 'building') await runTool($, { action: 'update', id, set: { status: 'building' } })
+  // The plan is committed here, so the lead spends no turn on it; nothing to commit is fine.
+  const attribution = typeof e.attribution === 'string' ? e.attribution : typeof ledger?.['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
+  const committed = await commitPaths($, wt, [rel], `${id}: plan`, attribution)
+  const head = `${id} · building · ${plan.tasks.length} task${plan.tasks.length === 1 ? '' : 's'}${committed ? ' · plan committed' : ''}`
+  // A fresh plan answers the first Agent call too, so the lead spends no turn asking for it.
+  if (!known.size) {
+    try {
+      const after = (await loadBacklog($, found)).value ?? current
+      return `${head} · ${withoutId(id, await briefAction($, found, c, after, id, { action: 'brief', kind: 'implementer', task: next }))}`
+    } catch {}
+  }
+  return `${head} · next: brief task ${next}`
+}
+
+/** `brief`: one brief rendered into the worktree, its dispatch opened in the ledger, and the Agent call in one line. */
+async function briefAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const kind = e.kind as BriefKind
+  if (!BRIEF_KINDS.includes(String(e.kind))) throw new Refused('brief needs kind: implementer, fix, review or final')
+  const cfg = normalizeConfig(c ?? DEFAULTS).config
+  const ledger = (await loadLedger($, found, id)) ?? emptyLedger(id)
+  const wt = worktreePath(found, ledger)
+  const { plan } = await loadPlan($, found, wt, id, ledger)
+  const n = kind === 'final' ? plan.tasks.length : Number(e.task)
+  if (kind !== 'final' && !plan.tasks.some(t => t.n === n)) throw new Refused(`brief needs task: 1 to ${plan.tasks.length}`)
+
+  // A review the config does not ask for is answered, not rendered; a re-review (findings given) always runs.
+  let risky: string[] = []
+  if (kind === 'review') {
+    if (!e.commits?.trim()) throw new Refused('a review brief needs commits, as <sha>..<sha>')
+    if (!e.findings?.trim()) {
+      if (cfg.taskReview === 'off') return `no review: taskReview off · accept task ${n} with review.kind lead-diff`
+      const names = await gitOut($, wt, ['diff', '--name-only', e.commits.trim()])
+      risky = names === null ? [] : riskyMatches(names.split('\n').map(l => l.trim()).filter(Boolean), cfg.riskyPaths)
+      if (cfg.taskReview === 'risky' && names !== null && !risky.length) return `no review: ${e.commits.trim()} touches no risky path · accept task ${n} with review.kind lead-diff`
+    }
+  }
+
+  // The round is the first whose brief is not on disk yet: fix rounds from 1, a re-review and a second final review from 2.
+  let round = 1
+  if (kind !== 'implementer') while (round < 50 && (await $.fs.exists(`${wt}/${briefPaths(id, kind, n, round).brief}`))) round++
+  if ((kind === 'review' || kind === 'final') && round > 1 && !e.findings?.trim()) throw new Refused(`${briefPaths(id, kind, n, 1).brief} exists: dispatch it again by its path, or pass findings for a scoped re-review`)
+
+  const item = current.items.find(i => i.id === id)!
+  const template = await readItemFile($, found, wt, `docs/pipeline/templates/${kind}.md`)
+  const head = kind === 'final' ? await gitOut($, wt, ['rev-parse', '--short', 'HEAD']) : null
+  let out: ReturnType<typeof renderBrief>
+  try {
+    out = renderBrief({
+      kind, item: id, itemTitle: item.title, task: n, round, plan, config: cfg, ledger,
+      root: wt,
+      rulesMd: (await readItemFile($, found, wt, 'docs/pipeline/rules.md')) ?? '',
+      factsMd: (await readText($, `${found}/${FACTS_FILE}`)) ?? '',
+      specMd: (await readItemFile($, found, wt, item.spec ?? `docs/pipeline/specs/${id}.md`)) ?? '',
+      ...(template ? { template } : {}),
+      ...(e.findings !== undefined ? { findings: e.findings } : {}),
+      ...(e.carried !== undefined ? { carried: e.carried } : {}),
+      ...(e.commits !== undefined ? { commits: e.commits } : {}),
+      ...(typeof e.attribution === 'string' ? { attribution: e.attribution } : {}),
+      ...(head ? { head } : {}),
+      risky,
+      isEscalated: e.escalate === true,
+    })
+  } catch (err) {
+    throw new Refused(err instanceof Error ? err.message : String(err))
+  }
+  await $.fs.write(`${wt}/${out.brief}`, out.text)
+
+  // The dispatch before this one (the implementer's before a fix or a review) is closed in the same call.
+  if (e.close && typeof e.close === 'object' && kind !== 'final') await runTool($, { action: 'ledger', item: id, set: { tasks: [{ n, close: e.close }] } })
+  const total = plan.tasks.length
+  const state = kind === 'implementer' ? 'implementer dispatched' : kind === 'fix' ? `fix round ${round} dispatched` : kind === 'review' ? 'review dispatched' : 'final review dispatched'
+  const set: LedgerSet = { resume: { task: n, state, ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) } }
+  if (kind !== 'final') {
+    const dispatch = { role: out.role, model: out.model, effort: out.effort, tokens: 0, minutes: 0, result: '', brief: out.brief, report: out.report, ...(risky[0] ? { risky: risky[0] } : {}) }
+    // The same brief asked for twice (plan and accept already answer the next one) opens one dispatch, not two.
+    const last = ledger.tasks.find(t => t.n === n)?.dispatches.at(-1)
+    const isSame = Boolean(last && last.brief === out.brief && !(last.result ?? '').trim() && !(last.minutes ?? 0))
+    set.tasks = [{ n, ...(kind === 'implementer' ? { status: 'running' as const } : kind === 'fix' ? { status: 'fix' as const } : {}), dispatches: isSame ? [] : [dispatch as never] }]
+  }
+  if (typeof e.attribution === 'string') set['attribution'] = e.attribution
+  await runTool($, { action: 'ledger', item: id, set })
+  const what = kind === 'final' ? 'final review' : kind === 'fix' ? `task ${n}/${total} · fix round ${round} of ${cfg.limits.fixRounds}` : kind === 'review' ? `task ${n}/${total} · review${round > 1 ? ` ${round}` : ''}` : `task ${n}/${total}`
+  return `${id} · ${what} · Agent subagent_type pipeline:${kind === 'review' || kind === 'final' ? 'reviewer' : 'implementer'} model ${out.model} effort ${out.effort} · prompt: Read ${out.brief} and follow it.`
 }
 
 /** Whether an update starts an item's run: to planning, or to building from another status. */
@@ -1185,13 +1536,37 @@ async function branchOf($: EngineInterface): Promise<string | undefined> {
   }
 }
 
-const activeItem = (b: Backlog | null): Item | null => b?.items.find(i => (ACTIVE_STATUSES as readonly string[]).includes(i.status)) ?? null
+/**
+ * The active item of this session, with several sessions on one repository each running their own: the item this
+ * session last worked on through the tool; else the one whose worktree or branch this session is in; else one a
+ * child of this session runs; else the first active item no other live session claims. Null when every active item
+ * is another session's.
+ */
+async function activeItem($: EngineInterface, b: Backlog | null): Promise<Item | null> {
+  const actives = (b?.items ?? []).filter(i => (ACTIVE_STATUSES as readonly string[]).includes(i.status))
+  if (!actives.length) return null
+  const mine = actives.find(i => i.id === self.item)
+  if (mine) return mine
+  try {
+    const name = /\/\.claude\/worktrees\/([^/]+)/.exec(`${slashes(await $.session.cwd())}/`)?.[1]
+    const inTree = name ? actives.find(i => i.id === name) : undefined
+    if (inTree) return inTree
+  } catch {}
+  const branch = await branchOf($)
+  const onBranch = branch ? actives.find(i => i.branch === branch) : undefined
+  if (onBranch) return onBranch
+  const kids = new Set((await read($, children)).map(ch => ch.item))
+  const ofChild = actives.find(i => kids.has(i.id))
+  if (ofChild) return ofChild
+  const claimed = new Set((await read($, siblings)).filter(x => !x.isStale && x.item).map(x => x.item))
+  return actives.find(i => !claimed.has(i.id)) ?? null
+}
 
 /** This session's live entry: the active item, the running agents and every signal of this session. */
 async function entryOf($: EngineInterface, previous: LiveEntry | undefined, at: number): Promise<LiveEntry> {
   const nowIso = new Date(at).toISOString()
   if (!self.startedAt) self.startedAt = nowIso
-  const active = activeItem(await read($, backlog))
+  const active = await activeItem($, await read($, backlog))
   // An item a child session runs, or ran, is the child's: its own entry names it, and a child that exited with the
   // item still building leaves it to the dead signal, not to this session's entry.
   const owned = new Set((await read($, children)).map(ch => ch.item))
@@ -1431,7 +1806,12 @@ export const register: Register = (on, options) => {
       await $.command.register({ name: 'pipeline', description: DESCRIPTION, argumentHint: 'subcommand' })
     } catch {}
     try {
-      await $.tool.register({ name: 'pipeline', description: TOOL_DESCRIPTION, isDeferred: false, inputSchema: TOOL_SCHEMA })
+      // In a project without a pipeline the tool is listed by name only, so it costs no context there.
+      let hasPipeline = false
+      try {
+        hasPipeline = await $.fs.exists(paths(await resolveRoot($)).config)
+      } catch {}
+      await $.tool.register({ name: 'pipeline', description: TOOL_DESCRIPTION, isDeferred: !hasPipeline, inputSchema: TOOL_SCHEMA })
     } catch {}
     let loaded: { found: string; config: Config | null; backlog: Backlog | null } | null = null
     try {
@@ -1496,6 +1876,11 @@ export const register: Register = (on, options) => {
         const at = await $.clock.now()
         await update($, agents, list => onStep(list, agentId, result.usage, at))
       } catch {}
+    } else {
+      // The lead's own use: re-reading the conversation on every turn is most of an item's cost.
+      const u = (result.usage ?? {}) as Record<string, number | undefined>
+      self.lead.tokens += (u['input_tokens'] ?? 0) + (u['output_tokens'] ?? 0) + (u['cache_creation_input_tokens'] ?? 0)
+      self.lead.cached += u['cache_read_input_tokens'] ?? 0
     }
     return result
   })
@@ -1517,6 +1902,15 @@ export const register: Register = (on, options) => {
         } catch {}
         if (path && isProtected(path, protectedOf(await read($, config)), [sessionRoot, await read($, root)])) {
           return { deny: `pipeline: ${path} is protected by ${CONFIG_FILE} protectedPaths` }
+        }
+      }
+      // A command that already failed three times in a row, unchanged, is not run a fourth time: the agent is told
+      // so directly, which costs the lead no turn.
+      if (e.tool === 'Bash') {
+        const own = (await read($, agents)).find(a => a.agentId === agentId || a.id === agentId)
+        const cmd = normalizeCommand(String((call as Record<string, unknown>)['command'] ?? ''))
+        if (own && cmd && own.lastCommands.length >= 3 && own.lastCommands.slice(-3).every(x => x === cmd)) {
+          return { deny: `pipeline: this exact command failed three times in a row. Running it again will not change the result. Read the error, change the approach, or stop and answer BLOCKED with what you tried.` }
         }
       }
       const at = await $.clock.now()
@@ -1551,7 +1945,12 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: TOOL }, async ($, e) => {
     if (e.agentId) return { result: 'ignored: subagents do not write the pipeline' }
     try {
-      return { result: await runTool($, e as unknown as ToolInput) }
+      const input = e as unknown as ToolInput
+      const result = await runTool($, input)
+      // The lead's own work on an item makes it this session's: the panel, the band and `get` follow it.
+      const worked = ['ledger', 'plan', 'brief', 'begin', 'accept', 'gate'].includes(input.action) ? (typeof input.item === 'string' ? input.item : input.item?.id ?? input.id) : input.action === 'update' && ['planning', 'building'].includes(String((input.set as Partial<Item> | undefined)?.status)) ? input.id : undefined
+      if (worked && !(await read($, children)).some(ch => ch.item === worked)) self.item = worked
+      return { result }
     } catch (err) {
       return { result: `refused: ${err instanceof Error ? err.message : String(err)}` }
     }
@@ -1828,11 +2227,11 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
   const found = (await read($, root)) || (await resolveRoot($))
   const c = await read($, config)
   const b = await read($, backlog)
-  const d = await gather($, found, c, b, await read($, fileError))
+  const d = await gather($, found, c, b, await read($, fileError), true)
   const p = await read($, panel)
   const kids = await read($, children)
   const ledgers: Record<string, Ledger | null> = {}
-  for (const k of kids) ledgers[k.item] = await loadLedger($, found, k.item)
+  for (const k of kids) ledgers[k.item] = await drawnLedger($, found, k.item)
   const set = (patch: Partial<Panel>) => void update($, panel, prev => ({ ...prev, ...patch }))
   return renderPanel(ui, {
     ...d,
@@ -1846,7 +2245,7 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
     children: kids,
     siblings: await read($, siblings),
     ledgers,
-    activeLine: await specLine($, found, activeItem(b)),
+    activeLine: await memo($, `what:${d.activeId ?? ''}`, b, 10_000, async () => specLine($, found, await activeItem($, b))),
     limitMs: limitsOf(c).taskMinutes * 60_000,
     fixRounds: limitsOf(c).fixRounds,
     taskReview: c ? normalizeConfig(c).config.taskReview : DEFAULTS.taskReview,
@@ -1884,7 +2283,7 @@ const bandHold = { item: '', sawIdle: false }
  */
 async function bandNow($: EngineInterface, isWorking: boolean): Promise<Band | null> {
   const b = await read($, backlog)
-  let item = activeItem(b)
+  let item = await activeItem($, b)
   if (item) {
     bandHold.item = item.id
     bandHold.sawIdle = false
@@ -1898,7 +2297,7 @@ async function bandNow($: EngineInterface, isWorking: boolean): Promise<Band | n
   }
   if (!item) return null
   const found = (await read($, root)) || (await resolveRoot($))
-  const ledger = await loadLedger($, found, item.id)
+  const ledger = await drawnLedger($, found, item.id)
   const at = Math.max(await read($, now), await $.clock.now())
   const agent = (await read($, agents)).find(a => a.status === 'running')
   return bandOf(item, ledger, agent, at)

@@ -79,8 +79,8 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
 /** The active item's line for the band: `p12 · Export · task 3/6`. */
-export function activeTitle(d: Pick<StatusInput, 'backlog' | 'ledger'>): string {
-  const active = d.backlog?.items.find(i => ACTIVE.includes(i.status))
+export function activeTitle(d: Pick<StatusInput, 'backlog' | 'ledger' | 'activeId'>): string {
+  const active = d.activeId !== undefined ? d.backlog?.items.find(i => i.id === d.activeId) : d.backlog?.items.find(i => ACTIVE.includes(i.status))
   if (!active) return ''
   const own = d.ledger && d.ledger.item === active.id ? d.ledger : null
   return line([active.id, displayTitle(active.title), taskCounter(own)])
@@ -340,7 +340,7 @@ function card(u: Desk, rows: Element[]): Element {
 /** One view: the running dashboard while an item is in flight, the idle summary otherwise. */
 function renderOverview(u: Desk, d: PanelInput, W: number): Element {
   const items = d.backlog?.items ?? []
-  const active = items.find(i => ACTIVE.includes(i.status)) ?? null
+  const active = (d.activeId !== undefined ? items.find(i => i.id === d.activeId && ACTIVE.includes(i.status)) : items.find(i => ACTIVE.includes(i.status))) ?? null
   return active ? renderRunning(u, d, W, active) : renderIdle(u, d, W)
 }
 
@@ -534,16 +534,18 @@ function childRows(u: Desk, d: PanelInput): Element | null {
 /** The other sessions on this repository, from the live file: each a drawn row of title, item and agents; a stale one faded. */
 function siblingRows(u: Desk, d: PanelInput, W: number): Element | null {
   const { Box, Svg } = u
-  if (!d.siblings.length) return null
+  // A session silent for half an hour that runs nothing has ended without saying so: not listed. Before that it is faded.
+  const shown = d.siblings.filter(x => d.now - Date.parse(x.seenAt) < 30 * 60_000 || x.agents.some(a => a.status === 'running'))
+  if (!shown.length) return null
   const rw = rowWidth(W, 0)
-  const rows = d.siblings.map((s, n) => {
+  const rows = shown.map((s, n) => {
     const running = s.agents.filter(a => a.status === 'running').length
     const { title, meta, isIdle } = siblingLabel(s)
-    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title, meta, isLive: running > 0, isStale: s.isStale, isDim: isIdle, isLast: n === d.siblings.length - 1 })} alt={line([title, meta])} width={rw} height={SESSION_ROW_H} />
+    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title, meta, isLive: running > 0, isStale: s.isStale, isDim: isIdle, isLast: n === shown.length - 1 })} alt={line([title, meta])} width={rw} height={SESSION_ROW_H} />
   })
   return (
     <Box flexDirection="column">
-      {heading(u, 'Other sessions', `${d.siblings.length}`)}
+      {heading(u, 'Other sessions', `${shown.length}`)}
       {card(u, rows)}
     </Box>
   )

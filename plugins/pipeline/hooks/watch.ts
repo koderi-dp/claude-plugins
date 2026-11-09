@@ -92,7 +92,8 @@ export function onSpawn(agents: AgentRun[], s: Spawned): AgentRun[] {
 
 /** A model request of the agent: the silence resets and its tokens add up. */
 export function onStep(agents: AgentRun[], agentId: string, usage: Usage | null | undefined, at: number): AgentRun[] {
-  const used = usage ? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) : 0
+  // Fresh tokens only: what is read back from the cache on every step is the same context again, not new work.
+  const used = usage ? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) : 0
   return agents.map(a => (same(a, agentId) && a.status === 'running' ? { ...a, lastStepAt: at, tokens: a.tokens + used } : a))
 }
 
