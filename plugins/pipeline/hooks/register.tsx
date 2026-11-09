@@ -51,7 +51,7 @@ const TOOL_DESCRIPTION =
   '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
   '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers the ledger as text; ' +
   '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists; ' +
-  '`start` { item: "<id>" } (runner session only) → makes the item\'s worktree (.claude/worktrees/<id>, branch from config.branch off mainBranch, reused when there), marks the item building with the note `session runner`, records branch and worktree in its ledger and starts a headless Claude Code child in the worktree in this session\'s permission mode (acceptEdits, auto, dontAsk or bypassPermissions; otherwise refused with what to switch to; refused too past limits.parallel, for an item that is not ready, blocked or building without a child, or while a child runs it), answering one line with the session id and the log path; the child runs the item with the run skill and leaves the item as it ends it, a non-zero exit blocks it with the code and the log tail; ' +
+  '`start` { item: "<id>" } (runner session only) → makes the item\'s worktree (.claude/worktrees/<id>, branch from config.branch off mainBranch, reused when there), marks the item building with the note `session runner`, records branch and worktree in its ledger and starts a headless Claude Code child in the worktree in this session\'s permission mode (acceptEdits, auto, dontAsk or bypassPermissions; otherwise refused with what to switch to; refused too past limits.parallel, for an item that is not ready, blocked or building with the note `session runner` and no child, for a building item run in-session, while a child runs it, and from a child session, which starts no children), answering one line with the session id and the log path; the child runs the item with the run skill and leaves the item as it ends it, a non-zero exit blocks it with the code and the log tail; ' +
   '`stop` { item } → kills the item\'s child session and sets the item blocked with `stopped by the user` unless it had merged; ' +
   '`log` { item } → the last 60 lines of the child\'s log; ' +
   '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/), for one merged item or for every merged item; it deletes nothing, the caller removes them with git rm -r and commits; ' +
@@ -559,6 +559,18 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
 
 // ---------- the session runner ----------
 
+/** The variable a child session is started with; a session that sees it starts no children. */
+const CHILD_MARK = 'PIPELINE_CHILD'
+
+/** Whether this session was started by the session runner: the mark is in its environment. */
+async function isChildSession($: EngineInterface): Promise<boolean> {
+  try {
+    return Boolean(await $.env.get('PIPELINE_CHILD'))
+  } catch {
+    return false
+  }
+}
+
 /** The session's permission mode: the one the engine last told us, else the settings' default mode, else `default`. */
 async function permissionModeOf($: EngineInterface): Promise<string> {
   if (self.permissionMode) return self.permissionMode
@@ -591,6 +603,8 @@ const list = (xs: readonly string[]) => `${xs.slice(0, -1).join(', ')} or ${xs[x
 
 /** `start`: the checks, the worktree, the item marked building, the ledger's branch and worktree, the child spawned and its loop detached. */
 async function startChild($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string): Promise<string> {
+  // The mechanical guard against recursion: a child is started with PIPELINE_CHILD set, and never starts children.
+  if (await isChildSession($)) throw new Refused('a child session does not start children')
   const runner = c?.runner ?? DEFAULTS.runner
   if (runner !== 'session') throw new Refused(`runner is ${runner}; set it with /pipeline config runner=session`)
   const item = current.items.find(i => i.id === id)!
@@ -598,6 +612,8 @@ async function startChild($: EngineInterface, found: string, c: Config | null, c
   const own = running.find(ch => ch.item === id)
   if (own) throw new Refused(`${id} already runs in session ${own.id}`)
   if (item.status !== 'ready' && item.status !== 'blocked' && item.status !== 'building') throw new Refused(`${id} is ${item.status}, not ready`)
+  // A building item the session runner did not start is being run in a session, this one or another: not taken over.
+  if (item.status === 'building' && !/session runner/.test(item.note ?? '')) throw new Refused(`${id} is being run in-session (building, note: ${item.note || 'none'}); finish or stop that run, or block the item, before starting it as a child session`)
   const mode = await permissionModeOf($)
   if (!(ALLOWED_MODES as readonly string[]).includes(mode)) {
     throw new Refused(`the session's permission mode is ${mode}; a headless child cannot ask, so switch to ${list(ALLOWED_MODES)} (Shift+Tab) and start again`)
@@ -618,13 +634,14 @@ async function startChild($: EngineInterface, found: string, c: Config | null, c
   const child: ChildSession = { id: sessionId, item: id, worktree, branch, status: 'starting', startedAt: at, log: '' }
   await update($, children, prev => [...prev.filter(ch => ch.item !== id), child])
   const argv = childArgv({ prompt: childPrompt(id, { isResume }), permissionMode: mode, sessionId })
-  void runChild($, found, child, { argv, cwd: worktree })
+  // `env` is set over the host's environment, so the child inherits the rest and sees the mark.
+  void runChild($, found, child, { argv, cwd: worktree, env: { [CHILD_MARK]: '1' } })
   await heartbeat($, true)
   return `started ${id} in .claude/worktrees/${id} · session ${sessionId} · log .git/pipeline/${id}.log`
 }
 
 /** The child's life: its output into the record and the log file, piece by piece, then its end. */
-async function runChild($: EngineInterface, found: string, child: ChildSession, request: { argv: string[]; cwd: string }): Promise<void> {
+async function runChild($: EngineInterface, found: string, child: ChildSession, request: { argv: string[]; cwd: string; env: Record<string, string> }): Promise<void> {
   const logPath = childLog(found, child.item)
   const proc = { stream: null as null | AsyncGenerator<{ stream: string; text: string }, { code: number | null; signal: string | null }>, partial: '', lastWrite: -Infinity }
   self.procs.set(child.item, proc)

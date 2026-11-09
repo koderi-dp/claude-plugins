@@ -33,7 +33,7 @@ type Engine = {
 }
 
 /** A main checkout at /p/main, files in memory, git and the child processes faked; records writes, runs, toasts and the plugin's state. */
-function world(on: On, seed: Record<string, string> = {}, options: { worktreeAdd?: 'ok' | 'branch-exists' | 'fail'; wakeup?: boolean } = {}) {
+function world(on: On, seed: Record<string, string> = {}, options: { worktreeAdd?: 'ok' | 'branch-exists' | 'fail'; wakeup?: boolean; env?: Record<string, string>; cwd?: string } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
@@ -59,10 +59,10 @@ function world(on: On, seed: Record<string, string> = {}, options: { worktreeAdd
     return { value: undefined }
   })
   on('session.repo', () => ({ value: { root: MAIN, remote: null, internal: false, name: null } }) as never)
-  on('session.root', () => ({ value: MAIN }))
-  on('session.cwd', () => ({ value: MAIN }))
+  on('session.root', () => ({ value: options.cwd ?? MAIN }))
+  on('session.cwd', () => ({ value: options.cwd ?? MAIN }))
   on('session.id', () => ({ value: 'self' }))
-  on('env.get', () => ({ value: undefined }))
+  on('env.get', (_$, e) => ({ value: options.env?.[e.name] }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('tool.register', (_$, e) => ({ value: { tool: e.name } }))
   on('tool.list', () => ({ value: options.wakeup ? [{ name: 'ScheduleWakeup', description: '', isMcp: false }] : [] }) as never)
@@ -180,6 +180,35 @@ test('start refuses: runner subagent, a permission mode that asks, an item that 
   expect(writes.filter(w => w !== LIVE)).toEqual([])
 })
 
+test('review 0.2 I3: a child session (its worktree, the mark in its environment) may not start children; a building item run in-session is not taken over', async ($, on) => {
+  const building = (note?: string) => backlogOf([item('p12', 'CSV export', 'building', { spec: 'docs/pipeline/specs/p12.md', ...(note ? { note } : {}) }), item('p13', 'Second', 'ready')])
+  const seed = { [CONFIG]: config(), [BACKLOG]: building('session runner'), ...SPECS, [`${WORKTREE}/.git`]: 'gitdir: x' }
+  const { spawned, writes } = world(on, seed, { cwd: WORKTREE, env: { PIPELINE_CHILD: '1', HOME: '/home/u' } })
+  await start($)
+  await mode($, 'acceptEdits')
+  expect(await call($, { action: 'start', item: 'p13' })).toBe('refused: a child session does not start children')
+  expect(await call($, { action: 'start', item: 'p12' })).toBe('refused: a child session does not start children')
+  expect(spawned).toHaveLength(0)
+  expect(writes.filter(w => w !== LIVE)).toEqual([])
+})
+
+test('review 0.2 M6: a building item whose note does not say session runner is being run in a session and is not taken over; with the note and no child it resumes', async ($, on) => {
+  const building = (note?: string) => backlogOf([item('p12', 'CSV export', 'building', { spec: 'docs/pipeline/specs/p12.md', ...(note ? { note } : {}) })])
+  const { spawned, files } = world(on, { [CONFIG]: config(), [BACKLOG]: building('planning in progress'), ...SPECS, [`${WORKTREE}/.git`]: 'gitdir: x' })
+  await start($)
+  await mode($, 'acceptEdits')
+  const answer = await call($, { action: 'start', item: 'p12' })
+  expect(answer).toBe('refused: p12 is being run in-session (building, note: planning in progress); finish or stop that run, or block the item, before starting it as a child session')
+  expect(spawned).toHaveLength(0)
+  files.set(BACKLOG, building())
+  expect(await call($, { action: 'start', item: 'p12' })).toContain('note: none')
+  // With the runner's note and no child (the parent restarted), the start resumes it.
+  files.set(BACKLOG, building('session runner'))
+  expect(await call($, { action: 'start', item: 'p12' })).toStartWith('started p12')
+  expect(spawned).toHaveLength(1)
+  expect(spawned[0]!.request.argv[2]).toContain('Resume item p12')
+})
+
 test('Review Focus 4: start makes the worktree, spawns the child there, marks the item building, streams its log; log answers the tail; exit 0 finishes', async ($, on) => {
   const { files, state, runs, spawned, exit, emit } = world(on, { [CONFIG]: config(), [BACKLOG]: READY, ...SPECS })
   await start($)
@@ -188,10 +217,11 @@ test('Review Focus 4: start makes the worktree, spawns the child there, marks th
   expect(answer).toMatch(/^started p12 in \.claude\/worktrees\/p12 · session [0-9a-f-]{36} · log \.git\/pipeline\/p12\.log$/)
   // The worktree from the main checkout, off mainBranch, on the item's branch.
   expect(runs).toEqual([['git', 'worktree', 'add', WORKTREE, '-b', 'feat/p12', 'main']])
-  // The child: claude -p in the worktree, the parent's mode, the session id the parent chose.
+  // The child: claude -p in the worktree, the parent's mode, the session id the parent chose, marked as a child.
   expect(spawned).toHaveLength(1)
-  const { argv, cwd } = spawned[0]!.request
+  const { argv, cwd, env } = spawned[0]!.request
   expect(cwd).toBe(WORKTREE)
+  expect(env).toEqual({ PIPELINE_CHILD: '1' })
   expect(argv.slice(0, 2)).toEqual(['claude', '-p'])
   expect(argv[2]).toContain('Run item p12 with the pipeline-run skill, runner subagent')
   expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('acceptEdits')
