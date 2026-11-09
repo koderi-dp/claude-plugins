@@ -205,6 +205,27 @@ test('the clean tool action lists the paths from the folders on disk and deletes
   expect(writes).toEqual([])
 })
 
+test('the clean tool action lists a merged item\'s local branch as branch:<name> from the item, the ledger or the template, when git has it', async ($, on) => {
+  const seed = {
+    ...CLEAN_SEED,
+    [BACKLOG]: backlogOf([item('p1', 'Login', 'merged', { pr: '#3', branch: 'feat/own' }), item('p2', 'Export', 'building', { plan: 'docs/pipeline/plans/p2.md' }), item('p3', 'Search', 'merged', { plan: 'docs/superpowers/plans/2026-11-01-search.md' }), item('p4', 'Gone', 'merged')]),
+    [`${DIR}/ledgers/p3.json`]: JSON.stringify({ item: 'p3', branch: 'feat/search', tasks: [], rulings: [], blockers: [], tokens: 0 }),
+  }
+  world(on, seed)
+  const runs: string[][] = []
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    runs.push(argv)
+    return { value: { exitCode: 0, stdout: 'main\nfeat/own\nfeat/search\nfeat/p2\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
+  expect(await call($, { action: 'clean', item: 'p1' })).toBe(['docs/pipeline/ledgers/p1/', 'docs/pipeline/plans/p1.md', '.superpowers/sdd/2026-10-30-p1-login/', 'branch:feat/own'].join('\n'))
+  expect(await call($, { action: 'clean', item: 'p3' })).toBe(['docs/superpowers/plans/2026-11-01-search.md', '.superpowers/sdd/2026-11-01-search/', '.claude/worktrees/p3/', 'branch:feat/search'].join('\n'))
+  // p4 has no branch anywhere git knows (feat/p4 from the template is not on disk); p2 is building.
+  expect(await call($, { action: 'clean', item: 'p4' })).toBe('nothing to clean')
+  expect((await call($, { action: 'clean' })).split('\n').filter(l => l.startsWith('branch:'))).toEqual(['branch:feat/own', 'branch:feat/search'])
+  expect(runs[0]).toEqual(['git', '-C', MAIN, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/'])
+})
+
 test('the clean tool action answers nothing to clean when retain keeps everything', async ($, on) => {
   world(on, { ...CLEAN_SEED, [CONFIG]: JSON.stringify({ version: 1, retain: { plans: true, briefs: true, superpowers: true } }) + '\n' })
   expect(await call($, { action: 'clean', item: 'p1' })).toBe('nothing to clean')

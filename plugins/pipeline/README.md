@@ -13,10 +13,14 @@ docs/pipeline/
   specs/<id>.md        one page per item: what, why, acceptance, out of scope, open
   plans/<id>.md        the superpowers plan for the item
   ledgers/<id>.json    the item's record: tasks, dispatches, rulings, resume block
-  ledgers/<id>/        briefs and reports, for the record
+  ledgers/<id>/        briefs and reports, for the record: task-N-brief.md and task-N-report.md,
+                       task-N-fix-R-brief.md and -report.md, task-N-review-brief.md and -report.md
+                       (a re-review: task-N-review-R-), final-brief.md and final-report.md
 ```
 
 Only the plugin's tool writes `backlog.json` and the ledgers; a subagent's call is ignored. Everything under `docs/pipeline/` goes on the item's branch except `backlog.json` and `BACKLOG.md`, which the lead commits on the main branch, so two worktrees never carry diverging copies.
+
+Under `merge: pr` you merge the PR yourself. The next `get` or `signals` sees the branch tip on `origin/<mainBranch>` and reports the item as `mergedPending`; the run skill then runs its Close first: the item becomes `merged`, the clean-up runs, the tool's files are committed on the main branch and pushed, and the worktree and local branch go. A session that starts with such an item says so in a toast and in the status block.
 
 ## The loop
 
@@ -36,7 +40,7 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 | `/pipeline park <id>` / `unpark <id>` | Take out of, back into, the queue |
 | `/pipeline stop [id]` | Finish the running task, leave the branch pushed and the ledger current, stop; with an id, kill that item's child session and block the item |
 | `/pipeline log <id>` | The last 60 lines of an item's child session log |
-| `/pipeline clean` | List and remove what `retain` says may go for every merged item |
+| `/pipeline clean` | List and remove what `retain` says may go for every merged item, with its worktree and local branch |
 | `/pipeline panel` | Toggle the panel |
 | `/pipeline config [key=value]` | Show or change the project config |
 
@@ -155,7 +159,7 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 | Skills | `pipeline-init`, `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
 | Templates | `templates/spec.md`, `implementer.md`, `reviewer.md`, `fix.md`, `final.md` |
 | Tool | `mcp__pipeline__pipeline` |
-| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |
+| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `merged.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |
 | Tests | `claude plugin test plugins/pipeline` |
 
 License: MIT.

@@ -11,6 +11,8 @@ import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
 import type { LedgerSet } from './ledger'
 import { parseLive, siblingsOf, withEntry, withoutEntry } from './live'
+import { candidates as mergeCandidates, fetchArgv, findMerged, isFetchDue, mergedLine } from './merged'
+import type { Git, MergedPending } from './merged'
 import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse, specStub } from './migrate'
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { BAND_COMPACT_H, BAND_H, bandSvg, bandText, idleStripSvg, idleStripText } from './draw'
@@ -34,6 +36,9 @@ const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const TICK_MS = 30_000
 const HEARTBEAT_MS = 2000
+/** The last line of init and migrate-apply: the tool's files are versioned, never gitignored, and the record is not on main until this commit. */
+const commitLine = (mainBranch: string) => `commit docs/pipeline/ on ${mainBranch} now: git add docs/pipeline && git commit`
+
 const WAKE_PROMPT = `pipeline: check the watchdog signals with the pipeline tool: ${TOOL} {"action":"signals"}`
 /** The log file of a child, under the main checkout's .git (shared by every worktree, never committed). */
 const childLog = (found: string, id: string) => `${found}/.git/pipeline/${id}.log`
@@ -43,8 +48,8 @@ const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', '
 
 const TOOL_DESCRIPTION =
   'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
-  '`get` { id?, titles?, full? } → compact JSON { active: { id, title, status, note, spec, plan, branch, worktree } | null, resume, signals, children, siblings, counts, next, config }: the active item (planning, building or review), its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (no log), the other sessions on the repository in short, the count per status (planning counts as building), the first three ready (else inbox) items with the reason, and the config keys a run reads (runner, merge, mergeMethod, checks, limits, riskyPaths, protectedPaths, models, taskReview); with `id` also `item`, that item\'s full record and readiness; with `titles` also `titles`, every item as `<id> <status> <title>`; `full: true` answers the whole { config, backlog, readiness, active, resume, signals, children, siblings } instead, large on a long backlog, never needed during a run; ' +
-  '`signals` → only the open watchdog signals as compact JSON [{ kind, agent, agentId?, detail, at }], marked delivered, or `no signals`: the watchdog check; ' +
+  '`get` { id?, titles?, full? } → compact JSON { active: { id, title, status, note, spec, plan, branch, worktree } | null, resume, signals, children, siblings, counts, next, config }: the active item (planning, building or review), its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (no log), the other sessions on the repository in short, the count per status (planning counts as building), the first three ready (else inbox) items with the reason, and the config keys a run reads (runner, merge, mergeMethod, checks, limits, riskyPaths, protectedPaths, models, taskReview), plus `mergedPending` [{ id, branch, pr }] when a review item\'s (or a building item with a pr) branch tip is on origin/mainBranch (fetched at most once a minute): its PR was merged by hand and its Close is pending, so the run skill closes it first; with `id` also `item`, that item\'s full record and readiness; with `titles` also `titles`, every item as `<id> <status> <title>`; `full: true` answers the whole { config, backlog, readiness, active, resume, signals, children, siblings } instead, large on a long backlog, never needed during a run; ' +
+  '`signals` → only the open watchdog signals as compact JSON [{ kind, agent, agentId?, detail, at }], marked delivered, or `no signals`: the watchdog check; with a merged PR whose Close is pending it answers { signals, mergedPending } instead; ' +
   '`status` { id? } → the status block, or one item\'s ledger as text; ' +
   '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers one line, `added p29 · inbox · no spec` (the status after settling, with the reason an inbox item is not ready); ' +
   '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title) and answers `p1 · building` (with `set <fields>` for the others); ' +
@@ -52,13 +57,13 @@ const TOOL_DESCRIPTION =
   '`remove` { id } → `removed p2 · 70 items left`; `park` { id } → `p2 · parked`; `unpark` { id } → `p2 · ready`; ' +
   '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
   '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers one line, `ledger p1 · task 3/6 running · 2 rulings · 674k tokens` (`final approved` once recorded); `status { id }` answers the whole ledger; ' +
-  '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists; ' +
+  '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists, and ends with the line to commit docs/pipeline/ on mainBranch now (the tool\'s files are versioned, never gitignored); ' +
   '`start` { item: "<id>" } (runner session only) → makes the item\'s worktree (.claude/worktrees/<id>, branch from config.branch off mainBranch, reused when there), marks the item building with the note `session runner`, records branch and worktree in its ledger and starts a headless Claude Code child in the worktree in this session\'s permission mode (acceptEdits, auto, dontAsk or bypassPermissions; otherwise refused with what to switch to; refused too past limits.parallel, for an item that is not ready, blocked or building with the note `session runner` and no child, for a building item run in-session, while a child runs it, and from a child session, which starts no children), answering one line with the session id and the log path; the child runs the item with the run skill and leaves the item as it ends it, a non-zero exit blocks it with the code and the log tail; ' +
   '`stop` { item } → kills the item\'s child session and sets the item blocked with `stopped by the user` unless it had merged; ' +
   '`log` { item } → the last 60 lines of the child\'s log; ' +
-  '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/), for one merged item or for every merged item; it deletes nothing, the caller removes them with git rm -r and commits; ' +
+  '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/ and its local branch as `branch:<name>`, each when it exists), for one merged item or for every merged item; it deletes nothing, the caller removes the paths with git rm -r (git worktree remove for the worktree, git branch -D for a branch: line) and commits; ' +
   '`migrate` { refresh? } → JSON { sources, config, sourcesOfConfig, items, rules, active, bulk: { files, count }, unsure, report }: reads the project\'s queue, workflow prose, ledgers, scripts and CI and drafts the config, the items, the rules (the queue\'s open decisions among them, as before-dispatch stops) and the active item, writing nothing; refused when config.json exists unless refresh; ' +
-  '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger, a spec stub from the title and note for every inbox or building item without one, so the needs-free ones settle to ready), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of spec stubs, the count of files given the line and the bulk files to git rm; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
+  '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger, a spec stub from the title and note for every inbox or building item without one, so the needs-free ones settle to ready), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of spec stubs, the count of files given the line, the bulk files to git rm and the line to commit docs/pipeline/ on mainBranch; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
   'Every write re-reads backlog.json, merges, regenerates BACKLOG.md and answers one line; `status` is the way to read the status block; a file that does not parse is refused with its line and left alone.'
 
 const TOOL_SCHEMA = {
@@ -187,8 +192,8 @@ const STOP_PROMPT =
   `Leave the branch pushed and the ledger current: record where to resume with ${call({ action: 'ledger', item: '<id>', set: { resume: { task: '<n>', state: 'stopped by the user: <where>', lastVerified: '<sha>' } } })} as the last tool call. Then answer one line and stop.`
 
 const CLEAN_PROMPT =
-  `Pipeline clean, under the pipeline-rules skill. First tool call: ${call({ action: 'clean' })}. It lists, one per line, the paths config.retain says may go for every merged item, the superpowers folders of merged plans and the worktrees of merged items, and deletes nothing. ` +
-  'From the main checkout on mainBranch: remove each listed path with `git rm -r -q` (plain `rm -r` for an untracked one; `git worktree remove` for a worktree), commit the removals on mainBranch with the attribution lines this session was given and no model identifier, and answer one line with the counts, as `cleaned: 3 folders, 1 plan, 1 worktree`. An answer of `nothing to clean` is the one line, and nothing is committed.'
+  `Pipeline clean, under the pipeline-rules skill. First tool call: ${call({ action: 'clean' })}. It lists, one per line, the paths config.retain says may go for every merged item, the superpowers folders of merged plans, the worktrees of merged items and their local branches as branch:<name>, and deletes nothing. ` +
+  'From the main checkout on mainBranch: remove each listed path with `git rm -r -q` (plain `rm -r` for an untracked one; `git worktree remove` for a worktree; `git branch -D <name>` for a `branch:` line), commit the removals on mainBranch with the attribution lines this session was given and no model identifier, and answer one line with the counts, as `cleaned: 3 folders, 1 plan, 1 worktree, 1 branch`. An answer of `nothing to clean` is the one line, and nothing is committed.'
 
 const QUEUE_PROMPT = (input: Record<string, unknown>) => `Under the pipeline-rules skill, make this one tool call: ${call(input)}. It answers one line; answer that line and nothing else.`
 
@@ -203,6 +208,9 @@ const self = {
   ticker: null as null | { cancel: () => void },
   // The permission mode the engine last told us (a prompt's, a spawn's); a child runs in it.
   permissionMode: '',
+  // The merged-PR check: when origin/<mainBranch> was last fetched, and the items found merged with their Close pending.
+  lastFetch: -Infinity,
+  mergedPending: [] as MergedPending[],
   // The items this session was named after, so an item renames it once, and the name waiting for the turn's end.
   renamed: new Set<string>(),
   pendingRename: '',
@@ -378,6 +386,7 @@ async function gather($: EngineInterface, found: string, c: Config | null, b: Ba
     signals: await read($, signals),
     now: await $.clock.now(),
     fileError: error,
+    mergedPending: self.mergedPending,
   }
 }
 
@@ -395,8 +404,8 @@ async function listDir($: EngineInterface, dir: string): Promise<string[]> {
   }
 }
 
-/** The listing `cleanList` wants: the known parents, the superpowers pointers and the worktree names. */
-async function cleanInput($: EngineInterface, found: string, b: Backlog | null): Promise<{ listing: string[]; planPaths: Record<string, string>; worktrees: string[] }> {
+/** The listing `cleanList` wants: the known parents, the superpowers pointers, the worktree names, the local branches and the merged items' ledger branches. */
+async function cleanInput($: EngineInterface, found: string, b: Backlog | null): Promise<{ listing: string[]; planPaths: Record<string, string>; worktrees: string[]; branches: string[]; ledgerBranches: Record<string, string> }> {
   const listing: string[] = []
   for (const parent of ['docs/pipeline/ledgers', 'docs/pipeline/plans', '.superpowers/sdd', '.claude/worktrees']) {
     for (const name of await listDir($, `${found}/${parent}`)) listing.push(`${parent}/${name}`)
@@ -418,7 +427,55 @@ async function cleanInput($: EngineInterface, found: string, b: Backlog | null):
     if (!plan.startsWith('docs/pipeline/plans/') && (await readText($, `${found}/${plan}`)) !== null) listing.push(plan)
   }
   const worktrees = listing.filter(p => p.startsWith('.claude/worktrees/') && p.endsWith('/')).map(p => p.slice('.claude/worktrees/'.length, -1))
-  return { listing, planPaths, worktrees }
+  // The local branches, so a merged item's branch is listed as `branch:<name>` for the caller's `git branch -D`; none when git fails.
+  let branches: string[] = []
+  try {
+    const r = await $.process.run(['git', '-C', found, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/'], { cwd: found, timeoutMs: 30_000 })
+    if (r.exitCode === 0) branches = r.stdout.split('\n').map(l => l.trim()).filter(Boolean)
+  } catch {}
+  const ledgerBranches: Record<string, string> = {}
+  for (const item of b?.items ?? []) {
+    if (item.status !== 'merged' || (typeof item.branch === 'string' && item.branch)) continue
+    const branch = (await loadLedger($, found, item.id))?.branch
+    if (typeof branch === 'string' && branch) ledgerBranches[item.id] = branch
+  }
+  return { listing, planPaths, worktrees, branches, ledgerBranches }
+}
+
+/**
+ * The items whose PR was merged by hand while their Close never ran: every `review` item, and every `building` item
+ * with a `pr`, whose branch tip is on `origin/<mainBranch>` (fetched at most once per minute per session). The git
+ * calls run through `$.process.run`; a failed one reads as unknown, not merged. The result is kept for the status
+ * block and the panel, which never run git themselves.
+ */
+async function checkMerged($: EngineInterface, found: string, c: Config | null, b: Backlog | null): Promise<MergedPending[]> {
+  try {
+    const ledgers: Record<string, Ledger | null> = {}
+    for (const item of b?.items ?? []) {
+      if (item.status === 'review' || item.status === 'building') ledgers[item.id] = await loadLedger($, found, item.id)
+    }
+    const list = mergeCandidates(b, ledgers)
+    if (!list.length) {
+      self.mergedPending = []
+      return []
+    }
+    const mainBranch = c?.mainBranch ?? DEFAULTS.mainBranch
+    const git: Git = async argv => {
+      try {
+        const r = await $.process.run(argv, { cwd: found, timeoutMs: 60_000 })
+        return { exitCode: r.exitCode }
+      } catch {
+        return null
+      }
+    }
+    const at = await $.clock.now()
+    if (isFetchDue(self.lastFetch, at)) {
+      self.lastFetch = at
+      await git(fetchArgv(found, mainBranch))
+    }
+    self.mergedPending = await findMerged(found, list, mainBranch, git)
+  } catch {}
+  return self.mergedPending
 }
 
 /** Writes the backlog and its generated view, refreshes the atom and answers what was written, settled, with its readiness. */
@@ -470,7 +527,7 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       wrote.push(BACKLOG_FILE, BACKLOG_MD_FILE)
     }
     await update($, fileError, () => null)
-    return `wrote ${wrote.join(', ')}`
+    return `wrote ${wrote.join(', ')}\n${commitLine(c?.mainBranch ?? DEFAULTS.mainBranch)}`
   }
   if (e.action === 'status') {
     if (e.id === undefined) return statusNow($, found, c, loaded, error)
@@ -488,9 +545,11 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     const ledger = active ? await loadLedger($, found, active.id) : null
     // A child's record without its log (up to 200 KB each): `log { item }` answers the text.
     const kids = (await read($, children)).map(({ log: _log, ...rest }) => rest)
+    // A PR merged by hand: the item's Close is pending, and the run skill does it first.
+    const merged = await checkMerged($, found, c, loaded)
     let answer: string
     if (e.full) {
-      const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings) }
+      const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings), mergedPending: merged }
       if (error) out['error'] = error
       answer = JSON.stringify(out, null, 2)
     } else {
@@ -500,6 +559,7 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
         out['item'] = one ? { ...one, ...(r[one.id] ? { readiness: r[one.id] } : {}) } : null
       }
       if (e.titles) out['titles'] = (loaded?.items ?? []).map(i => `${i.id} ${i.status} ${i.title}`)
+      if (merged.length) out['mergedPending'] = merged
       if (error) out['error'] = error
       answer = JSON.stringify(out)
     }
@@ -509,9 +569,10 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
   }
   if (e.action === 'signals') {
     const open = (await read($, signals)).filter(s => !s.delivered)
-    if (!open.length) return 'no signals'
-    const answer = JSON.stringify(open.map(compactSignal))
-    await markDelivered($)
+    const merged = await checkMerged($, found, c, loaded)
+    if (!open.length && !merged.length) return 'no signals'
+    const answer = merged.length ? JSON.stringify({ signals: open.map(compactSignal), mergedPending: merged }) : JSON.stringify(open.map(compactSignal))
+    if (open.length) await markDelivered($)
     return answer
   }
   if (e.action === 'clean') {
@@ -1067,6 +1128,7 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
   const bulk = bulkToRemove(listing, incrementsOf(increments, next.items).merged)
   const lines = [status, `spec stubs written for ${stubs} item${stubs === 1 ? '' : 's'}`, `historical line added to ${added} file${added === 1 ? '' : 's'}`]
   if (bulk.count) lines.push(`bulk: ${bulk.count} files of merged increments to remove with git rm once the user confirms (kept with retain.superpowers):`, ...bulk.files)
+  lines.push(commitLine(normalizeConfig(nextConfig).config.mainBranch))
   return lines.join('\n')
 }
 
@@ -1369,14 +1431,20 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({ name: 'pipeline', description: TOOL_DESCRIPTION, isDeferred: false, inputSchema: TOOL_SCHEMA })
     } catch {}
+    let loaded: { found: string; config: Config | null; backlog: Backlog | null } | null = null
     try {
-      await loadAll($, await resolveRoot($))
+      const found = await resolveRoot($)
+      loaded = { found, ...(await loadAll($, found)) }
     } catch {}
     try {
       self.sessionRoot = slashes(await $.session.root())
     } catch {}
     try {
       await arrive($)
+    } catch {}
+    // A PR merged by hand since the last session: the person hears it once, in a toast; the status block says it too.
+    try {
+      if (loaded) for (const m of await checkMerged($, loaded.found, loaded.config, loaded.backlog)) $.ui.toast(`pipeline: ${mergedLine(m)}`)
     } catch {}
     return started
   })
