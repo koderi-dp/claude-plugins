@@ -134,6 +134,8 @@ const IDLE = backlogOf([
 
 const alts = async (ui: Mounted) => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props['alt']))
 const svgOf = async (ui: Mounted, alt: RegExp) => String((await ui.findAll({ type: 'Svg' })).find(s => alt.test(String(s.props['alt'])))?.props['source'])
+/** The drawn item rows (`p1: title · meta · tag`) by their alt. */
+const rowAlts = async (ui: Mounted) => (await alts(ui)).filter(a => /^[a-z]\d+: /.test(a))
 
 // ---------- the text block ----------
 
@@ -265,28 +267,39 @@ test('desktop idle Overview: the hero says nothing runs and why, three metrics, 
   expect(hero).toContain('0 active agents')
   // Three metrics in one drawing.
   expect(a[1]).toBe('28 Inbox, 0 Ready, 5 Merged this week')
-  expect(a).toHaveLength(2)
-  // Needs specification: three rows, the slug dropped, the amber tag, then the count of the rest.
+  // Needs specification: three drawn rows (the mockup's .item-row), the slug dropped, the reason once as the amber tag,
+  // each with a chevron Button beside it, then the count of the rest.
   expect(await ui.find({ type: 'Text', text: /^Needs specification/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeUndefined()
-  const rows = await ui.findAll({ type: 'Button', text: /Inbox item|Grid row/ })
-  expect(rows.map(r => r.key)).toEqual(['row-p1', 'row-p2', 'row-p3'])
-  expect(rows).toHaveLength(OVERVIEW_ROWS)
-  expect(rows[0]!.text).toContain('Grid row and column sizes')
-  expect(rows[0]!.text).not.toContain('grid-track-sizes')
-  expect(rows[0]!.text).toContain('No spec')
-  expect(rows[0]!.text).toContain('Needs specification')
-  const tag = (await ui.findAll({ type: 'Text', text: 'No spec' }))[0]
-  expect(tag?.props['color']).toBe(BLOCKED)
+  expect(a.slice(2, 5)).toEqual(['p1: Grid row and column sizes · M · Inbox · No spec', 'p2: Inbox item 2 · M · Inbox · No spec', 'p3: Inbox item 3 · M · Inbox · No spec'])
+  expect(await rowAlts(ui)).toHaveLength(OVERVIEW_ROWS + 2)
+  for (const id of ['p1', 'p2', 'p3']) expect((await ui.find({ key: `row-${id}` }))?.props['label']).toBe('›')
+  expect(await ui.find({ key: 'row-p4' })).toBeUndefined()
+  const row = await svgOf(ui, /^p1: /)
+  expect(row).toContain('>p1<')
+  expect(row).toContain('>Grid row and column sizes<')
+  expect(row).not.toContain('grid-track-sizes')
+  expect(row).toContain('>M · Inbox<')
+  expect(row).toContain('>No spec<')
+  expect(row).toContain(`fill="${BLOCKED}"`)
+  expect(row).toContain('class="chip"')
+  // A hairline under every row but the last of its card.
+  expect(row).toContain('class="hair"')
+  expect(await svgOf(ui, /^p3: /)).toContain('class="hair"')
   expect(await ui.find({ type: 'Text', text: 'and 25 more in the queue' })).toBeDefined()
-  // Recently merged: two rows, newest first, with PR links.
+  // Recently merged: two drawn rows (the mockup's .merged-row: check, id, title), newest first, with PR links beside them.
   expect(await ui.find({ type: 'Text', text: /^Recently merged/ })).toBeDefined()
+  expect(a.slice(5)).toEqual(['m4: Merged item 4 · merged · #33', 'm1: Merged item 1 · merged · #30'])
   const links = await ui.findAll({ type: 'Link' })
   expect(links.map(l => l.props['href'])).toEqual(['https://x/pull/33', 'https://x/pull/30'])
-  expect(links[0]!.text).toContain('PR #33 ↗')
-  expect(await ui.find({ type: 'Text', text: /Merged item 4/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Merged item 1/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Merged item 2/ })).toBeUndefined()
+  expect(links[0]!.text).toContain('#33 ↗')
+  expect(links[0]!.text).not.toContain('PR ')
+  const merged = await svgOf(ui, /^m4: /)
+  expect(merged).toContain(`stroke="${DONE}"`)
+  expect(merged).toContain('>m4<')
+  expect(merged).toContain('>Merged item 4<')
+  expect(merged).toContain('class="hair"')
+  expect(await svgOf(ui, /^m1: /)).not.toContain('class="hair"')
   // The footer.
   expect(await ui.find({ type: 'Text', text: 'No subagents running' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '/pipeline status' })).toBeDefined()
@@ -306,9 +319,12 @@ test('desktop idle Overview with ready items: Up next lists them and the hero na
   const ui = await mount($ as never, 'desktop')
   expect((await alts(ui))[0]).toContain('There are 1 item in your inbox and 1 is ready to build. Run /pipeline next to start the first.')
   expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeDefined()
-  const row = await ui.find({ key: 'row-p1' })
-  expect(row?.text).toContain('Search')
-  expect(row?.text).toContain('Ready')
+  expect(await rowAlts(ui)).toEqual(['p1: Search · M · Ready'])
+  const row = await svgOf(ui, /^p1: /)
+  expect(row).toContain('>Search<')
+  expect(row).toContain('>Ready<')
+  expect(row).toContain(`fill="${DONE}"`)
+  expect(await ui.find({ key: 'row-p1' })).toBeDefined()
   expect(await ui.find({ key: 'row-p2' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'Nothing merged yet.' })).toBeDefined()
   // Pressing a row opens the Queue on that item.
@@ -346,7 +362,7 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   const card = await svgOf(ui, /^Implementer/)
   expect(card).toContain('Sonnet 5.5 · medium')
   expect(card).toContain('5:00')
-  expect(a).toHaveLength(2)
+  expect(a).toHaveLength(3)
   expect(await ui.find({ type: 'Text', text: /^Active agent/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Task 2 / 3' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: /Review task 1/ }))?.props['color']).toBe(BLOCKED)
@@ -362,7 +378,8 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   expect(command?.props['dimColor']).toBe(true)
   // Up next: the first ready item.
   expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeDefined()
-  expect((await ui.find({ key: 'row-p3' }))?.text).toContain('Search')
+  expect(a[2]).toBe('p3: Search · M · Ready')
+  expect(await ui.find({ key: 'row-p3' })).toBeDefined()
   expect(await ui.find({ key: 'row-p5' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '1 agent working · no signals' })).toBeDefined()
   // A silent agent: the signal row above the view, and the footer counts it.
@@ -391,18 +408,19 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   expect((await ui.find({ key: 'filter-inbox' }))?.props['dimColor']).toBe(false)
   expect((await ui.find({ key: 'filter-all' }))?.props['dimColor']).toBe(true)
   expect(await ui.find({ type: 'Text', text: '1 item · inbox' })).toBeDefined()
-  expect((await ui.find({ key: 'row-p5' }))?.text).toContain('Billing')
-  expect((await ui.find({ key: 'row-p5' }))?.text).toContain('no spec')
+  // The reason once, as the tag; the meta line is size and group.
+  expect(await rowAlts(ui)).toEqual(['p5: Billing · M · Inbox · No spec'])
+  expect((await ui.find({ key: 'row-p5' }))?.props['label']).toBe('›')
   expect(await ui.find({ key: 'row-p3' })).toBeUndefined()
   // Ready holds the item in flight first.
   await ui.press({ key: 'filter-ready' })
-  const ready = await ui.findAll({ type: 'Button', text: /Export|Search/ })
-  expect(ready.map(r => r.key)).toEqual(['row-p2', 'row-p3'])
-  expect(ready[0]!.text).toContain('Building')
+  expect(await rowAlts(ui)).toEqual(['p2: Export · M · Building', 'p3: Search · M · Ready'])
+  expect(await svgOf(ui, /^p2: /)).toContain(`fill="${RUNNING}"`)
   expect(await ui.find({ type: 'Text', text: '2 items · ready' })).toBeDefined()
   // All, then the search narrows live.
   await ui.press({ key: 'filter-all' })
-  expect(await ui.findAll({ type: 'Button', text: /^row-|Export|Search|Import|Billing|Later/ })).toHaveLength(5)
+  expect(await rowAlts(ui)).toHaveLength(5)
+  expect(await rowAlts(ui)).toContain('p7: Later · M · Parked')
   await ui.input({ key: 'pipeline-search', text: 'bil', kind: 'change' })
   expect((await ui.find({ type: 'Input' }))?.props['value']).toBe('bil')
   expect(await ui.find({ key: 'row-p5' })).toBeDefined()
@@ -419,7 +437,7 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   await ui.press({ key: 'row-p4' })
   expect(await ui.find({ type: 'Text', text: 'CI red after one fix' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: '/pipeline status p4' }))?.props['mono']).toBe(true)
-  expect((await ui.find({ key: 'row-p4' }))?.text).toContain('⌄')
+  expect((await ui.find({ key: 'row-p4' }))?.props['label']).toBe('⌄')
   await ui.press({ key: 'row-p2' })
   expect(await ui.find({ type: 'Text', text: '/pipeline status p4' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'Spec docs/pipeline/specs/p2.md' })).toBeDefined()
@@ -429,7 +447,8 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   await ui.press({ key: 'row-p4' })
   await ui.press({ key: 'filter-blocked' })
   expect(await ui.find({ type: 'Text', text: '/pipeline status p4' })).toBeUndefined()
-  expect((await ui.find({ key: 'row-p4' }))?.text).toContain('Blocked')
+  expect(await rowAlts(ui)).toEqual(['p4: Import · M · Blocked'])
+  expect(await svgOf(ui, /^p4: /)).toContain(`fill="${BLOCKED}"`)
   await ui.unmount()
 })
 
@@ -443,18 +462,49 @@ test('desktop History: the hero counts the week, every merged item newest first 
   await ui.press({ key: 'tab-history' })
   expect((await alts(ui))[0]).toBe('23 items merged: all time · 3 this week')
   expect(await ui.find({ type: 'Text', text: /^Recent pull requests/ })).toBeDefined()
-  const rows = await ui.findAll({ type: 'Text', text: /^Merged \d+$/ })
+  // Drawn rows like the Overview's merged rows: the check, the id and the title, the PR Link beside each.
+  const rows = await rowAlts(ui)
   expect(rows).toHaveLength(20)
-  expect(rows[0]!.text).toBe('Merged 3')
-  expect((await ui.find({ type: 'Text', text: 'm3' }))?.props['color']).toBe(DONE)
-  expect((await ui.findAll({ type: 'Text', text: '✓ Merged' }))[0]?.props['color']).toBe(DONE)
+  expect(rows[0]).toBe('m3: Merged 3 · merged · #3')
+  const first = await svgOf(ui, /^m3: /)
+  expect(first).toContain(`stroke="${DONE}"`)
+  expect(first).toContain('>m3<')
+  expect(first).toContain('>Merged 3<')
   expect((await ui.find({ type: 'Link', text: '#3 ↗' }))?.props['href']).toBe('https://x/pull/3')
   expect(await ui.find({ type: 'Text', text: '#9' })).toBeDefined()
   expect((await ui.find({ key: 'history-more' }))?.props['label']).toBe('Show all 23 →')
   await ui.press({ key: 'history-more' })
-  expect(await ui.findAll({ type: 'Text', text: /^Merged \d+$/ })).toHaveLength(23)
+  expect(await rowAlts(ui)).toHaveLength(23)
   expect((await ui.find({ key: 'history-more' }))?.props['label']).toBe('Show fewer')
   expect(await ui.find({ key: 'row-q1' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('desktop Overview: other sessions are drawn rows with the title cut, the item and the agents, a stale one faded; this session\'s own entry is not among them', async ($, on) => {
+  const agent = { id: 't9', agentId: 'a9', name: 'Theirs', model: 'm', status: 'running', startedAt: NOW - MIN, lastStepAt: NOW - MIN, calls: 0, tokens: 0, activity: 'starting', lastCommands: [], failures: 0 }
+  const sessions = {
+    'old-self': { title: 'p1 · grid-track-sizes — Grid row and column sizes', cwd: MAIN, item: 'p1', startedAt: new Date(NOW - 20 * MIN).toISOString(), seenAt: new Date(NOW - 30_000).toISOString(), agents: [], signals: [] },
+    busy: { title: 'p12 · A very long title of a session that will not fit in the row of the panel at this width', cwd: '/p/other', item: 'p12', startedAt: new Date(NOW - 20 * MIN).toISOString(), seenAt: new Date(NOW - 20_000).toISOString(), agents: [agent], signals: [] },
+    gone: { title: 'catalo', cwd: '/p/third', startedAt: new Date(NOW - 60 * MIN).toISOString(), seenAt: new Date(NOW - 10 * MIN).toISOString(), agents: [], signals: [] },
+  }
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE, [`${MAIN}/.git/pipeline-live.json`]: JSON.stringify({ sessions }) })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop', 40)
+  expect((await ui.find({ type: 'Text', text: /^Other sessions/ }))?.text).toBe('Other sessions · 2')
+  const a = await alts(ui)
+  expect(a).toContain('p12 · A very long title of a session that will not fit in the row of the panel at this width · p12 · 1 agent')
+  expect(a).toContain('catalo · 0 agents · stale')
+  expect(a.some(t => t.startsWith('p1 · grid-track-sizes'))).toBe(false)
+  const busy = await svgOf(ui, /^p12 · A very long/)
+  expect(busy).toContain('class="live"')
+  expect(busy).toContain('>p12 · 1 agent<')
+  expect(busy).not.toContain('opacity="0.5"')
+  const title = />([^<]*…)</.exec(busy)?.[1]
+  expect(title?.startsWith('p12 · A very long title')).toBe(true)
+  expect(busy).not.toContain('at this width<')
+  const gone = await svgOf(ui, /^catalo/)
+  expect(gone).toContain('opacity="0.5"')
+  expect(gone).not.toContain('class="live"')
   await ui.unmount()
 })
 
