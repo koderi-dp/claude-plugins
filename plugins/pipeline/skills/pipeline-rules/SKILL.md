@@ -5,7 +5,7 @@ description: Use when a session starts in a project that has docs/pipeline/confi
 
 # pipeline-rules
 
-This project runs on the pipeline plugin. The files live under `docs/pipeline/` in the main checkout of the repository (from a worktree too):
+This project runs on the pipeline plugin. The files live under `docs/pipeline/`. The tool's files (`backlog.json`, `BACKLOG.md`, `ledgers/<id>.json`) are always the main checkout's, from a worktree too; the files the lead writes by hand (a plan, briefs, reports) go into the worktree it is in, at the relative path, and reach the main branch through the item's PR (the engine refuses a hand edit at the main checkout's path from inside a worktree):
 
 - `config.json`: the rules the plugin enforces (checks, risky and protected paths, models, limits, merge mode, stop conditions, the runner). `/pipeline config` shows or changes it.
 - `rules.md`: process rules the config cannot express, numbered, grouped by when they apply (`before dispatch`, `in every implementer brief`, `in every reviewer brief`, `before the PR`, `after merge`). The run skill pastes each group into the brief or step it names. Keep it under about 40 lines; delete a rule nobody needs.
