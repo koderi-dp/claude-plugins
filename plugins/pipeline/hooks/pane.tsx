@@ -417,7 +417,6 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
   // The task bar and its legend: one segment per task.
   const segments = tasks.map(task => taskSegment(task, current))
   const legend = segmentLegend(segments)
-  const legendColor = (kind: (typeof legend)[number]['kind']) => (kind === 'accepted' ? DONE : kind === 'current' ? ACCENT : kind === 'blocked' ? BLOCKED : undefined)
   // One drawn row per task; without a ledger, the running agents' cards as before.
   const rows = taskRowsOf({ tasks, agents: d.agents, ledger, fixRounds: d.fixRounds, taskReview: d.taskReview, now: at })
   const taskRows = rows.map((r, i) => {
@@ -445,25 +444,8 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
       <Text dimColor tabular>
         {`${fmtTime(t.time)} elapsed · ${fmtTokens(t.tokens)} tokens · ≈${fmtCost(t.cost)} cost`}
       </Text>
-      <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
-        <Text dimColor>Task progress</Text>
-        <Text weight="semibold">{`${done} of ${tasks.length} accepted`}</Text>
-      </Box>
+      {heading(u, 'Tasks', `${done} of ${tasks.length} accepted`)}
       <Svg source={taskBarSvg(W, segments)} alt={`Task progress: ${legend.map(l => `${l.n} ${l.word}`).join(', ')}`} width={W} height={TASK_BAR_H} />
-      {!isCompact && tasks.length ? (
-        <Text dimColor>
-          {legend.map((l, i) => (
-            <Text key={`legend-${l.kind}`}>
-              {i ? ' · ' : ''}
-              <Text color={legendColor(l.kind)} weight="semibold">
-                {String(l.n)}
-              </Text>
-              {` ${l.word}`}
-            </Text>
-          ))}
-        </Text>
-      ) : null}
-      {heading(u, 'Tasks', 'Ordered execution')}
       {taskRows.length ? (
         <Box flexDirection="column">{taskRows}</Box>
       ) : (
@@ -478,7 +460,7 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
           <Box flexDirection="row">
             <Button key="activity-toggle" plain dimColor label={isActivityOpen ? 'Recent activity ⌃' : 'Recent activity ⌄'} onPress={() => d.onActivity?.()} />
           </Box>
-          {isActivityOpen ? activity.map((a, i) => <Text key={`activity-${i}`} color={MUTED}>{a}</Text>) : null}
+          {isActivityOpen ? card(u, activity.map((a, i) => <Text key={`activity-${i}`} color={MUTED}>{a}</Text>)) : null}
         </Box>
       ) : null}
       {heading(u, 'Up next', `${ready.length} ready · ${inbox.length} inbox`, { key: 'goto-queue', label: 'View queue →', onPress: () => d.onView('queue') })}
@@ -537,15 +519,20 @@ function siblingRows(u: Desk, d: PanelInput, W: number): Element | null {
   // A session silent for half an hour that runs nothing has ended without saying so: not listed. Before that it is faded.
   const shown = d.siblings.filter(x => d.now - Date.parse(x.seenAt) < 30 * 60_000 || x.agents.some(a => a.status === 'running'))
   if (!shown.length) return null
+  // A session with no item and no agent says nothing a row is worth: those are counted in one line.
+  const idle = shown.filter(x => siblingLabel(x).isIdle).length
+  const busy = shown.filter(x => !siblingLabel(x).isIdle)
+  const idleLine = idle ? `${idle} idle session${idle === 1 ? '' : 's'}` : ''
+  if (!busy.length) return <Box flexDirection="column">{heading(u, 'Other sessions', idleLine)}</Box>
   const rw = rowWidth(W, 0)
-  const rows = shown.map((s, n) => {
+  const rows = busy.map((s, n) => {
     const running = s.agents.filter(a => a.status === 'running').length
     const { title, meta, isIdle } = siblingLabel(s)
-    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title, meta, isLive: running > 0, isStale: s.isStale, isDim: isIdle, isLast: n === shown.length - 1 })} alt={line([title, meta])} width={rw} height={SESSION_ROW_H} />
+    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title, meta, isLive: running > 0, isStale: s.isStale, isDim: isIdle, isLast: n === busy.length - 1 })} alt={line([title, meta])} width={rw} height={SESSION_ROW_H} />
   })
   return (
     <Box flexDirection="column">
-      {heading(u, 'Other sessions', `${shown.length}`)}
+      {heading(u, 'Other sessions', line([`${busy.length}`, idleLine]))}
       {card(u, rows)}
     </Box>
   )
