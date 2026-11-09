@@ -561,7 +561,8 @@ test('desktop Overview: other sessions are drawn rows with the title cut, the it
   expect((await ui.find({ type: 'Text', text: /^Other sessions/ }))?.text).toBe('Other sessions · 2')
   const a = await alts(ui)
   expect(a).toContain('p12 · A very long title of a session that will not fit in the row of the panel at this width · p12 · 1 agent')
-  expect(a).toContain('catalo · 0 agents · stale')
+  // A session with no item and no agents is an idle session, named after its title, in dim text.
+  expect(a).toContain('idle session · catalo · stale')
   expect(a.some(t => t.startsWith('p1 · grid-track-sizes'))).toBe(false)
   const busy = await svgOf(ui, /^p12 · A very long/)
   expect(busy).toContain('class="live"')
@@ -570,9 +571,54 @@ test('desktop Overview: other sessions are drawn rows with the title cut, the it
   const title = />([^<]*…)</.exec(busy)?.[1]
   expect(title?.startsWith('p12 · A very long title')).toBe(true)
   expect(busy).not.toContain('at this width<')
-  const gone = await svgOf(ui, /^catalo/)
+  const gone = await svgOf(ui, /^idle session · catalo/)
   expect(gone).toContain('opacity="0.5"')
+  expect(gone).toContain('class="m" x="29"')
   expect(gone).not.toContain('class="live"')
+  await ui.unmount()
+})
+
+test('desktop Overview: an idle sibling that is not stale is dim too, and the text block names it the same way', async ($, on) => {
+  const sessions = { other: { title: 'openhuddle', cwd: '/p/other', startedAt: new Date(NOW - 20 * MIN).toISOString(), seenAt: new Date(NOW - 20_000).toISOString(), agents: [], signals: [] } }
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE, [`${MAIN}/.git/pipeline-live.json`]: JSON.stringify({ sessions }) })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop', 40)
+  expect(await alts(ui)).toContain('idle session · openhuddle')
+  const row = await svgOf(ui, /^idle session · openhuddle/)
+  expect(row).not.toContain('opacity="0.5"')
+  expect(row).toContain('class="m" x="29"')
+  expect(row).not.toContain('class="t"')
+  await ui.unmount()
+  const text = await mount($ as never, 'terminal')
+  const line = await text.find({ type: 'Text', text: 'idle session · openhuddle' })
+  expect(line?.props['dimColor']).toBe(true)
+  await text.unmount()
+})
+
+test('desktop running Overview: with no dispatch recorded for the current task, the finished agents listed are those of that task, not an earlier task\'s', async ($, on) => {
+  const ledger = JSON.parse(LEDGER) as { tasks: Record<string, unknown>[]; resume: Record<string, unknown> }
+  ledger.tasks[1] = { n: 2, title: 'The writer', status: 'running', dispatches: [] }
+  ledger.resume = { task: 2, state: 'task 2 dispatched', at: new Date(NOW + 5 * MIN).toISOString() }
+  const { clock } = world(on, { ...SEED, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
+  await start($ as never)
+  await spawn($ as never, 'Review task 1', 1)
+  await spawn($ as never, 'Implement task 1', 2)
+  await clock.advance(2 * MIN)
+  await complete($ as never, { agentId: 'agent-t1', reason: 'error' })
+  await complete($ as never, { agentId: 'agent-t2' })
+  await clock.advance(4 * MIN)
+  await spawn($ as never, 'Explore the writer', 3)
+  await clock.advance(MIN)
+  await complete($ as never, { agentId: 'agent-t3' })
+  await spawn($ as never, 'Implement task 2', 4)
+  await clock.advance(MIN)
+  await complete($ as never, { agentId: 'agent-t4' })
+  const ui = await mount($ as never, 'desktop')
+  expect(await ui.find({ type: 'Text', text: /^Lead$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Review task 1/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^Implement task 1/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^Implement task 2/ }))?.text).toBe('Implement task 2 · Sonnet 5.5 · 1:00 · done')
+  expect(await ui.find({ type: 'Text', text: /^Explore the writer/ })).toBeDefined()
   await ui.unmount()
 })
 

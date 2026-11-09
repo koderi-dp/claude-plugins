@@ -328,3 +328,32 @@ test('taskReview: a task accepted on the lead\'s reading of the diff ends its tr
   expect(attemptsOf({ ...accepted, review: { kind: 'independent', verdict: 'approved' } }, 3, 'off')).toHaveLength(1)
   expect(attemptsOf({ ...accepted, status: 'running' }, 3, 'off')).toHaveLength(1)
 })
+
+import type { AgentRun, Sibling } from '../types'
+import { finishedOfTask, siblingLabel } from './status'
+
+const agentRun = (name: string, startedAt: number, status: AgentRun['status'] = 'done'): AgentRun => ({ id: name, name, model: 'm', status, startedAt, lastStepAt: startedAt, endedAt: startedAt + 60_000, calls: 1, tokens: 1, activity: '', lastCommands: [], failures: 0 })
+
+test('finishedOfTask: only the finished agents of the current task, named for it or started after its dispatch; every finished agent without a current task', () => {
+  const at = Date.parse('2026-11-05T11:02:00Z')
+  const ledger: Ledger = { ...LEDGER, resume: { task: 3, state: 'task 3 dispatched', at: new Date(at).toISOString() } }
+  const agents = [agentRun('Implement task 1', at - 60 * 60_000), agentRun('Review task 2', at - 10 * 60_000, 'failed'), agentRun('Build the route for task 3', at - 60_000), agentRun('Explore the repo', at + 60_000), agentRun('Implement task 3', at + 120_000, 'running')]
+  const current = ledger.tasks.find(t => t.n === 3)
+  expect(finishedOfTask(agents, current, ledger).map(a => a.name)).toEqual(['Build the route for task 3', 'Explore the repo'])
+  // A resume block of another task says nothing about when this one started: only the name counts.
+  expect(finishedOfTask(agents, current, { ...ledger, resume: { task: 2, state: 'x', at: new Date(at).toISOString() } }).map(a => a.name)).toEqual(['Build the route for task 3'])
+  // `task 3` is a word: task 30 is another task.
+  expect(finishedOfTask([agentRun('Implement task 30', at - 60_000)], current, { ...ledger, resume: undefined }).map(a => a.name)).toEqual([])
+  expect(finishedOfTask(agents, undefined, null).map(a => a.name)).toEqual(['Implement task 1', 'Review task 2', 'Build the route for task 3', 'Explore the repo'])
+})
+
+test('siblingLabel: a session with an item or agents by its title, item and agents; one with neither reads idle session · <title>, the folder name when the title is empty', () => {
+  const sib = (over: Partial<Sibling>): Sibling => ({ sessionId: 's', title: 'catalo', cwd: '/p/catalo', seenAt: '2026-11-05T11:00:00Z', agents: [], signals: [], isStale: false, ...over })
+  const running = agentRun('Implement task 2', NOW, 'running')
+  expect(siblingLabel(sib({ title: 'p12 · Export', item: 'p12', agents: [running, agentRun('Review task 1', NOW)] }))).toEqual({ title: 'p12 · Export', meta: 'p12 · 1 agent', isIdle: false })
+  expect(siblingLabel(sib({ item: 'p3', isStale: true }))).toEqual({ title: 'catalo', meta: 'p3 · 0 agents · stale', isIdle: false })
+  expect(siblingLabel(sib({ agents: [agentRun('Explore', NOW)] }))).toEqual({ title: 'catalo', meta: '0 agents', isIdle: false })
+  expect(siblingLabel(sib({}))).toEqual({ title: 'idle session · catalo', meta: '', isIdle: true })
+  expect(siblingLabel(sib({ isStale: true }))).toEqual({ title: 'idle session · catalo', meta: 'stale', isIdle: true })
+  expect(siblingLabel(sib({ title: '', cwd: 'C:\\work\\openhuddle\\' }))).toEqual({ title: 'idle session · openhuddle', meta: '', isIdle: true })
+})

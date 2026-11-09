@@ -8,7 +8,7 @@ import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilt
 import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, MERGED_ROW_H, METRICS_H, ROW_H, SESSION_ROW_H, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
-import { attemptText, attemptsOf, currentLine, reviewNote, currentTask, displayTitle, groupCounts, heroSentence, leadLine, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, stepsOf, tagOf, taskCounter } from './status'
+import { attemptText, attemptsOf, currentLine, reviewNote, currentTask, displayTitle, finishedOfTask, groupCounts, heroSentence, leadLine, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, siblingLabel, stepsOf, tagOf, taskCounter } from './status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
 type Element = RenderElement
@@ -132,7 +132,10 @@ export function renderText(ui: Ui, d: PanelInput): Element {
     'Sessions',
     [
       ...d.children.map(c => <Text color={c.status === 'failed' ? BLOCKED : c.status === 'running' ? ACCENT : undefined}>{line([c.item, taskCounter(d.ledgers[c.item] ?? null), c.status, c.lastLine])}</Text>),
-      ...d.siblings.map(s => <Text dimColor={s.isStale}>{line([s.title, s.item, `${plural(s.agents.length, 'agent')}`, s.isStale ? 'stale' : undefined])}</Text>),
+      ...d.siblings.map(s => {
+        const label = siblingLabel(s)
+        return <Text dimColor={s.isStale || label.isIdle}>{line([label.title, label.meta])}</Text>
+      }),
     ],
   )
   if (backlog) rows.push(...queueRows({ Text, Link }, d, section).rows)
@@ -395,12 +398,10 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
   const done = tasks.filter(t => t.status === 'accepted').length
   const at = Math.max(d.now, ...d.agents.map(a => a.startedAt), 0)
   const running = d.agents.filter(a => a.status === 'running').reverse()
-  const finished = d.agents
-    .filter(a => a.status !== 'running')
-    .slice(-FINISHED_SHOWN)
-    .reverse()
   const t = totals(d.agents, at)
   const current = currentTask(ledger)
+  // The last few finished agents of the current task, shown while its ledger has no dispatch to draw the trail from.
+  const finished = finishedOfTask(d.agents, current, ledger).slice(-FINISHED_SHOWN).reverse()
   const hero: Hero = {
     kind: 'running',
     state: `${active.status.toUpperCase()} · ${active.id.toUpperCase()}`,
@@ -518,8 +519,8 @@ function siblingRows(u: Desk, d: PanelInput, W: number): Element | null {
   const rw = rowWidth(W, 0)
   const rows = d.siblings.map((s, n) => {
     const running = s.agents.filter(a => a.status === 'running').length
-    const meta = line([s.item, plural(running, 'agent'), s.isStale ? 'stale' : undefined])
-    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title: s.title, meta, isLive: running > 0, isStale: s.isStale, isLast: n === d.siblings.length - 1 })} alt={line([s.title, meta])} width={rw} height={SESSION_ROW_H} />
+    const { title, meta, isIdle } = siblingLabel(s)
+    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title, meta, isLive: running > 0, isStale: s.isStale, isDim: isIdle, isLast: n === d.siblings.length - 1 })} alt={line([title, meta])} width={rw} height={SESSION_ROW_H} />
   })
   return (
     <Box flexDirection="column">

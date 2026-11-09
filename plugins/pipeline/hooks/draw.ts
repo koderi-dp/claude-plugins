@@ -336,8 +336,8 @@ ${hairline(W, H, r.isLast)}`,
   )
 }
 
-/** Another session's row: a dot (purple while an agent runs), its title cut, then `p12 · 2 agents · stale` at the right; a stale one is faded. */
-export const sessionRowSvg = (W: number, r: { title: string; meta: string; isLive: boolean; isStale: boolean; isLast?: boolean }): string => {
+/** Another session's row: a dot (purple while an agent runs), its title cut, then `p12 · 2 agents · stale` at the right; a stale one is faded, an idle one's title is in the muted colour. */
+export const sessionRowSvg = (W: number, r: { title: string; meta: string; isLive: boolean; isStale: boolean; isDim?: boolean; isLast?: boolean }): string => {
   const H = SESSION_ROW_H
   const metaW = textWidth(r.meta, 11)
   const titleX = ROW_PAD + 16
@@ -346,7 +346,7 @@ export const sessionRowSvg = (W: number, r: { title: string; meta: string; isLiv
     W,
     H,
     `<g${r.isStale ? ' opacity="0.5"' : ''}>${dot(ROW_PAD + 4, 18, r.isLive && !r.isStale ? ACCENT : MUTED, r.isLive && !r.isStale)}
-<text class="t" ${startText(titleX, 22)} font-size="12" font-weight="590">${xml(fitText(r.title, 12, titleW))}</text>
+<text class="${r.isDim ? 'm' : 't'}" ${startText(titleX, 22)} font-size="12" font-weight="590">${xml(fitText(r.title, 12, titleW))}</text>
 <text class="m" ${endText(W - ROW_PAD, 22)} font-size="11">${xml(r.meta)}</text></g>
 ${hairline(W, H, r.isLast)}`,
   )

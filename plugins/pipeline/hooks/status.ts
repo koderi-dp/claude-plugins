@@ -1,6 +1,6 @@
 // The status block of spec §9. Pure: takes and returns plain data. One item's ledger as text is in ledger.ts.
 
-import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, Role, Signal, TaskRecord, TaskReview } from '../types'
+import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, Role, Sibling, Signal, TaskRecord, TaskReview } from '../types'
 import type { Readiness } from './backlog'
 import type { MergedPending } from './merged'
 import { mergedLine } from './merged'
@@ -229,6 +229,32 @@ export function roleOf(agent: Pick<AgentRun, 'name'>, ledger: Ledger | null): { 
   if (/review/.test(name)) return { role: 'reviewer' }
   if (/implement|build|task \d/.test(name)) return { role: 'implementer' }
   return { role: agent.name }
+}
+
+/**
+ * The finished agents the running view lists for the current task while its ledger has no dispatch yet: those whose
+ * name says `task N` (as a word, so task 3 is not task 30) and those that started after the task's dispatch, which the
+ * resume block dates when it is this task's. An earlier task's agents, accepted or failed, are not the current task's.
+ * Without a current task every finished agent is listed.
+ */
+export function finishedOfTask(agents: AgentRun[], current: Pick<TaskRecord, 'n'> | undefined, ledger: Ledger | null): AgentRun[] {
+  const finished = agents.filter(a => a.status !== 'running')
+  if (!current) return finished
+  const named = new RegExp(`\\btask ${current.n}\\b`, 'i')
+  const since = ledger?.resume?.task === current.n ? Date.parse(ledger.resume.at ?? '') : NaN
+  return finished.filter(a => named.test(a.name) || (!Number.isNaN(since) && a.startedAt >= since))
+}
+
+/**
+ * Another session's row: its title, then `p12 · 1 agent · stale`. A session with no item and no agents is an idle
+ * session, `idle session · <title>`, the title being the live entry's or the folder's name, with only `stale` beside it.
+ */
+export function siblingLabel(s: Sibling): { title: string; meta: string; isIdle: boolean } {
+  const name = s.title || s.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'session'
+  const isIdle = !s.item && !s.agents.length
+  if (isIdle) return { title: `idle session · ${name}`, meta: s.isStale ? 'stale' : '', isIdle }
+  const running = s.agents.filter(a => a.status === 'running').length
+  return { title: name, meta: line([s.item, `${running} agent${running === 1 ? '' : 's'}`, s.isStale ? 'stale' : undefined]), isIdle }
 }
 
 export type Verdict = 'APPROVED' | 'FIX REQUIRED'
