@@ -33,10 +33,13 @@ You are the implementer, in the item's worktree on its branch. Never switch bran
 
 {{rules}}
 
+Known about working in this repository:
+{{facts}}
+
 ## Hand back
 
 Write \`{{report}}\`, at most 25 lines: **Commit** (hash), **Changed** (files), **Deviations** (and why), **Evidence** (each command and its last summary line), **Gaps** (seen, not fixed), **Look here** (file:line a reviewer should read).
-Then answer in one line and nothing else: \`DONE <hash> · <passed>/<total> tests\` or \`BLOCKED <the question>\`.
+Then answer in one line and nothing else: \`DONE <hash> · <passed>/<total> tests\` or \`BLOCKED <the question>\`. If a command or a setup step of this repository cost you a failed attempt that the list above would have saved, add \` · fact: <the one line a next implementer needs>\`.
 
 ${END} End the commit message with these lines exactly:
 

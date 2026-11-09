@@ -131,6 +131,7 @@ export type BriefInput = {
   config: Config
   ledger: Ledger
   rulesMd: string
+  factsMd?: string
   specMd: string
   template?: string
   findings?: string
@@ -164,6 +165,7 @@ export function renderBrief(input: BriefInput): { text: string; brief: string; r
     checkTask: or(task?.check, or(c.checks.task, 'the tests of the package you touch')),
     checkGate: or(c.checks.gate, 'the full test suite'),
     process: c.superpowers === 'on' ? 'A skill the session has for testing, debugging or verification may be used inside a step; this brief decides what is done.' : 'This brief is the whole process: invoke no skill (no superpowers skill, no planning or brainstorming skill) and dispatch no agent.',
+    facts: (input.factsMd ?? '').split('\n').filter(l => /^[-*]\s/.test(l)).join('\n') || 'none yet',
     attribution: or(input.attribution ?? (typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''), '(no attribution lines)'),
   }
   if (task) {

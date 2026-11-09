@@ -24,7 +24,7 @@ import { SEGMENT_COLORS, bandOf, idleLine, sessionName, specWhat, statusText, ta
 import type { Band } from './status'
 import type { StatusInput } from './status'
 import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
-import { STALE_MS, deadAgents, isProtected, mergeSignals, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
+import { STALE_MS, deadAgents, isProtected, mergeSignals, normalizeCommand, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
 import type { Call } from './watch'
 
 const TOOL = 'mcp__pipeline__pipeline'
@@ -55,7 +55,7 @@ const TOOL_DESCRIPTION =
   'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set }, `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
   'Run, in order: `begin` { item } claims the item, makes its worktree and branch, records the base and answers the worktree to enter. `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
   '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
-  '`accept` { item, task, tokens?, minutes?, verdict?, carried? } closes the dispatch, accepts the task, commits the records and pushes. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. ' +
+  '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. ' +
   '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?, final?, blockers?, pr?, branch?, worktree?, base? } } merges anything else into the ledger. ' +
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain says may go and deletes nothing. ' +
   'A file that does not parse is refused with its line and left alone.'
@@ -87,6 +87,7 @@ const TOOL_SCHEMA = {
     close: { type: 'object', description: 'For brief: closes the dispatch before this one: { tokens, minutes, result }.' },
     tokens: { type: 'number', description: 'For accept and gate: the tokens of the Agent result.' },
     minutes: { type: 'number', description: 'For accept: the minutes of the Agent result.' },
+    fact: { type: 'string', description: 'For accept: one line a later implementer must know about working in this repository (a command\'s working spelling, a step that must come first); kept in docs/pipeline/facts.md and given to every brief.' },
     verdict: { type: 'string', description: 'For accept: how the task was approved. For gate: the final review\'s verdict.' },
     kind: { type: 'string', enum: ['implementer', 'fix', 'review', 'final'], description: 'For brief: which brief to render.' },
     task: { type: 'number', description: 'For brief: the task number (not for final).' },
@@ -367,6 +368,7 @@ type ToolInput = {
   minutes?: number
   verdict?: string
   review?: string
+  fact?: string
 }
 
 class Refused extends Error {}
@@ -767,6 +769,26 @@ async function loadPlan($: EngineInterface, found: string, wt: string, id: strin
   return { plan, rel }
 }
 
+/** A brief's answer without its leading item id, for joining onto another answer. */
+const withoutId = (id: string, line: string) => (line.startsWith(`${id} · `) ? line.slice(id.length + 3) : line)
+
+const FACTS_FILE = 'docs/pipeline/facts.md'
+const FACTS_MAX = 12
+
+/**
+ * What a run learned about working in this repository (a command's working spelling, a step that must come first):
+ * one line per fact in docs/pipeline/facts.md, the newest twelve kept, given to every implementer and reviewer.
+ */
+async function addFact($: EngineInterface, found: string, fact: string): Promise<void> {
+  const line = fact.replace(/\s+/g, ' ').trim().slice(0, 240)
+  if (!line) return
+  const path = `${found}/${FACTS_FILE}`
+  const lines = ((await readText($, path)) ?? '').split('\n').map(l => l.replace(/^[-*]\s+/, '').trim()).filter(l => l && !l.startsWith('#'))
+  if (lines.some(l => l.toLowerCase() === line.toLowerCase())) return
+  const kept = [...lines, line].slice(-FACTS_MAX)
+  await $.fs.write(path, `# Facts\n\nWhat runs learned about working in this repository; the tool keeps the newest ${FACTS_MAX} and gives them to every brief. Delete a line that stopped being true.\n\n${kept.map(l => `- ${l}`).join('\n')}\n`)
+}
+
 /** Stages the paths and commits them in the worktree with the attribution lines; false when there was nothing to commit or git failed. */
 async function commitPaths($: EngineInterface, wt: string, rels: string[], message: string, attribution: string): Promise<boolean> {
   if ((await gitOut($, wt, ['add', '--', ...rels])) === null) return false
@@ -859,11 +881,29 @@ async function acceptAction($: EngineInterface, found: string, c: Config | null,
   const review = { kind: (wasReviewed ? 'independent' : 'lead-diff') as 'independent' | 'lead-diff', verdict: e.verdict?.trim() || 'approved', ...(carried ? { carried } : {}) }
   await runTool($, { action: 'ledger', item: id, set: { tasks: [{ n, close, status: 'accepted', commits: `${from || 'base'}..${head}`, review }], resume: { task: next ?? n, state: `task ${n} accepted`, lastVerified: after }, ...(await recordLead($, ledger)) } })
   const done = ledger.tasks.filter(t => t.status === 'accepted' || t.n === n).length
-  return `${id} · task ${n} accepted · ${done}/${ledger.tasks.length} · ${from ? `${from.slice(0, 7)}..` : ''}${head} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${next ? `brief task ${next}` : 'brief final'}`
+  if (typeof e.fact === 'string' && e.fact.trim()) await addFact($, found, e.fact)
+  const line = `${id} · task ${n} accepted · ${done}/${ledger.tasks.length} · ${from ? `${from.slice(0, 7)}..` : ''}${head} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'}`
+  // The next Agent call comes with the answer: the next task's implementer, or the final review after the last.
+  try {
+    const current = (await loadBacklog($, found)).value
+    if (current) return `${line} · ${withoutId(id, await briefAction($, found, c, current, id, next ? { action: 'brief', kind: 'implementer', task: next, ...(carried ? { carried: carried[0]! } : {}) } : { action: 'brief', kind: 'final' }))}`
+  } catch {}
+  return `${line} · next: ${next ? `brief task ${next}` : 'brief final'}`
 }
 
-// The longest a host lets one command run.
-const GATE_TIMEOUT_MS = 600_000
+/**
+ * A command run to its end with no time limit of the host's (a gate may take longer than the ten minutes one
+ * `process.run` gets): the exit code and the last of its output. Null code when it was killed by a signal.
+ */
+async function runLong($: EngineInterface, argv: string[], cwd: string): Promise<{ code: number | null; out: string }> {
+  const stream = $.process.spawn({ argv, cwd })
+  let out = ''
+  for (;;) {
+    const r = await stream.next()
+    if (r.done) return { code: r.value?.code ?? null, out }
+    out = (out + r.value.text).slice(-20_000)
+  }
+}
 
 /**
  * `gate`: the tool runs `checks.gate` in the worktree itself and records what happened with the final verdict, so
@@ -878,11 +918,11 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
   let output = ''
   if (command) {
     try {
-      const r = await $.process.run(['sh', '-c', command], { cwd: wt, timeoutMs: GATE_TIMEOUT_MS })
-      gate = r.exitCode === 0 ? 'green' : `red (exit ${r.exitCode})`
-      if (r.exitCode !== 0) output = tail(`${r.stdout}\n${r.stderr}`.trim(), 20)
+      const r = await runLong($, ['sh', '-c', command], wt)
+      gate = r.code === 0 ? 'green' : `red (exit ${r.code ?? 'signal'})`
+      if (r.code !== 0) output = tail(r.out.trim(), 20)
     } catch (err) {
-      throw new Refused(`the gate could not be run here, or ran past ten minutes (${err instanceof Error ? err.message : String(err)}): run \`${command}\` yourself and record it with ledger { final: { verdict, gate } }`)
+      throw new Refused(`the gate could not be run here (${err instanceof Error ? err.message : String(err)}): run \`${command}\` yourself and record it with ledger { final: { verdict, gate } }`)
     }
   }
   const verdict = e.verdict?.trim() || ledger.final?.verdict || 'not reviewed'
@@ -912,7 +952,15 @@ async function planAction($: EngineInterface, found: string, c: Config | null, c
   // The plan is committed here, so the lead spends no turn on it; nothing to commit is fine.
   const attribution = typeof e.attribution === 'string' ? e.attribution : typeof ledger?.['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
   const committed = await commitPaths($, wt, [rel], `${id}: plan`, attribution)
-  return `${id} · building · ${plan.tasks.length} task${plan.tasks.length === 1 ? '' : 's'}${committed ? ' · plan committed' : ''} · next: brief task ${next}`
+  const head = `${id} · building · ${plan.tasks.length} task${plan.tasks.length === 1 ? '' : 's'}${committed ? ' · plan committed' : ''}`
+  // A fresh plan answers the first Agent call too, so the lead spends no turn asking for it.
+  if (!known.size) {
+    try {
+      const after = (await loadBacklog($, found)).value ?? current
+      return `${head} · ${withoutId(id, await briefAction($, found, c, after, id, { action: 'brief', kind: 'implementer', task: next }))}`
+    } catch {}
+  }
+  return `${head} · next: brief task ${next}`
 }
 
 /** `brief`: one brief rendered into the worktree, its dispatch opened in the ledger, and the Agent call in one line. */
@@ -951,6 +999,7 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
     out = renderBrief({
       kind, item: id, itemTitle: item.title, task: n, round, plan, config: cfg, ledger,
       rulesMd: (await readItemFile($, found, wt, 'docs/pipeline/rules.md')) ?? '',
+      factsMd: (await readText($, `${found}/${FACTS_FILE}`)) ?? '',
       specMd: (await readItemFile($, found, wt, item.spec ?? `docs/pipeline/specs/${id}.md`)) ?? '',
       ...(template ? { template } : {}),
       ...(e.findings !== undefined ? { findings: e.findings } : {}),
@@ -973,7 +1022,10 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
   const set: LedgerSet = { resume: { task: n, state, ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) } }
   if (kind !== 'final') {
     const dispatch = { role: out.role, model: out.model, effort: out.effort, tokens: 0, minutes: 0, result: '', brief: out.brief, report: out.report, ...(risky[0] ? { risky: risky[0] } : {}) }
-    set.tasks = [{ n, ...(kind === 'implementer' ? { status: 'running' as const } : kind === 'fix' ? { status: 'fix' as const } : {}), dispatches: [dispatch as never] }]
+    // The same brief asked for twice (plan and accept already answer the next one) opens one dispatch, not two.
+    const last = ledger.tasks.find(t => t.n === n)?.dispatches.at(-1)
+    const isSame = Boolean(last && last.brief === out.brief && !(last.result ?? '').trim() && !(last.minutes ?? 0))
+    set.tasks = [{ n, ...(kind === 'implementer' ? { status: 'running' as const } : kind === 'fix' ? { status: 'fix' as const } : {}), dispatches: isSame ? [] : [dispatch as never] }]
   }
   if (typeof e.attribution === 'string') set['attribution'] = e.attribution
   await runTool($, { action: 'ledger', item: id, set })
@@ -1849,6 +1901,15 @@ export const register: Register = (on, options) => {
         } catch {}
         if (path && isProtected(path, protectedOf(await read($, config)), [sessionRoot, await read($, root)])) {
           return { deny: `pipeline: ${path} is protected by ${CONFIG_FILE} protectedPaths` }
+        }
+      }
+      // A command that already failed three times in a row, unchanged, is not run a fourth time: the agent is told
+      // so directly, which costs the lead no turn.
+      if (e.tool === 'Bash') {
+        const own = (await read($, agents)).find(a => a.agentId === agentId || a.id === agentId)
+        const cmd = normalizeCommand(String((call as Record<string, unknown>)['command'] ?? ''))
+        if (own && cmd && own.lastCommands.length >= 3 && own.lastCommands.slice(-3).every(x => x === cmd)) {
+          return { deny: `pipeline: this exact command failed three times in a row. Running it again will not change the result. Read the error, change the approach, or stop and answer BLOCKED with what you tried.` }
         }
       }
       const at = await $.clock.now()
