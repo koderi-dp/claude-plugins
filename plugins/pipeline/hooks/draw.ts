@@ -316,12 +316,15 @@ export const bandSvg = (b: Band, W: number, isCompact = false): string => {
     right -= w + 10
   }
   if (!isCompact && b.state) {
-    parts.push(`<rect class="sep" x="${right - 1}" y="${y1 - 11}" width="1" height="13"/>`)
-    right -= 10
     const w = textWidth(b.state, 9) + 14 + b.state.length * 0.6
-    parts.push(`<rect x="${right - w}" y="${y1 - 12}" width="${w}" height="17" rx="5" fill="${b.color}" fill-opacity="0.12" stroke="${b.color}" stroke-opacity="0.3"/>`)
-    parts.push(`<text ${endText(right - 7, y1)} font-size="9" font-weight="700" letter-spacing="0.6" fill="${b.color}">${xml(b.state)}</text>`)
-    right -= w + 10
+    // At a narrow width the tag would sit on the id: it goes, as in compact mode, and the title keeps the room.
+    if (right - 10 - w >= idX + idW + 24) {
+      parts.push(`<rect class="sep" x="${right - 1}" y="${y1 - 11}" width="1" height="13"/>`)
+      right -= 10
+      parts.push(`<rect x="${right - w}" y="${y1 - 12}" width="${w}" height="17" rx="5" fill="${b.color}" fill-opacity="0.12" stroke="${b.color}" stroke-opacity="0.3"/>`)
+      parts.push(`<text ${endText(right - 7, y1)} font-size="9" font-weight="700" letter-spacing="0.6" fill="${b.color}">${xml(b.state)}</text>`)
+      right -= w + 10
+    }
   }
   parts.push(`<text class="s" ${startText(idX, y1)} font-size="11" font-weight="650" font-variant-numeric="tabular-nums">${xml(b.id)}</text>`)
   const titleX = idX + idW + 9

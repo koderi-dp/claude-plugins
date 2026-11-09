@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { BLOCKED, DONE, OVERVIEW_ROWS, ROWS_SHOWN, RUNNING } from './pane'
-import { bandText } from './draw'
+import { bandSvg, bandText } from './draw'
 import { BAND_COLORS, SEGMENT_COLORS, bandOf } from './status'
 
 const MAIN = '/p/main'
@@ -485,10 +485,12 @@ test('the band: two lines on the desktop within the width, segment colours, the 
   const src = String(svgs[0]!.props['source'])
   expect(svgs[0]!.props['alt']).toBe('p2 BUILDING: Show saved password and SSH key state in custom credentials, a long title, Task 2 / 3, Implementer · Sonnet 5.5 · starting')
   expect(src).toContain('>Task 2 / 3<')
-  expect(src).toContain('>BUILDING<')
+  // Too narrow for the state tag beside the id and the count: it goes (review 0.2 M2); the colour still says it.
+  expect(src).not.toContain('>BUILDING<')
   expect(src).toContain('>3:44<')
   // Every text starts inside the band, and the title is cut with an ellipsis instead of running over.
   for (const m of src.matchAll(/<text x="([\d.]+)"/g)) expect(Number(m[1])).toBeLessThan(W)
+  for (const m of src.matchAll(/<rect x="(-?[\d.]+)"/g)) expect(Number(m[1])).toBeGreaterThanOrEqual(0)
   const title = /<text class="t" x="[\d.]+" y="20" font-size="12" font-weight="650">([^<]*)</.exec(src)?.[1]
   expect(title === undefined || title.endsWith('…')).toBe(true)
   // The segments: one accepted (green), the running one (the state's purple), one pending (grey), in order.
@@ -508,9 +510,11 @@ test('the band: two lines on the desktop within the width, segment colours, the 
   expect(await ui.find({ type: 'Text', text: 'engine' })).toBeDefined()
   await ui.unmount()
 
-  // A wide band keeps the whole title.
+  // A wide band keeps the whole title and the state tag.
   ui = await band($ as never, 'desktop', { bodyColumns: 120 })
-  expect(String((await ui.find({ type: 'Svg' }))?.props['source'])).toContain('>Show saved password and SSH key state in custom credentials, a long title<')
+  const wide = String((await ui.find({ type: 'Svg' }))?.props['source'])
+  expect(wide).toContain('>Show saved password and SSH key state in custom credentials, a long title<')
+  expect(wide).toContain('>BUILDING<')
   await ui.unmount()
 
   // The terminal: one row, the head in the state colour, the segments, the tail; cut to the columns.
@@ -537,6 +541,27 @@ test('the band: two lines on the desktop within the width, segment colours, the 
   expect(`${cut.head} · ${cut.segments} · ${cut.tail}`.length).toBeLessThanOrEqual(50)
   expect(cut.tail).toMatch(/^Implementer · S.*… · 3:44$/)
   await ui.unmount()
+})
+
+test('review 0.2 M2: at the minimum width the hook allows (156 px) the band leaves the state tag out instead of drawing it over the id', () => {
+  const ledger = { item: 'p12', tasks: [{ n: 1, title: 'a', status: 'running', dispatches: [] }], rulings: [], blockers: [], tokens: 0, resume: { task: 1, state: 'implementer dispatched', at: '' } }
+  const b = bandOf(item('p12', 'Show saved password and SSH key state', 'building') as never, ledger as never, undefined, NOW)
+  const W = Math.max(180, Math.min(1600, 20 * 8 - 40)) - 24
+  expect(W).toBe(156)
+  const narrow = bandSvg(b, W)
+  expect(narrow).not.toContain('>BUILDING<')
+  expect(/<rect x="(-?[\d.]+)" y="8" width="[\d.]+" height="17"/.exec(narrow)).toBeNull()
+  expect(narrow).toContain('>p12<')
+  expect(narrow).toContain('>Task 1 / 1<')
+  for (const m of narrow.matchAll(/<(?:rect|text) x="(-?[\d.]+)"/g)) expect(Number(m[1])).toBeGreaterThanOrEqual(0)
+  // Room enough: the tag sits to the right of the id with its separator.
+  const wide = bandSvg(b, 600)
+  const tag = /<rect x="(-?[\d.]+)" y="8" width="([\d.]+)" height="17"/.exec(wide)
+  expect(tag).not.toBeNull()
+  expect(Number(tag![1])).toBeGreaterThan(29 + 24)
+  expect(wide).toContain('>BUILDING<')
+  expect(wide).toContain('class="sep"')
+  expect(narrow).not.toContain('class="sep"')
 })
 
 test('the band in compact mode: one line with the id, title, count and clock, no state tag, no activity', { options: { band: 'compact' } }, async ($, on) => {
