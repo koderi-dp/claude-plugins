@@ -1,6 +1,6 @@
 {
   "name": "pipeline",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Owns a project's workflow: a structured backlog, skills that take a request to a merged PR, a watchdog over subagents, a session runner that runs each item in a headless child session, and a status block as text and as a dashboard panel.",
   "author": {
     "name": "Danijel Peric"
@@ -25,6 +25,16 @@
       "options": [
         "two-line",
         "compact"
+      ]
+    },
+    "idleStrip": {
+      "type": "string",
+      "title": "The idle strip above the prompt",
+      "description": "show: one line with the idle status and an Open panel button when nothing is active in a project with a pipeline; hide: nothing when idle",
+      "default": "show",
+      "options": [
+        "show",
+        "hide"
       ]
     }
   },

@@ -33,6 +33,8 @@ export const DEFAULTS: Config = {
   ],
   afterMerge: ['docs/pipeline/BACKLOG.md'],
   notify: 'milestones',
+  renameSession: true,
+  taskReview: 'risky',
 }
 
 const kind = (x: unknown) => (x === null ? 'null' : Array.isArray(x) ? 'array' : typeof x)
@@ -56,6 +58,13 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
     if (Array.isArray(v) && v.every(x => typeof x === 'string')) return [...(v as string[])]
     problems.push(`${key}: expected an array of strings, got ${kind(v)}`)
     return [...fallback]
+  }
+  const bool = (key: string, fallback: boolean): boolean => {
+    const v = raw[key]
+    if (v === undefined) return fallback
+    if (typeof v === 'boolean') return v
+    problems.push(`${key}: expected a boolean, got ${kind(v)}`)
+    return fallback
   }
   const oneOf = <T extends string>(key: string, allowed: readonly T[], fallback: T): T => {
     const v = raw[key]
@@ -116,7 +125,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
       }
   }
 
-  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify'])
+  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview'])
   const extra = Object.fromEntries(Object.entries(raw).filter(([k]) => !known.has(k)))
   const config: Config = {
     ...extra,
@@ -135,6 +144,8 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
     afterMerge: strings('afterMerge', DEFAULTS.afterMerge),
     retain: retainOf(raw['retain'], problems),
     notify: oneOf('notify', ['off', 'milestones', 'all'] as const, DEFAULTS.notify),
+    renameSession: bool('renameSession', DEFAULTS.renameSession),
+    taskReview: oneOf('taskReview', ['risky', 'always', 'off'] as const, DEFAULTS.taskReview),
   }
   return { config, problems }
 }
@@ -212,7 +223,7 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
   const make = found.makeTargets
   const npm = (name: string) => `npm run ${name}`
 
-  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'limits.parallel', 'runner', 'afterMerge', 'retain', 'notify']) sources[key] = 'default'
+  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'limits.parallel', 'runner', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview']) sources[key] = 'default'
 
   const fast = ['check:fast', 'lint:fast'].find(n => n in scripts)
   if (fast) {

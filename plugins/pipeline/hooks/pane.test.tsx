@@ -134,6 +134,8 @@ const IDLE = backlogOf([
 
 const alts = async (ui: Mounted) => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props['alt']))
 const svgOf = async (ui: Mounted, alt: RegExp) => String((await ui.findAll({ type: 'Svg' })).find(s => alt.test(String(s.props['alt'])))?.props['source'])
+/** The drawn item rows (`p1: title · meta · tag`) by their alt. */
+const rowAlts = async (ui: Mounted) => (await alts(ui)).filter(a => /^[a-z]\d+: /.test(a))
 
 // ---------- the text block ----------
 
@@ -265,28 +267,39 @@ test('desktop idle Overview: the hero says nothing runs and why, three metrics, 
   expect(hero).toContain('0 active agents')
   // Three metrics in one drawing.
   expect(a[1]).toBe('28 Inbox, 0 Ready, 5 Merged this week')
-  expect(a).toHaveLength(2)
-  // Needs specification: three rows, the slug dropped, the amber tag, then the count of the rest.
+  // Needs specification: three drawn rows (the mockup's .item-row), the slug dropped, the reason once as the amber tag,
+  // each with a chevron Button beside it, then the count of the rest.
   expect(await ui.find({ type: 'Text', text: /^Needs specification/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeUndefined()
-  const rows = await ui.findAll({ type: 'Button', text: /Inbox item|Grid row/ })
-  expect(rows.map(r => r.key)).toEqual(['row-p1', 'row-p2', 'row-p3'])
-  expect(rows).toHaveLength(OVERVIEW_ROWS)
-  expect(rows[0]!.text).toContain('Grid row and column sizes')
-  expect(rows[0]!.text).not.toContain('grid-track-sizes')
-  expect(rows[0]!.text).toContain('No spec')
-  expect(rows[0]!.text).toContain('Needs specification')
-  const tag = (await ui.findAll({ type: 'Text', text: 'No spec' }))[0]
-  expect(tag?.props['color']).toBe(BLOCKED)
+  expect(a.slice(2, 5)).toEqual(['p1: Grid row and column sizes · M · Inbox · No spec', 'p2: Inbox item 2 · M · Inbox · No spec', 'p3: Inbox item 3 · M · Inbox · No spec'])
+  expect(await rowAlts(ui)).toHaveLength(OVERVIEW_ROWS + 2)
+  for (const id of ['p1', 'p2', 'p3']) expect((await ui.find({ key: `row-${id}` }))?.props['label']).toBe('›')
+  expect(await ui.find({ key: 'row-p4' })).toBeUndefined()
+  const row = await svgOf(ui, /^p1: /)
+  expect(row).toContain('>p1<')
+  expect(row).toContain('>Grid row and column sizes<')
+  expect(row).not.toContain('grid-track-sizes')
+  expect(row).toContain('>M · Inbox<')
+  expect(row).toContain('>No spec<')
+  expect(row).toContain(`fill="${BLOCKED}"`)
+  expect(row).toContain('class="chip"')
+  // A hairline under every row but the last of its card.
+  expect(row).toContain('class="hair"')
+  expect(await svgOf(ui, /^p3: /)).toContain('class="hair"')
   expect(await ui.find({ type: 'Text', text: 'and 25 more in the queue' })).toBeDefined()
-  // Recently merged: two rows, newest first, with PR links.
+  // Recently merged: two drawn rows (the mockup's .merged-row: check, id, title), newest first, with PR links beside them.
   expect(await ui.find({ type: 'Text', text: /^Recently merged/ })).toBeDefined()
+  expect(a.slice(5)).toEqual(['m4: Merged item 4 · merged · #33', 'm1: Merged item 1 · merged · #30'])
   const links = await ui.findAll({ type: 'Link' })
   expect(links.map(l => l.props['href'])).toEqual(['https://x/pull/33', 'https://x/pull/30'])
-  expect(links[0]!.text).toContain('PR #33 ↗')
-  expect(await ui.find({ type: 'Text', text: /Merged item 4/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Merged item 1/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Merged item 2/ })).toBeUndefined()
+  expect(links[0]!.text).toContain('#33 ↗')
+  expect(links[0]!.text).not.toContain('PR ')
+  const merged = await svgOf(ui, /^m4: /)
+  expect(merged).toContain(`stroke="${DONE}"`)
+  expect(merged).toContain('>m4<')
+  expect(merged).toContain('>Merged item 4<')
+  expect(merged).toContain('class="hair"')
+  expect(await svgOf(ui, /^m1: /)).not.toContain('class="hair"')
   // The footer.
   expect(await ui.find({ type: 'Text', text: 'No subagents running' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '/pipeline status' })).toBeDefined()
@@ -294,7 +307,7 @@ test('desktop idle Overview: the hero says nothing runs and why, three metrics, 
   expect((await ui.find({ key: 'goto-queue' }))?.props['label']).toBe('View queue →')
   await ui.press({ key: 'goto-history' })
   expect((await ui.find({ key: 'tab-history' }))?.props['dimColor']).toBe(false)
-  expect((await alts(ui))[0]).toBe('5 items merged: Completed this week · last 7 days')
+  expect((await alts(ui))[0]).toBe('7 items merged: all time · 5 this week')
   await ui.press({ key: 'tab-overview' })
   expect((await alts(ui))[0]).toMatch(/^PIPELINE IDLE/)
   await ui.unmount()
@@ -306,11 +319,14 @@ test('desktop idle Overview with ready items: Up next lists them and the hero na
   const ui = await mount($ as never, 'desktop')
   expect((await alts(ui))[0]).toContain('There are 1 item in your inbox and 1 is ready to build. Run /pipeline next to start the first.')
   expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeDefined()
-  const row = await ui.find({ key: 'row-p1' })
-  expect(row?.text).toContain('Search')
-  expect(row?.text).toContain('Ready')
+  expect(await rowAlts(ui)).toEqual(['p1: Search · M · Ready'])
+  const row = await svgOf(ui, /^p1: /)
+  expect(row).toContain('>Search<')
+  expect(row).toContain('>Ready<')
+  expect(row).toContain(`fill="${DONE}"`)
+  expect(await ui.find({ key: 'row-p1' })).toBeDefined()
   expect(await ui.find({ key: 'row-p2' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: 'Nothing merged this week.' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Nothing merged yet.' })).toBeDefined()
   // Pressing a row opens the Queue on that item.
   await ui.press({ key: 'row-p1' })
   expect((await ui.find({ key: 'tab-queue' }))?.props['dimColor']).toBe(false)
@@ -346,10 +362,12 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   const card = await svgOf(ui, /^Implementer/)
   expect(card).toContain('Sonnet 5.5 · medium')
   expect(card).toContain('5:00')
-  expect(a).toHaveLength(2)
+  expect(a).toHaveLength(3)
   expect(await ui.find({ type: 'Text', text: /^Active agent/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Task 2 / 3' })).toBeDefined()
-  expect((await ui.find({ type: 'Text', text: /Review task 1/ }))?.props['color']).toBe(BLOCKED)
+  // The current task's trail comes from the ledger's dispatches; an agent of an earlier task (the failed review of task 1) is not listed here.
+  expect((await ui.find({ type: 'Text', text: /^Build · / }))?.text).toBe('Build · Sonnet 5.5 · 0:00 ✓')
+  expect(await ui.find({ type: 'Text', text: /Review task 1/ })).toBeUndefined()
   // The timeline from the ledger.
   const parser = await ui.find({ type: 'Text', text: /^✓ The parser/ })
   expect(parser?.props['color']).toBe(DONE)
@@ -357,18 +375,82 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   const writer = await ui.find({ type: 'Text', text: /^● The writer/ })
   expect(writer?.props['color']).toBe(RUNNING)
   expect(writer?.text).toContain('In progress')
-  expect(await ui.find({ type: 'Text', text: /Sonnet 5\.5 · 5:00 elapsed/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '   Implementer · Sonnet 5.5 · 5:00' })).toBeDefined()
   const command = await ui.find({ type: 'Text', text: /^○ The command/ })
   expect(command?.props['dimColor']).toBe(true)
   // Up next: the first ready item.
   expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeDefined()
-  expect((await ui.find({ key: 'row-p3' }))?.text).toContain('Search')
+  expect(a[2]).toBe('p3: Search · M · Ready')
+  expect(await ui.find({ key: 'row-p3' })).toBeDefined()
   expect(await ui.find({ key: 'row-p5' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '1 agent working · no signals' })).toBeDefined()
   // A silent agent: the signal row above the view, and the footer counts it.
   await clock.advance(11 * MIN)
   expect((await ui.find({ type: 'Text', text: /^silent:/ }))?.props['color']).toBe(BLOCKED)
   expect(await ui.find({ type: 'Text', text: '1 agent working · 1 open signal' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('desktop running Overview in a fix round: a Lead line instead of an empty agent section, the current task\'s attempt trail from the ledger, and the timeline\'s fix round line', async ($, on) => {
+  const ledger = JSON.parse(LEDGER) as { tasks: Record<string, unknown>[]; resume: Record<string, unknown> }
+  ledger.tasks[1] = {
+    n: 2,
+    title: 'The writer',
+    status: 'fix',
+    dispatches: [
+      { role: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', tokens: 10, minutes: 3.3333, result: 'done' },
+      { role: 'reviewer', model: 'claude-opus-5-5', effort: 'high', tokens: 20, minutes: 0.97, result: 'FIX REQUIRED: the empty case has no test' },
+      { role: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', tokens: 5, minutes: 0.62, result: 'done' },
+    ],
+  }
+  ledger.resume = { task: 2, state: 'fix round 1 dispatched', at: new Date(NOW - 130_000).toISOString() }
+  world(on, { ...SEED, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  // No agent runs: the Lead line, with what it does and since when; no "Active agent · 0 running", no "No subagent running."
+  expect(await ui.find({ type: 'Text', text: /^Active agent/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'No subagent running.' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^Lead$|^Lead · / }))?.text).toBe('Lead')
+  const lead = await ui.find({ type: 'Text', text: /^Lead · / })
+  expect(lead?.text).toBe('Lead · fix round 1 dispatched · 2:10')
+  expect(lead?.props['color']).toBe(RUNNING)
+  expect(await ui.find({ type: 'Text', text: 'Task 2 / 3' })).toBeDefined()
+  // The attempt trail of task 2 from its dispatches, in order; the review that required fixes in amber.
+  const trail = (await ui.findAll({ type: 'Text', text: /^(Build|Review|Fix \d) / })).map(t => [t.text, t.props['color']])
+  expect(trail).toEqual([
+    ['Build · Sonnet 5.5 · 3:20 ✓', DONE],
+    ['Review · Opus 5.5 · 0:58 · FIX REQUIRED', BLOCKED],
+    ['Fix 1 of 3 · Sonnet 5.5 · 0:37 ✓', DONE],
+  ])
+  expect(await ui.find({ type: 'Text', text: /fix round 1 · / })).toBeUndefined()
+  // The timeline: the current task reads Fix round, with the round, the limit and the verdict on its second line.
+  const writer = await ui.find({ type: 'Text', text: /^● The writer/ })
+  expect(writer?.text).toBe('● The writer  Fix round')
+  expect(await ui.find({ type: 'Text', text: '   Fix round 1 of 3 · after review: FIX REQUIRED' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^   opus$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('taskReview: an accepted task the lead read itself shows a dim line under it, naming taskReview off when the config says so', async ($, on) => {
+  const ledger = JSON.parse(LEDGER) as { tasks: Record<string, unknown>[] }
+  ledger.tasks[0] = { ...ledger.tasks[0], status: 'accepted', review: { kind: 'lead-diff', verdict: 'approved · taskReview off' } }
+  const off = JSON.stringify({ ...JSON.parse(VALID_CONFIG), taskReview: 'off' }) + '\n'
+  world(on, { ...SEED, [CONFIG]: off, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  const note = await ui.find({ type: 'Text', text: '   review skipped (taskReview off)' })
+  expect(note).toBeDefined()
+  expect(note?.props['dimColor']).toBe(true)
+  await ui.unmount()
+})
+
+test('taskReview: with the default setting the same task reads lead read the diff', async ($, on) => {
+  const ledger = JSON.parse(LEDGER) as { tasks: Record<string, unknown>[] }
+  ledger.tasks[0] = { ...ledger.tasks[0], status: 'accepted', review: { kind: 'lead-diff', verdict: 'approved' } }
+  world(on, { ...SEED, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  expect(await ui.find({ type: 'Text', text: '   lead read the diff' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -382,6 +464,9 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   const input = await ui.find({ type: 'Input' })
   expect(input?.key).toBe('pipeline-search')
   expect(input?.props['placeholder']).toBe('Find an item by name or id…')
+  // The field spans the row (the mockup's .search), with a short submit label beside it.
+  expect(input?.props['submitLabel']).toBe('find')
+  expect((await ui.find({ key: 'pipeline-search-box' }))?.props['width']).toBe(60)
   // The filters with their counts; Inbox is selected.
   expect((await ui.find({ key: 'filter-inbox' }))?.props['label']).toBe('Inbox · 1')
   expect((await ui.find({ key: 'filter-ready' }))?.props['label']).toBe('Ready · 2')
@@ -391,18 +476,19 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   expect((await ui.find({ key: 'filter-inbox' }))?.props['dimColor']).toBe(false)
   expect((await ui.find({ key: 'filter-all' }))?.props['dimColor']).toBe(true)
   expect(await ui.find({ type: 'Text', text: '1 item · inbox' })).toBeDefined()
-  expect((await ui.find({ key: 'row-p5' }))?.text).toContain('Billing')
-  expect((await ui.find({ key: 'row-p5' }))?.text).toContain('no spec')
+  // The reason once, as the tag; the meta line is size and group.
+  expect(await rowAlts(ui)).toEqual(['p5: Billing · M · Inbox · No spec'])
+  expect((await ui.find({ key: 'row-p5' }))?.props['label']).toBe('›')
   expect(await ui.find({ key: 'row-p3' })).toBeUndefined()
   // Ready holds the item in flight first.
   await ui.press({ key: 'filter-ready' })
-  const ready = await ui.findAll({ type: 'Button', text: /Export|Search/ })
-  expect(ready.map(r => r.key)).toEqual(['row-p2', 'row-p3'])
-  expect(ready[0]!.text).toContain('Building')
+  expect(await rowAlts(ui)).toEqual(['p2: Export · M · Building', 'p3: Search · M · Ready'])
+  expect(await svgOf(ui, /^p2: /)).toContain(`fill="${RUNNING}"`)
   expect(await ui.find({ type: 'Text', text: '2 items · ready' })).toBeDefined()
   // All, then the search narrows live.
   await ui.press({ key: 'filter-all' })
-  expect(await ui.findAll({ type: 'Button', text: /^row-|Export|Search|Import|Billing|Later/ })).toHaveLength(5)
+  expect(await rowAlts(ui)).toHaveLength(5)
+  expect(await rowAlts(ui)).toContain('p7: Later · M · Parked')
   await ui.input({ key: 'pipeline-search', text: 'bil', kind: 'change' })
   expect((await ui.find({ type: 'Input' }))?.props['value']).toBe('bil')
   expect(await ui.find({ key: 'row-p5' })).toBeDefined()
@@ -419,7 +505,7 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   await ui.press({ key: 'row-p4' })
   expect(await ui.find({ type: 'Text', text: 'CI red after one fix' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: '/pipeline status p4' }))?.props['mono']).toBe(true)
-  expect((await ui.find({ key: 'row-p4' }))?.text).toContain('⌄')
+  expect((await ui.find({ key: 'row-p4' }))?.props['label']).toBe('⌄')
   await ui.press({ key: 'row-p2' })
   expect(await ui.find({ type: 'Text', text: '/pipeline status p4' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'Spec docs/pipeline/specs/p2.md' })).toBeDefined()
@@ -429,7 +515,8 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   await ui.press({ key: 'row-p4' })
   await ui.press({ key: 'filter-blocked' })
   expect(await ui.find({ type: 'Text', text: '/pipeline status p4' })).toBeUndefined()
-  expect((await ui.find({ key: 'row-p4' }))?.text).toContain('Blocked')
+  expect(await rowAlts(ui)).toEqual(['p4: Import · M · Blocked'])
+  expect(await svgOf(ui, /^p4: /)).toContain(`fill="${BLOCKED}"`)
   await ui.unmount()
 })
 
@@ -441,37 +528,141 @@ test('desktop History: the hero counts the week, every merged item newest first 
   await start($ as never)
   const ui = await mount($ as never, 'desktop')
   await ui.press({ key: 'tab-history' })
-  expect((await alts(ui))[0]).toBe('3 items merged: Completed this week · last 7 days')
+  expect((await alts(ui))[0]).toBe('23 items merged: all time · 3 this week')
   expect(await ui.find({ type: 'Text', text: /^Recent pull requests/ })).toBeDefined()
-  const rows = await ui.findAll({ type: 'Text', text: /^Merged \d+$/ })
+  // Drawn rows like the Overview's merged rows: the check, the id and the title, the PR Link beside each.
+  const rows = await rowAlts(ui)
   expect(rows).toHaveLength(20)
-  expect(rows[0]!.text).toBe('Merged 3')
-  expect((await ui.find({ type: 'Text', text: 'm3' }))?.props['color']).toBe(DONE)
-  expect((await ui.findAll({ type: 'Text', text: '✓ Merged' }))[0]?.props['color']).toBe(DONE)
+  expect(rows[0]).toBe('m3: Merged 3 · merged · #3')
+  const first = await svgOf(ui, /^m3: /)
+  expect(first).toContain(`stroke="${DONE}"`)
+  expect(first).toContain('>m3<')
+  expect(first).toContain('>Merged 3<')
   expect((await ui.find({ type: 'Link', text: '#3 ↗' }))?.props['href']).toBe('https://x/pull/3')
   expect(await ui.find({ type: 'Text', text: '#9' })).toBeDefined()
   expect((await ui.find({ key: 'history-more' }))?.props['label']).toBe('Show all 23 →')
   await ui.press({ key: 'history-more' })
-  expect(await ui.findAll({ type: 'Text', text: /^Merged \d+$/ })).toHaveLength(23)
+  expect(await rowAlts(ui)).toHaveLength(23)
   expect((await ui.find({ key: 'history-more' }))?.props['label']).toBe('Show fewer')
   expect(await ui.find({ key: 'row-q1' })).toBeUndefined()
   await ui.unmount()
 })
 
+test('desktop Overview: other sessions are drawn rows with the title cut, the item and the agents, a stale one faded; this session\'s own entry is not among them', async ($, on) => {
+  const agent = { id: 't9', agentId: 'a9', name: 'Theirs', model: 'm', status: 'running', startedAt: NOW - MIN, lastStepAt: NOW - MIN, calls: 0, tokens: 0, activity: 'starting', lastCommands: [], failures: 0 }
+  const sessions = {
+    'old-self': { title: 'p1 · grid-track-sizes — Grid row and column sizes', cwd: MAIN, item: 'p1', startedAt: new Date(NOW - 20 * MIN).toISOString(), seenAt: new Date(NOW - 30_000).toISOString(), agents: [], signals: [] },
+    busy: { title: 'p12 · A very long title of a session that will not fit in the row of the panel at this width', cwd: '/p/other', item: 'p12', startedAt: new Date(NOW - 20 * MIN).toISOString(), seenAt: new Date(NOW - 20_000).toISOString(), agents: [agent], signals: [] },
+    gone: { title: 'catalo', cwd: '/p/third', startedAt: new Date(NOW - 60 * MIN).toISOString(), seenAt: new Date(NOW - 10 * MIN).toISOString(), agents: [], signals: [] },
+  }
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE, [`${MAIN}/.git/pipeline-live.json`]: JSON.stringify({ sessions }) })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop', 40)
+  expect((await ui.find({ type: 'Text', text: /^Other sessions/ }))?.text).toBe('Other sessions · 2')
+  const a = await alts(ui)
+  expect(a).toContain('p12 · A very long title of a session that will not fit in the row of the panel at this width · p12 · 1 agent')
+  expect(a).toContain('catalo · 0 agents · stale')
+  expect(a.some(t => t.startsWith('p1 · grid-track-sizes'))).toBe(false)
+  const busy = await svgOf(ui, /^p12 · A very long/)
+  expect(busy).toContain('class="live"')
+  expect(busy).toContain('>p12 · 1 agent<')
+  expect(busy).not.toContain('opacity="0.5"')
+  const title = />([^<]*…)</.exec(busy)?.[1]
+  expect(title?.startsWith('p12 · A very long title')).toBe(true)
+  expect(busy).not.toContain('at this width<')
+  const gone = await svgOf(ui, /^catalo/)
+  expect(gone).toContain('opacity="0.5"')
+  expect(gone).not.toContain('class="live"')
+  await ui.unmount()
+})
+
+test('a migrated project: imported items carry the migration date, so the History hero counts them all time and only a pipeline merge this week, the Overview metric agrees, and the list runs newest first', async ($, on) => {
+  const imported = Array.from({ length: 33 }, (_, i) => item(`p${i + 1}`, `Imported ${i + 1}`, 'merged', { pr: `https://x/pull/${i + 1}`, updatedAt: '2026-11-05T09:00:00Z', note: i % 2 ? 'imported from docs/backlog.md' : 'imported from docs/backlog.md; no PR link' }))
+  const built = item('p34', 'Built here', 'merged', { pr: 'https://x/pull/34', updatedAt: '2026-11-05T09:30:00Z' })
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([...imported, built, item('q1', 'Open', 'inbox')]) })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  expect((await alts(ui))[1]).toBe('1 Inbox, 0 Ready, 1 Merged this week')
+  await ui.press({ key: 'tab-history' })
+  expect((await alts(ui))[0]).toBe('34 items merged: all time · 1 this week')
+  const links = await ui.findAll({ type: 'Link' })
+  expect(links.map(l => l.props['href']).slice(0, 3)).toEqual(['https://x/pull/34', 'https://x/pull/33', 'https://x/pull/32'])
+  expect(links.at(-1)!.props['href']).toBe('https://x/pull/15')
+  await ui.unmount()
+})
+
 // ---------- the band above the prompt ----------
 
-test('the band draws nothing of its own when nothing is active', async ($, on) => {
-  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([item('p3', 'Search', 'ready')]) })
+test('the band draws nothing of its own in a project without a pipeline', async ($, on) => {
+  world(on)
   await start($ as never)
-  const ui = await band($ as never, 'terminal')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await band($ as never, surface)
+    expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
+    expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
+    expect(await ui.find({ key: 'band-expand' })).toBeUndefined()
+    expect(await ui.find({ key: 'band-panel' })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test('idle: a one-line strip with the idle line and an Open panel button that opens the pane; cut to a narrow width; the terminal row cut to the columns', async ($, on) => {
+  const { opened } = world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE })
+  await start($ as never)
+  let ui = await band($ as never, 'desktop', { bodyColumns: 100 })
+  const svg = await ui.find({ type: 'Svg' })
+  expect(svg?.props['alt']).toBe('pipeline · idle · 28 inbox · next: p1 Grid row and column sizes')
+  expect(svg?.props['height']).toBe(28)
+  const src = String(svg?.props['source'])
+  expect(src).toContain('>pipeline · idle · 28 inbox · next: p1 Grid row and column sizes<')
+  expect(src).not.toContain('class="live"')
+  expect(await ui.find({ key: 'band-expand' })).toBeUndefined()
+  const button = await ui.find({ key: 'band-panel' })
+  expect(button?.props['label']).toBe('Open panel')
+  expect(button?.props['hotkey']).toBe('p')
+  expect(opened).toEqual([])
+  await ui.press({ key: 'band-panel' })
+  expect(opened).toEqual(['pipeline'])
+  // Open already: pressing again brings the pane forward with the keys, and opens no second one.
+  await ui.press({ key: 'band-panel' })
+  expect(opened).toEqual(['pipeline', 'pipeline'])
+  expect(await ui.find({ type: 'Text', text: 'engine' })).toBeDefined()
+  await ui.unmount()
+  // A narrow strip cuts the line with an ellipsis and keeps every text inside the width.
+  ui = await band($ as never, 'desktop', { bodyColumns: 30 })
+  const narrow = String((await ui.find({ type: 'Svg' }))?.props['source'])
+  const W = Number((await ui.find({ type: 'Svg' }))?.props['width'])
+  expect(W).toBe(176)
+  const cut = />(pipeline · idle[^<]*)</.exec(narrow)?.[1]
+  expect(cut?.endsWith('…')).toBe(true)
+  for (const m of narrow.matchAll(/<text x="([\d.]+)"/g)) expect(Number(m[1])).toBeLessThan(W)
+  await ui.unmount()
+  // The terminal: one dim row with a hollow dot, cut to the columns, and the same button.
+  ui = await band($ as never, 'terminal', { bodyColumns: 100 })
+  expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
+  expect((await ui.find({ type: 'Text', text: /^○ pipeline/ }))?.text).toBe('○ pipeline · idle · 28 inbox · next: p1 Grid row and column sizes')
+  expect((await ui.find({ key: 'band-panel' }))?.props['label']).toBe('Open panel')
+  await ui.unmount()
+  ui = await band($ as never, 'terminal', { bodyColumns: 40 })
+  const row = (await ui.find({ type: 'Text', text: /^○ pipeline/ }))?.text ?? ''
+  expect(row.length).toBeLessThanOrEqual(40 - 4 - 'Open panel'.length - 3)
+  expect(row.endsWith('…')).toBe(true)
+  await ui.unmount()
+})
+
+test('idleStrip hide: nothing of its own when idle; the running band stays', { options: { idleStrip: 'hide' } }, async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE })
+  await start($ as never)
+  const ui = await band($ as never, 'desktop')
   expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
   expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
-  expect(await ui.find({ key: 'band-expand' })).toBeUndefined()
+  expect(await ui.find({ key: 'band-panel' })).toBeUndefined()
   await ui.unmount()
 })
 
 test('the band: two lines on the desktop within the width, segment colours, the chevron expands the tasks; the terminal row cut to the columns', async ($, on) => {
-  const { clock } = world(on, { ...SEED, [BACKLOG]: backlogOf([item('p2', 'Show saved password and SSH key state in custom credentials, a long title', 'building'), item('p3', 'Search', 'ready')]) })
+  const worldRef = world(on, { ...SEED, [BACKLOG]: backlogOf([item('p2', 'Show saved password and SSH key state in custom credentials, a long title', 'building'), item('p3', 'Search', 'ready')]) })
+  const { clock } = worldRef
   await start($ as never)
   await spawn($ as never, 'Implement task 2', 1)
   await clock.advance(224_000)
@@ -497,6 +688,17 @@ test('the band: two lines on the desktop within the width, segment colours, the 
   const fills = [...src.matchAll(/height="5" rx="2.5" fill="(#[0-9a-f]{6})"/g)].map(m => m[1])
   expect(fills).toEqual([SEGMENT_COLORS.accepted, BAND_COLORS.running, SEGMENT_COLORS.pending])
   expect(src).toContain(`fill="${BAND_COLORS.running}"`)
+  // The Panel button beside the chevron: the spawn opened the pane, so it reads open; closed, it opens it on a press.
+  const { opened, panes } = worldRef
+  expect((await ui.find({ key: 'band-panel' }))?.props['label']).toBe('Panel ↗')
+  expect((await ui.find({ key: 'band-panel' }))?.props['hotkey']).toBe('p')
+  await run($ as never, 'panel')
+  expect(panes).toEqual([])
+  expect((await ui.find({ key: 'band-panel' }))?.props['label']).toBe('Panel')
+  await ui.press({ key: 'band-panel' })
+  expect(opened).toEqual(['pipeline', 'pipeline'])
+  expect(panes).toEqual(['pipeline'])
+  expect((await ui.find({ key: 'band-panel' }))?.props['label']).toBe('Panel ↗')
   // The chevron reveals the task list with its summary.
   expect(await ui.find({ type: 'Text', text: /^Execution tasks/ })).toBeUndefined()
   await ui.press({ key: 'band-expand' })
@@ -600,9 +802,10 @@ test('the band stays for a blocked item until the next turn starts, then goes', 
   ui = await band($ as never, 'desktop', { isWorking: false })
   expect(await ui.find({ type: 'Svg' })).toBeDefined()
   await ui.unmount()
-  // The next turn: gone.
+  // The next turn: gone, the idle strip in its place.
   ui = await band($ as never, 'desktop', { isWorking: true })
-  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+  expect((await ui.find({ type: 'Svg' }))?.props['alt']).toMatch(/^pipeline · idle · \d inbox · next: p3 Search$/)
+  expect(await ui.find({ key: 'band-expand' })).toBeUndefined()
   expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
   await ui.unmount()
   // A merged item the same way, in green with its count.

@@ -60,15 +60,20 @@ export function withoutEntry(live: Live, id: string): Live {
   return { ...live, sessions }
 }
 
+const normalPath = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
+
 /**
  * The other sessions of the live file as the panel shows them: every entry but this session's and the
  * excluded ids (the children this session runs, drawn on their own), stale once no heartbeat refreshed it
- * for STALE_MS, so a session that died shows dim until the watchdog drops its entry.
+ * for STALE_MS, so a session that died shows dim until the watchdog drops its entry. An entry whose cwd is
+ * one of `selfCwds` (this session's cwd and its root) is this session's too, left under an earlier id by a
+ * /clear, a resume or a restart, and is never a sibling.
  */
-export function siblingsOf(live: Live, selfId: string, nowMs: number, excludeIds: readonly string[] = []): Sibling[] {
+export function siblingsOf(live: Live, selfId: string, nowMs: number, excludeIds: readonly string[] = [], selfCwds: readonly string[] = []): Sibling[] {
   const out: Sibling[] = []
+  const own = new Set(selfCwds.map(normalPath).filter(Boolean))
   for (const [sessionId, s] of Object.entries(live.sessions)) {
-    if (sessionId === selfId || excludeIds.includes(sessionId)) continue
+    if (sessionId === selfId || excludeIds.includes(sessionId) || own.has(normalPath(s.cwd))) continue
     out.push({
       sessionId,
       title: s.title,

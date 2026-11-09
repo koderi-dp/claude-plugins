@@ -111,6 +111,10 @@ test('/pipeline config parses dotted keys, numbers, booleans and arrays, and ref
   expect((await run($, 'config limits.fixRounds=many')).text).toMatch(/^refused: limits\.fixRounds: expected a number, got string/)
   expect((await run($, 'config retain.plans=yes')).text).toMatch(/^refused: retain\.plans: expected a boolean, got string/)
   expect((await run($, 'config models.final.effort=huge')).text).toMatch(/^refused: models\.final\.effort: expected one of low, medium, high, xhigh, max, default/)
+  expect((await run($, 'config taskReview=off')).text).toBe('taskReview = "off"')
+  expect(JSON.parse(files.get(CONFIG)!).taskReview).toBe('off')
+  expect((await run($, 'config taskReview=sometimes')).text).toMatch(/^refused: taskReview: expected "risky", "always" or "off", got "sometimes"/)
+  expect(JSON.parse(files.get(CONFIG)!).taskReview).toBe('off')
 })
 
 test('/pipeline config without a config says so and writes nothing', async ($, on) => {
@@ -134,7 +138,7 @@ test('the prompts: each submits a turn that names its skill and its first tool c
   expect(submitted).toHaveLength(1)
   expect(last()).toContain('pipeline-intake')
   expect(last()).toContain('"csv export of catalogs"')
-  expect(last()).toContain(`${TOOL} {"action":"get"}`)
+  expect(last()).toContain(`${TOOL} {"action":"get","titles":true}`)
   await run($, 'add')
   expect(submitted).toHaveLength(1)
 

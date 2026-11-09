@@ -20,6 +20,10 @@ test('childArgv: a headless print run in the given permission mode, prompts deni
   expect(argv[argv.indexOf('--output-format') + 1]).toBe('stream-json')
   expect(argv).toContain('--verbose')
   expect(argv[argv.indexOf('--session-id') + 1]).toBe('2b1f0a9e-1111-4222-8333-444455556666')
+  expect(argv).not.toContain('--name')
+  const named = childArgv({ prompt: 'Run p12', permissionMode: 'auto', name: 'p12 · CSV export' })
+  expect(named[named.indexOf('--name') + 1]).toBe('p12 · CSV export')
+  expect(named).not.toContain('--session-id')
   // No plugin flag: the child loads the installed plugins as the parent did.
   expect(argv.some(a => a.startsWith('--plugin'))).toBe(false)
   expect(childArgv({ prompt: 'x', permissionMode: 'auto' })).not.toContain('--session-id')

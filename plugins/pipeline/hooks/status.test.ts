@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Backlog, Item, Ledger } from '../types'
 
 import { DEFAULTS } from './config'
-import { displayTitle, idleLine, prLabel, statusText, taskCounter } from './status'
+import { displayTitle, idleLine, prLabel, sessionName, statusText, taskCounter } from './status'
 import type { StatusInput } from './status'
 
 const NOW = Date.parse('2026-11-05T12:00:00Z')
@@ -107,6 +107,14 @@ test('displayTitle drops a migrated slug and keeps every other title', () => {
   expect(displayTitle('a-b — ')).toBe('a-b — ')
 })
 
+test('sessionName: the id and the title without its slug, cut to 60 characters', () => {
+  expect(sessionName({ id: 'p1', title: 'grid-track-sizes — Grid row and column sizes' })).toBe('p1 · Grid row and column sizes')
+  expect(sessionName({ id: 'p12', title: 'CSV export' })).toBe('p12 · CSV export')
+  const long = sessionName({ id: 'p2', title: 'x'.repeat(80) })
+  expect(long).toBe(`p2 · ${'x'.repeat(59)}…`)
+  expect(long.length - 'p2 · '.length).toBe(60)
+})
+
 test('prLabel reads the number from a URL, a #NN or a bare number', () => {
   expect(prLabel('https://github.com/x/y/pull/35')).toEqual({ label: '#35', href: 'https://github.com/x/y/pull/35' })
   expect(prLabel('#35')).toEqual({ label: '#35' })
@@ -132,7 +140,7 @@ test('idleLine counts the inbox and names the first ready item, else the first i
 
 // ---------- the dashboard's derivations ----------
 
-import { currentTask, groupCounts, heroSentence, mergedItems, queueItems, roleOf, stepsOf, tagOf } from './status'
+import { currentTask, groupCounts, heroSentence, mergedItems, mergedThisWeek, queueItems, roleOf, stepsOf, tagOf } from './status'
 
 const MIXED: Item[] = [
   item('p1', 'inbox', { title: 'Grid row and column sizes' }),
@@ -160,9 +168,23 @@ test('queueItems: the filter picks the group, in flight first under ready, and t
   expect(queueItems([item('q1', 'inbox', { title: 'grid-track — Grid sizes' })], 'inbox', 'grid sizes')).toHaveLength(1)
 })
 
-test('mergedItems: newest first, the week when asked', () => {
+test('mergedItems: newest first, the week when asked; equal dates in array order reversed, so a migrated list reads newest first', () => {
   expect(mergedItems(MIXED, NOW).map(i => i.id)).toEqual(['p9', 'p7', 'p8'])
   expect(mergedItems(MIXED, NOW, 7 * 24 * 60 * 60_000).map(i => i.id)).toEqual(['p9', 'p7'])
+  const migrated = ['m1', 'm2', 'm3'].map(id => item(id, 'merged', { updatedAt: '2026-11-05T00:00:00Z', note: 'imported from docs/backlog.md' }))
+  expect(mergedItems(migrated, NOW).map(i => i.id)).toEqual(['m3', 'm2', 'm1'])
+  expect(mergedItems([...migrated, item('m4', 'merged')], NOW).map(i => i.id)).toEqual(['m3', 'm2', 'm1', 'm4'])
+})
+
+test('mergedThisWeek: merged by the pipeline within seven days; an imported item never counts, whatever its date', () => {
+  const week = 7 * 24 * 60 * 60_000
+  expect(mergedThisWeek(MIXED, NOW).map(i => i.id)).toEqual(['p9', 'p7'])
+  const imported = [item('m1', 'merged', { updatedAt: new Date(NOW - 1000).toISOString(), note: 'imported from docs/backlog.md' }), item('m2', 'merged', { updatedAt: new Date(NOW - 1000).toISOString(), note: 'imported from docs/backlog.md; no PR link' })]
+  expect(mergedThisWeek(imported, NOW)).toEqual([])
+  expect(mergedThisWeek([...imported, item('p1', 'merged', { updatedAt: new Date(NOW - week).toISOString(), note: 'PR merged' })], NOW).map(i => i.id)).toEqual(['p1'])
+  expect(mergedThisWeek([item('p2', 'merged', { updatedAt: new Date(NOW - week - 1).toISOString() })], NOW)).toEqual([])
+  expect(mergedThisWeek([item('p3', 'merged')], NOW)).toEqual([])
+  expect(mergedThisWeek([item('p4', 'ready', { updatedAt: new Date(NOW).toISOString() })], NOW)).toEqual([])
 })
 
 test('heroSentence says how many wait, how many are ready and what moves work', () => {
@@ -224,6 +246,49 @@ test('tagOf: the word and the colour kind of a row', () => {
   expect(tagOf(item('p1', 'merged'))).toEqual({ text: 'Merged', kind: 'done' })
 })
 
+import { attemptText, attemptsOf, currentLine, leadLine, reviewNote } from './status'
+
+const FIX_TASK: Ledger['tasks'][number] = {
+  n: 2,
+  title: 'The writer',
+  status: 'fix',
+  dispatches: [
+    { role: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', tokens: 10, minutes: 3.3333, result: 'done' },
+    { role: 'reviewer', model: 'claude-opus-5-5', effort: 'high', tokens: 20, minutes: 0.97, result: 'FIX REQUIRED: the test for the empty case is missing' },
+    { role: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', tokens: 5, minutes: 0.62, result: 'done' },
+  ],
+}
+
+test('attemptsOf: the task\'s dispatches as Build, Review with its verdict and Fix n of max, each with its model and minutes as a clock', () => {
+  const trail = attemptsOf(FIX_TASK, 2)
+  expect(trail.map(attemptText)).toEqual(['Build · Sonnet 5.5 · 3:20 ✓', 'Review · Opus 5.5 · 0:58 · FIX REQUIRED', 'Fix 1 of 2 · Sonnet 5.5 · 0:37 ✓'])
+  const more = attemptsOf({ dispatches: [...FIX_TASK.dispatches, { role: 'reviewer', model: 'claude-opus-5-5', effort: 'high', tokens: 1, minutes: 1, result: 'APPROVED with notes' }, { role: 'final', model: 'claude-opus-5-5', effort: 'xhigh', tokens: 1, minutes: 2, result: 'approved' }, { role: 'escalate', model: 'claude-opus-5-5', effort: 'high', tokens: 1, minutes: 0.5, result: '' }] }, 3)
+  expect(more.map(attemptText).slice(3)).toEqual(['Review · Opus 5.5 · 1:00 · APPROVED', 'Final review · Opus 5.5 · 2:00 · APPROVED', 'Escalation · Opus 5.5 · 0:30 ✓'])
+  expect(attemptsOf(undefined, 3)).toEqual([])
+  expect(attemptsOf({ dispatches: [] }, 3)).toEqual([])
+  // review 0.2 C1: a task record without dispatches.
+  expect(attemptsOf({ n: 1, title: 'a', status: 'running' } as unknown as Ledger['tasks'][number], 3)).toEqual([])
+})
+
+test('currentLine: the fix round with the review\'s verdict, else the running agent\'s role, model and clock, else the last dispatch\'s model', () => {
+  const agent = (name: string, model: string) => ({ id: 'a', name, model, status: 'running' as const, startedAt: NOW - 108_000, lastStepAt: NOW, calls: 0, tokens: 0, activity: '', lastCommands: [], failures: 0 })
+  expect(currentLine(FIX_TASK, undefined, LEDGER, 2, NOW)).toBe('Fix round 1 of 2 · after review: FIX REQUIRED')
+  expect(currentLine(FIX_TASK, agent('Implement task 2', 'claude-sonnet-5-5'), LEDGER, 3, NOW)).toBe('Fix round 1 of 3 · after review: FIX REQUIRED')
+  expect(currentLine({ ...FIX_TASK, dispatches: FIX_TASK.dispatches.slice(0, 1) }, undefined, LEDGER, 3, NOW)).toBe('Fix round 1 of 3')
+  const building = { ...FIX_TASK, status: 'running' as const, dispatches: FIX_TASK.dispatches.slice(0, 1) }
+  expect(currentLine(building, agent('Implement task 2', 'claude-sonnet-5-5'), null, 3, NOW)).toBe('Implementer · Sonnet 5.5 · 1:48')
+  expect(currentLine(building, agent('Review task 2', 'claude-opus-5-5'), null, 3, NOW - 50_000)).toBe('Review · Opus 5.5 · 0:58')
+  expect(currentLine(building, agent('Final review of p12', 'claude-opus-5-5'), null, 3, NOW)).toBe('Final review · Opus 5.5 · 1:48')
+  expect(currentLine(building, undefined, null, 3, NOW)).toBe('Sonnet 5.5')
+  expect(currentLine({ ...building, dispatches: [] }, undefined, null, 3, NOW)).toBe('')
+})
+
+test('leadLine: what the lead does and how long since, from the resume block', () => {
+  expect(leadLine({ ...LEDGER, resume: { task: 2, state: 'fix round 1 dispatched', at: new Date(NOW - 130_000).toISOString() } }, NOW)).toBe('Lead · fix round 1 dispatched · 2:10')
+  expect(leadLine({ ...LEDGER, resume: { task: 2, state: 'reading the review of task 2', at: 'not a date' } }, NOW)).toBe('Lead · reading the review of task 2')
+  expect(leadLine(null, NOW)).toBe('Lead · between dispatches')
+})
+
 import { specWhat } from './status'
 
 test('specWhat reads the first paragraph under What, else the first paragraph, cut to 160 characters', () => {
@@ -251,4 +316,15 @@ test('bandOf: the state tag and colour per status, the count, the segments and t
   expect(merged).toMatchObject({ state: 'MERGED', color: BAND_COLORS.merged, count: '6 / 6 accepted', activity: 'Merged · #35', summary: '6 accepted · merged' })
   expect(merged.segments.every(s => s === 'accepted')).toBe(true)
   expect(bandOf(item('p12', 'ready'), { ...LEDGER, resume: undefined, tasks: LEDGER.tasks.map(t => ({ ...t, status: 'pending' as const })) }, undefined, NOW)).toMatchObject({ state: 'READY', color: BAND_COLORS.idle, count: '6 tasks', activity: 'Next in queue · waiting to start', summary: '0 accepted · 6 pending' })
+})
+
+test('taskReview: a task accepted on the lead\'s reading of the diff ends its trail with a dim line saying so', () => {
+  const accepted = { n: 3, title: 'c', status: 'accepted' as const, dispatches: [{ role: 'implementer' as const, model: 'claude-sonnet-5-5', effort: 'medium', tokens: 1, minutes: 2, result: 'done' }], review: { kind: 'lead-diff' as const, verdict: 'approved · taskReview off' } }
+  expect(attemptsOf(accepted, 3, 'off').map(attemptText)).toEqual(['Build · Sonnet 5.5 · 2:00 ✓', 'review skipped (taskReview off)'])
+  expect(attemptsOf(accepted, 3, 'risky').map(attemptText)).toEqual(['Build · Sonnet 5.5 · 2:00 ✓', 'lead read the diff'])
+  expect(attemptsOf(accepted, 3).at(-1)).toMatchObject({ label: 'lead read the diff', isNote: true })
+  expect(reviewNote(accepted, 'always')).toBe('lead read the diff')
+  // An independent review, or a task not yet accepted, adds nothing.
+  expect(attemptsOf({ ...accepted, review: { kind: 'independent', verdict: 'approved' } }, 3, 'off')).toHaveLength(1)
+  expect(attemptsOf({ ...accepted, status: 'running' }, 3, 'off')).toHaveLength(1)
 })

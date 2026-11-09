@@ -3,7 +3,7 @@
 // through superpowers-flow. Pure: strings in, strings out, no engine.
 
 import type { AgentRun } from '../types'
-import type { Band, Step } from './status'
+import type { Band, Step, TagKind } from './status'
 import { SEGMENT_COLORS } from './status'
 
 // The mockup's colours: purple for what runs, green for what merged, amber for what is blocked or has no spec.
@@ -104,8 +104,8 @@ export const summaryOf = (t: Totals): string => `≈${fmtCost(t.cost)} · ${fmtT
 
 const PANE_CSS = `<style>
 text{font-family:${FONT}}
-.t{fill:#1a1a19}.s{fill:#56554f}.m{fill:#83827c}.k{fill:#e6e5e0}.tile{fill:#f1f0eb;stroke:#e3e2dd}.hero{fill:#efedf7;stroke:#d9d4ee}.card{fill:#f1f0eb;stroke:#e3e2dd}
-@media (prefers-color-scheme: dark){.t{fill:#f3f3f6}.s{fill:#bbbcc6}.m{fill:#7f828f}.k{fill:#3d394a}.tile{fill:#1c1d23;stroke:#2b2d36}.hero{fill:#231f33;stroke:#353045}.card{fill:#211e31;stroke:#443b67}}
+.t{fill:#1a1a19}.s{fill:#56554f}.m{fill:#83827c}.k{fill:#e6e5e0}.tile{fill:#f1f0eb;stroke:#e3e2dd}.hero{fill:#efedf7;stroke:#d9d4ee}.card{fill:#f1f0eb;stroke:#e3e2dd}.hair{fill:#e3e2dd}.chip{fill:#ece9f7;stroke:#d9d4ee}
+@media (prefers-color-scheme: dark){.t{fill:#f3f3f6}.s{fill:#bbbcc6}.m{fill:#7f828f}.k{fill:#3d394a}.tile{fill:#1c1d23;stroke:#2b2d36}.hero{fill:#231f33;stroke:#353045}.card{fill:#211e31;stroke:#443b67}.hair{fill:#292b33}.chip{fill:#282434;stroke:#39334f}}
 .live{animation:p 2.2s ease-in-out infinite}@keyframes p{50%{opacity:.45}}
 @media (prefers-reduced-motion: reduce){.live{animation:none}}
 </style>`
@@ -272,6 +272,86 @@ ${dot(W - CARD_PAD - statusW + 4, 25, color, c.status === 'running')}
   )
 }
 
+// ---------- the list rows ----------
+
+export const ROW_H = 54
+export const MERGED_ROW_H = 40
+export const SESSION_ROW_H = 36
+const ROW_PAD = 13
+
+/** The tag's colour per kind: purple for what runs, green for ready and merged, amber for blocked or no spec, grey otherwise. */
+export const TAG_COLOR: Record<TagKind, string> = { running: ACCENT, done: DONE, blocked: BLOCKED, ready: DONE, muted: MUTED }
+
+export type ItemRowDrawing = {
+  id: string
+  title: string
+  /** `M · Inbox`; the reason is in the tag, not here. */
+  meta: string
+  tag: { text: string; kind: TagKind }
+  /** The last row of its card draws no hairline under itself. */
+  isLast?: boolean
+}
+
+const hairline = (W: number, H: number, isLast: boolean | undefined): string => (isLast ? '' : `<rect class="hair" x="0" y="${H - 1}" width="${W}" height="1"/>`)
+
+/**
+ * A row of a list card, as the mockup's .item-row: the id in a bordered chip, the title cut with an ellipsis over
+ * its meta line, and the status tag at the right. The chevron beside it is a Button, since a Button holds only text.
+ */
+export const itemRowSvg = (W: number, r: ItemRowDrawing): string => {
+  const H = ROW_H
+  const idW = Math.max(39, Math.round(textWidth(r.id, 11) + 16))
+  const color = TAG_COLOR[r.tag.kind]
+  const tagW = Math.round(textWidth(r.tag.text, 10) + 14)
+  const tagX = W - ROW_PAD - tagW
+  const textX = ROW_PAD + idW + 12
+  const textW = Math.max(0, tagX - 10 - textX)
+  return svg(
+    W,
+    H,
+    `<rect class="chip" x="${ROW_PAD + 0.5}" y="14.5" width="${idW - 1}" height="25" rx="7"/>
+<text x="${ROW_PAD + idW / 2}" y="31" text-anchor="middle" font-size="11" font-weight="660" fill="${r.tag.kind === 'done' ? DONE : ACCENT}">${xml(r.id)}</text>
+<text class="t" ${startText(textX, 24)} font-size="12" font-weight="590">${xml(fitText(r.title, 12, textW))}</text>
+<text class="m" ${startText(textX, 40)} font-size="11">${xml(fitText(r.meta, 11, textW))}</text>
+<rect x="${tagX}" y="17" width="${tagW}" height="20" rx="6" fill="${color}" fill-opacity="0.14" stroke="${color}" stroke-opacity="0.4"/>
+<text x="${tagX + tagW / 2}" y="31" text-anchor="middle" font-size="10" font-weight="600" fill="${color}">${xml(r.tag.text)}</text>
+${hairline(W, H, r.isLast)}`,
+  )
+}
+
+/** A merged row, as the mockup's .merged-row: a green check, the id in muted text, the title cut; the PR link stands beside it. */
+export const mergedRowSvg = (W: number, r: { id: string; title: string; isLast?: boolean }): string => {
+  const H = MERGED_ROW_H
+  const cx = ROW_PAD + 8
+  const idX = ROW_PAD + 24
+  const titleX = idX + textWidth(r.id, 11) + 10
+  return svg(
+    W,
+    H,
+    `<circle cx="${cx}" cy="20" r="7.5" fill="none" stroke="${DONE}" stroke-width="1.8"/>
+<path d="m${cx - 4} 20.5 3 3 5.5-6.5" fill="none" stroke="${DONE}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<text class="m" ${startText(idX, 24)} font-size="11">${xml(r.id)}</text>
+<text class="t" ${startText(titleX, 24)} font-size="12" font-weight="520">${xml(fitText(r.title, 12, Math.max(0, W - ROW_PAD - titleX)))}</text>
+${hairline(W, H, r.isLast)}`,
+  )
+}
+
+/** Another session's row: a dot (purple while an agent runs), its title cut, then `p12 · 2 agents · stale` at the right; a stale one is faded. */
+export const sessionRowSvg = (W: number, r: { title: string; meta: string; isLive: boolean; isStale: boolean; isLast?: boolean }): string => {
+  const H = SESSION_ROW_H
+  const metaW = textWidth(r.meta, 11)
+  const titleX = ROW_PAD + 16
+  const titleW = Math.max(0, W - ROW_PAD - metaW - 12 - titleX)
+  return svg(
+    W,
+    H,
+    `<g${r.isStale ? ' opacity="0.5"' : ''}>${dot(ROW_PAD + 4, 18, r.isLive && !r.isStale ? ACCENT : MUTED, r.isLive && !r.isStale)}
+<text class="t" ${startText(titleX, 22)} font-size="12" font-weight="590">${xml(fitText(r.title, 12, titleW))}</text>
+<text class="m" ${endText(W - ROW_PAD, 22)} font-size="11">${xml(r.meta)}</text></g>
+${hairline(W, H, r.isLast)}`,
+  )
+}
+
 // ---------- the band above the prompt ----------
 
 export const BAND_H = 54
@@ -346,6 +426,20 @@ export const bandSvg = (b: Band, W: number, isCompact = false): string => {
     if (actW > 24) parts.push(`<text class="s" ${startText(actX, y2)} font-size="11">${xml(fitText(b.activity, 11, actW))}</text>`)
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${BAND_CSS}${parts.join('')}</svg>`
+}
+
+/** The idle strip: one line in the band's frame, a hollow dot in the muted colour and the idle line cut to the width. */
+export const idleStripSvg = (text: string, W: number): string => {
+  const H = BAND_COMPACT_H
+  const pad = 13
+  const textX = pad + 16
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${BAND_CSS}<rect class="bg" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="9"/><circle cx="${pad + 3.5}" cy="14" r="3" fill="none" stroke="${MUTED}" stroke-width="1.5"/><text class="s" ${startText(textX, 18)} font-size="11">${xml(fitText(text, 11, W - textX - pad))}</text></svg>`
+}
+
+/** The terminal's idle row: `○ pipeline · idle · 28 inbox · next: p2 …`, cut to `cols` columns with an ellipsis. */
+export const idleStripText = (text: string, cols: number): string => {
+  const row = `○ ${text}`
+  return row.length <= cols ? row : row.slice(0, Math.max(0, cols - 1)).trimEnd() + '…'
 }
 
 /** The terminal's row: `● p1 · Task 1 / 3 · ▰▱▱ · Implementer · 3:44`, as pieces, cut to `cols` columns from the activity first. */

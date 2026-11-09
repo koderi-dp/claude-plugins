@@ -13,12 +13,18 @@ const NOW = Date.parse('2026-11-05T10:00:00Z')
 const VALID_CONFIG = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: {}, merge: 'pr' }, null, 2) + '\n'
 
 /** A main checkout at /p/main, this session in its worktree, files in memory; records the writes and the plugin's state. */
-function world(on: On, seed: Record<string, string> = {}) {
+function world(on: On, seed: Record<string, string> = {}, options: { rename?: 'ok' | 'deny' } = {}) {
   mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
   const state = new Map<string, unknown>()
   const tools: string[] = []
+  const renames: string[] = []
+  on('command.run', { command: 'rename' }, (_$, e) => {
+    if (options.rename === 'deny') return { deny: 'no names on this surface' } as never
+    renames.push(String(e.args ?? ''))
+    return { text: 'renamed' } as never
+  })
   const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
@@ -46,11 +52,14 @@ function world(on: On, seed: Record<string, string> = {}) {
     return r
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
-  return { files, writes, state, tools }
+  on('turn.complete', () => ({ text: '' }) as never)
+  return { files, writes, state, tools, renames }
 }
 
 const text = (r: unknown) => String((r as { result: unknown }).result)
 const call = ($: { tool: { call: (e: never) => Promise<unknown> } }, input: Record<string, unknown>) => $.tool.call({ tool: TOOL, ...input } as never)
+/** The turn's end, where a queued rename runs. */
+const endTurn = ($: { turn: { complete: unknown } }) => ($.turn.complete as (e: unknown) => Promise<unknown>)({ reason: 'answer', answer: 'ok' })
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) => $.session.start({ cwd: WORKTREE, surface: 'terminal', isInteractive: true } as never)
 const items = (files: Map<string, string>) => JSON.parse(files.get(BACKLOG)!).items as Record<string, unknown>[]
 
@@ -59,10 +68,11 @@ const ITEM = { title: 'CSV export', size: 'M', needs: [], source: 'user, 2026-11
 test('add creates backlog.json and BACKLOG.md in the main checkout from a worktree and answers the id and the status', async ($, on) => {
   const { files, writes, state } = world(on, { [CONFIG]: VALID_CONFIG })
   const r = await call($, { action: 'add', item: ITEM })
-  expect(text(r)).toStartWith('added p1\n')
-  expect(text(r)).toContain('pipeline: 1 item · 0 ready')
-  expect(text(r)).toContain('Inbox\n  p1 · CSV export · M · no spec')
+  expect(text(r)).toBe('added p1 · inbox · no spec')
   expect(writes).toEqual([BACKLOG, BACKLOG_MD])
+  const status = text(await call($, { action: 'status' }))
+  expect(status).toContain('pipeline: 1 item · 0 ready')
+  expect(status).toContain('Inbox\n  p1 · CSV export · M · no spec')
   expect(files.get(BACKLOG)?.endsWith('\n')).toBe(true)
   expect(items(files)[0]).toMatchObject({ id: 'p1', title: 'CSV export', status: 'inbox', size: 'M', source: ITEM.source, updatedAt: '2026-11-05T10:00:00.000Z' })
   expect(files.get(BACKLOG_MD)).toContain('| p1 | CSV export | M |')
@@ -74,7 +84,7 @@ test('a second add merges with what is on disk and keeps unknown fields', async 
   await call($, { action: 'add', item: ITEM })
   files.set(BACKLOG, files.get(BACKLOG)!.replace('"version": 1,', '"version": 1,\n  "colour": "red",').replace('"title": "CSV export"', '"title": "CSV export (edited)"'))
   const r = await call($, { action: 'add', item: { ...ITEM, title: 'Second' } })
-  expect(text(r)).toStartWith('added p2\n')
+  expect(text(r)).toBe('added p2 · inbox · no spec')
   const parsed = JSON.parse(files.get(BACKLOG)!)
   expect(parsed.colour).toBe('red')
   expect(parsed.items.map((i: { title: string }) => i.title)).toEqual(['CSV export (edited)', 'Second'])
@@ -106,12 +116,12 @@ test('update sets the spec and the item becomes ready once the spec has no open 
   await call($, { action: 'add', item: ITEM })
   files.set(`${DIR}/specs/p1.md`, '# p1\n\n## What\n\nx\n\n## Open\n\nWhich currency?\n')
   let r = text(await call($, { action: 'update', id: 'p1', set: { spec: 'docs/pipeline/specs/p1.md' } }))
-  expect(r).toContain('Inbox\n  p1 · CSV export · M · open question in the spec')
+  expect(r).toBe('p1 · inbox · open question in the spec · set spec')
   expect(items(files)[0]).toMatchObject({ status: 'inbox', spec: 'docs/pipeline/specs/p1.md' })
   files.set(`${DIR}/specs/p1.md`, '# p1\n\n## What\n\nx\n\n## Open\n\n_Nothing._\n')
   r = text(await call($, { action: 'update', id: 'p1', set: { note: 'answered' } }))
-  expect(r).toContain('pipeline: 1 item · 1 ready')
-  expect(r).toContain('Ready\n  p1 · CSV export · M')
+  expect(r).toBe('p1 · ready · set note')
+  expect(text(await call($, { action: 'status' }))).toContain('Ready\n  p1 · CSV export · M')
   expect(items(files)[0]).toMatchObject({ status: 'ready', note: 'answered', updatedAt: '2026-11-05T10:00:00.000Z' })
 })
 
@@ -119,8 +129,60 @@ test('an item whose needs are not merged stays inbox with the reason', async ($,
   const { files } = world(on, { [CONFIG]: VALID_CONFIG, [`${DIR}/specs/p2.md`]: '## What\n\nx\n' })
   await call($, { action: 'add', item: ITEM })
   const r = text(await call($, { action: 'add', item: { ...ITEM, title: 'Needs one', needs: ['p1'] } }))
-  expect(r).toContain('p2 · Needs one · M · waits for p1')
+  expect(r).toBe('added p2 · inbox · waits for p1')
   expect(items(files)[1]).toMatchObject({ status: 'inbox' })
+})
+
+test('an update that starts an item names the session after it once: to planning, or to building from another status; never for a note or a later step', async ($, on) => {
+  const { renames } = world(on, { [CONFIG]: VALID_CONFIG })
+  await call($, { action: 'add', item: { ...ITEM, title: 'grid-track-sizes — Grid row and column sizes' } })
+  await call($, { action: 'add', item: { ...ITEM, title: 'y'.repeat(80) } })
+  await call($, { action: 'update', id: 'p1', set: { note: 'a note' } })
+  await endTurn($)
+  expect(renames).toEqual([])
+  // The rename cannot run inside the tool's hook: it runs when the turn ends.
+  await call($, { action: 'update', id: 'p1', set: { status: 'planning' } })
+  expect(renames).toEqual([])
+  await endTurn($)
+  expect(renames).toEqual(['p1 · Grid row and column sizes'])
+  await endTurn($)
+  expect(renames).toEqual(['p1 · Grid row and column sizes'])
+  // The same item going on to building, review and merged renames nothing more.
+  for (const status of ['building', 'review', 'merged']) {
+    await call($, { action: 'update', id: 'p1', set: { status } })
+    await endTurn($)
+  }
+  expect(renames).toEqual(['p1 · Grid row and column sizes'])
+  // Another item straight to building: its own name, the title cut to 60 characters.
+  await call($, { action: 'update', id: 'p2', set: { status: 'building' } })
+  await endTurn($)
+  expect(renames).toEqual(['p1 · Grid row and column sizes', `p2 · ${'y'.repeat(59)}…`])
+  await call($, { action: 'update', id: 'p2', set: { status: 'blocked', note: 'CI red' } })
+  await call($, { action: 'update', id: 'p2', set: { status: 'building' } })
+  await endTurn($)
+  expect(renames).toHaveLength(2)
+})
+
+test('renameSession false never renames, and a refused rename does not fail the update', async ($, on) => {
+  const off = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: {}, merge: 'pr', renameSession: false }, null, 2) + '\n'
+  const { renames } = world(on, { [CONFIG]: off })
+  await call($, { action: 'add', item: ITEM })
+  await call($, { action: 'update', id: 'p1', set: { status: 'planning' } })
+  await endTurn($)
+  expect(renames).toEqual([])
+})
+
+test('a refused rename does not fail the update', async ($, on) => {
+  const { renames, files } = world(on, { [CONFIG]: VALID_CONFIG }, { rename: 'deny' })
+  await call($, { action: 'add', item: ITEM })
+  const r = text(await call($, { action: 'update', id: 'p1', set: { status: 'building' } }))
+  expect(r).toBe('p1 · building')
+  expect(items(files)[0]).toMatchObject({ status: 'building' })
+  await endTurn($)
+  expect(renames).toEqual([])
+  // The next turn's end does not try again.
+  await endTurn($)
+  expect(renames).toEqual([])
 })
 
 test('update of an unknown id is refused', async ($, on) => {
@@ -137,26 +199,26 @@ test('move, park, unpark and remove', async ($, on) => {
   await call($, { action: 'add', item: { ...ITEM, title: 'B' } })
   await call($, { action: 'add', item: { ...ITEM, title: 'C' } })
   const ids = () => items(files).map(i => i.id)
-  await call($, { action: 'move', id: 'p3', to: 'top' })
+  expect(text(await call($, { action: 'move', id: 'p3', to: 'top' }))).toBe('p3 · moved to the top · inbox · no spec')
   expect(ids()).toEqual(['p3', 'p1', 'p2'])
-  await call($, { action: 'move', id: 'p3', to: { after: 'p2' } })
+  expect(text(await call($, { action: 'move', id: 'p3', to: { after: 'p2' } }))).toBe('p3 · moved after p2 · inbox · no spec')
   expect(ids()).toEqual(['p1', 'p2', 'p3'])
   let r = text(await call($, { action: 'park', id: 'p2' }))
-  expect(r).toContain('Parked: p2')
+  expect(r).toBe('p2 · parked')
   expect(items(files)[1]).toMatchObject({ status: 'parked' })
   r = text(await call($, { action: 'unpark', id: 'p2' }))
-  expect(r).not.toContain('Parked')
+  expect(r).toBe('p2 · inbox · no spec')
   expect(items(files)[1]).toMatchObject({ status: 'inbox' })
   r = text(await call($, { action: 'remove', id: 'p2' }))
   expect(ids()).toEqual(['p1', 'p3'])
-  expect(r).toContain('pipeline: 2 items · 0 ready')
+  expect(r).toBe('removed p2 · 2 items left')
   expect(files.get(BACKLOG_MD)).not.toContain('| p2 |')
 })
 
-test('get answers the config, the backlog, the readiness and an empty signal list', async ($, on) => {
+test('get { full } answers the config, the backlog, the readiness and an empty signal list', async ($, on) => {
   world(on, { [CONFIG]: VALID_CONFIG })
   await call($, { action: 'add', item: ITEM })
-  const got = JSON.parse(text(await call($, { action: 'get' })))
+  const got = JSON.parse(text(await call($, { action: 'get', full: true })))
   expect(got.config).toMatchObject({ mainBranch: 'main', merge: 'pr' })
   expect(got.backlog.items[0]).toMatchObject({ id: 'p1', status: 'inbox' })
   expect(got.readiness).toEqual({ p1: { ready: false, reason: 'no spec' } })
@@ -227,8 +289,10 @@ test('ledger creates the file and links it from the item, mirroring branch, pr a
   const { files, writes } = world(on, { [CONFIG]: VALID_CONFIG })
   await call($, { action: 'add', item: ITEM })
   const r = text(await call($, { action: 'ledger', item: 'p1', set: { branch: 'feat/p1', worktree: '.claude/worktrees/p1', base: 'a3f91c2', plan: 'docs/pipeline/plans/p1.md' } }))
-  expect(r.split('\n')[0]).toBe('p1 · CSV export · inbox · no resume')
-  expect(r.split('\n')[1]).toBe('  branch feat/p1 · worktree .claude/worktrees/p1')
+  expect(r).toBe('ledger p1 · no tasks')
+  const full = text(await call($, { action: 'status', id: 'p1' }))
+  expect(full.split('\n')[0]).toBe('p1 · CSV export · inbox · no resume')
+  expect(full.split('\n')[1]).toBe('  branch feat/p1 · worktree .claude/worktrees/p1')
   expect(writes.slice(2)).toEqual([LEDGER, BACKLOG, BACKLOG_MD])
   expect(files.get(LEDGER)?.endsWith('\n')).toBe(true)
   expect(ledgerOf(files)).toEqual({ item: 'p1', pr: null, tasks: [], rulings: [], blockers: [], final: null, tokens: 0, branch: 'feat/p1', worktree: '.claude/worktrees/p1', base: 'a3f91c2', plan: 'docs/pipeline/plans/p1.md' })
@@ -253,14 +317,14 @@ test('a task entry merged twice keeps both dispatches and the later status; ruli
   expect(l.rulings).toEqual([{ n: 1, task: 2, text: 'Keep the snapshot id', why: 'immutable', costIfWrong: 'exports change' }, { n: 2, text: 'B', why: 'b', costIfWrong: 'c' }])
   expect(l.tokens).toBe(175)
   expect(l.resume).toEqual({ task: 3, state: 'task 2 accepted', lastVerified: 'b', at: '2026-11-05T10:00:00.000Z' })
-  expect(r.split('\n')[0]).toBe('p1 · CSV export · inbox · resume: task 3/2 · task 2 accepted · verified b · at 2026-11-05T10:00:00.000Z')
-  expect(r).toContain('Tasks\n  1 · One · pending\n  2 · Two · accepted · a..b · 3 dispatches (implementer ×2, reviewer) · approved\n')
-  expect(r).toContain('Rulings\n  R1 (task 2): Keep the snapshot id — immutable — exports change\n  R2: B — b — c\n')
-  expect(r).toContain('Tokens: 175')
+  expect(r).toBe('ledger p1 · task 3/2 · task 2 accepted · 2 rulings · 175 tokens')
+  const full = text(await call($, { action: 'status', id: 'p1' }))
+  expect(full.split('\n')[0]).toBe('p1 · CSV export · inbox · resume: task 3/2 · task 2 accepted · verified b · at 2026-11-05T10:00:00.000Z')
+  expect(full).toContain('Tasks\n  1 · One · pending\n  2 · Two · accepted · a..b · 3 dispatches (implementer ×2, reviewer) · approved\n')
+  expect(full).toContain('Rulings\n  R1 (task 2): Keep the snapshot id — immutable — exports change\n  R2: B — b — c\n')
+  expect(full).toContain('Tokens: 175')
   // Only the first ledger call touched the backlog (to link the file); the others wrote the ledger alone.
   expect(writes.filter(w => w === BACKLOG).length).toBe(2)
-  const status = text(await call($, { action: 'status', id: 'p1' }))
-  expect(status).toBe(r)
 })
 
 test('ledger records the final verdict and the blockers without duplicates', async ($, on) => {
@@ -269,7 +333,8 @@ test('ledger records the final verdict and the blockers without duplicates', asy
   await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 1, dispatches: [dispatch(10, 'done')] }], blockers: ['CI red'] } })
   const r = text(await call($, { action: 'ledger', item: 'p1', set: { final: { verdict: 'approved', gate: 'green', tokens: 5 }, blockers: ['CI red', 'needs a credential'] } }))
   expect(ledgerOf(files)).toMatchObject({ final: { verdict: 'approved', gate: 'green', tokens: 5 }, blockers: ['CI red', 'needs a credential'], tokens: 15 })
-  expect(r).toContain('Blockers\n  CI red\n  needs a credential\nFinal: approved · gate green · 5 tokens\nTokens: 15')
+  expect(r).toBe('ledger p1 · final approved · 2 blockers · 15 tokens')
+  expect(text(await call($, { action: 'status', id: 'p1' }))).toContain('Blockers\n  CI red\n  needs a credential\nFinal: approved · gate green · 5 tokens\nTokens: 15')
 })
 
 test('a parse error in the ledger file is refused and the file is left alone', async ($, on) => {
@@ -299,10 +364,9 @@ test('I7: a removed id is not reused, and a stale ledger file of an unlinked ite
   await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 1, title: 'old task', status: 'accepted', dispatches: [] }] } })
   await call($, { action: 'remove', id: 'p1' })
   const r = text(await call($, { action: 'add', item: { title: 'New thing' } }))
-  expect(r).toStartWith('added p2\n')
   expect(items(files).map(i => i.id)).toEqual(['p2'])
   // The old spec answers for nobody: p2 has no spec of its own.
-  expect(r).toContain('p2 · New thing · no spec')
+  expect(r).toBe('added p2 · inbox · no spec')
   expect(JSON.parse(files.get(BACKLOG)!).lastId).toBe(2)
 
   // An item without a ledger link whose ledger file exists on disk (left by a removed item, or written by hand).
@@ -314,17 +378,100 @@ test('I7: a removed id is not reused, and a stale ledger file of an unlinked ite
   expect(JSON.parse(files.get(LEDGER)!).tasks[0].title).toBe('old task')
   // Linked explicitly, the file is merged into.
   await call($, { action: 'update', id: 'p1', set: { ledger: 'docs/pipeline/ledgers/p1.json' } })
-  expect(text(await call($, { action: 'ledger', item: 'p1', set: { pr: '#2' } }))).toContain('old task')
+  expect(text(await call($, { action: 'ledger', item: 'p1', set: { pr: '#2' } }))).toBe('ledger p1 · 1 task')
+  expect(text(await call($, { action: 'status', id: 'p1' }))).toContain('old task')
 })
 
 test('I4: get names a planning item as active, with resume null until its ledger has the block', async ($, on) => {
   const backlog = JSON.stringify({ version: 1, items: [{ id: 'p12', title: 'CSV export', status: 'planning', ledger: 'docs/pipeline/ledgers/p12.json' }] })
   const { files } = world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlog, [`${DIR}/ledgers/p12.json`]: JSON.stringify({ item: 'p12', branch: 'feat/p12', worktree: '.claude/worktrees/p12', tasks: [], rulings: [], blockers: [], tokens: 0 }) })
   await start($)
-  const got = JSON.parse(text(await call($, { action: 'get' }))) as { active: unknown; resume: unknown }
-  expect(got.active).toBe('p12')
+  const got = JSON.parse(text(await call($, { action: 'get' }))) as { active: { id: string; branch: unknown; worktree: unknown }; resume: unknown }
+  expect(got.active).toMatchObject({ id: 'p12', status: 'planning', branch: 'feat/p12', worktree: '.claude/worktrees/p12' })
   expect(got.resume).toBe(null)
   files.set(`${DIR}/ledgers/p12.json`, JSON.stringify({ item: 'p12', tasks: [], rulings: [], blockers: [], tokens: 0, resume: { task: 1, state: 'planned', at: '2026-11-05T09:00:00Z' } }))
   const again = JSON.parse(text(await call($, { action: 'get' }))) as { active: unknown; resume: unknown }
   expect(again.resume).toMatchObject({ task: 1, state: 'planned' })
+})
+
+// ---------- 0.2.2: a lean get ----------
+
+/** A backlog the size of catalo's at its first run: 71 items with real-length titles, sources and notes. */
+function bigBacklog(): { backlog: string; files: Record<string, string> } {
+  const statuses = ['merged', 'merged', 'merged', 'building', ...Array(14).fill('ready'), ...Array(45).fill('inbox'), 'blocked', 'blocked', ...Array(6).fill('parked')] as string[]
+  const files: Record<string, string> = {}
+  const list = statuses.map((status, n) => {
+    const id = `p${n + 1}`
+    const spec = status === 'inbox' && n % 3 === 0 ? null : `docs/pipeline/specs/${id}.md`
+    if (spec) files[`${MAIN}/${spec}`] = `## What\n\n${'x '.repeat(200)}\n\n## Open\n\n_Nothing._\n`
+    return {
+      id,
+      title: `${id}-slug — A catalog feature with a title as long as catalo's (${n})`,
+      status,
+      size: (['S', 'M', 'L'] as const)[n % 3],
+      needs: n > 20 && n % 5 === 0 ? [`p${n - 1}`] : [],
+      source: `user, 2026-11-0${(n % 9) + 1}: "${'the person asked for this in a long sentence that the queue quoted verbatim '.repeat(2)}"`,
+      note: `${'A scope note as catalo writes them: what changes, which files, what stays the same, and why it matters. '.repeat(5)}`,
+      spec,
+      plan: status === 'building' || status === 'merged' ? `docs/pipeline/plans/${id}.md` : null,
+      branch: status === 'building' || status === 'merged' ? `feat/${id}` : null,
+      pr: status === 'merged' ? `https://github.com/koderi-dp/catalo/pull/${n}` : null,
+      ledger: status === 'building' ? `docs/pipeline/ledgers/${id}.json` : null,
+      updatedAt: '2026-11-05T09:00:00.000Z',
+    }
+  })
+  files[`${DIR}/ledgers/p4.json`] = JSON.stringify({ item: 'p4', branch: 'feat/p4', worktree: '.claude/worktrees/p4', tasks: [{ n: 1, title: 'One', status: 'accepted', dispatches: [] }, { n: 2, title: 'Two', status: 'running', dispatches: [] }], rulings: [], blockers: [], tokens: 674000, resume: { task: 2, state: 'implementer dispatched', lastVerified: 'abc1234', at: '2026-11-05T09:00:00.000Z' } })
+  return { backlog: JSON.stringify({ version: 1, items: list }, null, 2) + '\n', files }
+}
+
+test('0.2.2: get answers a slim compact JSON under 8,000 characters for a 71-item backlog, with every field the run skill reads', async ($, on) => {
+  const big = bigBacklog()
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: big.backlog, ...big.files })
+  const answer = text(await call($, { action: 'get' }))
+  const full = text(await call($, { action: 'get', full: true }))
+  expect(answer.length).toBeLessThan(8000)
+  expect(answer).not.toContain('\n')
+  const got = JSON.parse(answer)
+  expect(Object.keys(got).sort()).toEqual(['active', 'children', 'config', 'counts', 'next', 'resume', 'siblings', 'signals'])
+  expect(got.active).toEqual({ id: 'p4', title: expect.stringContaining('p4-slug'), status: 'building', note: expect.any(String), spec: 'docs/pipeline/specs/p4.md', plan: 'docs/pipeline/plans/p4.md', branch: 'feat/p4', worktree: '.claude/worktrees/p4' })
+  expect(got.resume).toMatchObject({ task: 2, state: 'implementer dispatched', lastVerified: 'abc1234' })
+  expect(got.signals).toEqual([])
+  expect(got.children).toEqual([])
+  expect(got.counts).toEqual({ inbox: 45, ready: 14, building: 1, review: 0, blocked: 2, parked: 6, merged: 3 })
+  expect(got.next).toEqual([
+    { id: 'p5', title: expect.stringContaining('p5-slug'), size: 'M', reason: 'ready' },
+    { id: 'p6', title: expect.stringContaining('p6-slug'), size: 'L', reason: 'ready' },
+    { id: 'p7', title: expect.stringContaining('p7-slug'), size: 'S', reason: 'ready' },
+  ])
+  expect(Object.keys(got.config).sort()).toEqual(['checks', 'limits', 'merge', 'mergeMethod', 'models', 'protectedPaths', 'riskyPaths', 'runner', 'taskReview'])
+  expect(got.config).toMatchObject({ runner: 'subagent', taskReview: 'risky', merge: 'pr', mergeMethod: 'merge', limits: { fixRounds: expect.any(Number), silentMinutes: expect.any(Number) }, models: { implementer: expect.any(Object), final: expect.any(Object) } })
+  // The full answer is today's shape, pretty-printed.
+  const all = JSON.parse(full)
+  expect(Object.keys(all).sort()).toEqual(['active', 'backlog', 'children', 'config', 'readiness', 'resume', 'siblings', 'signals'])
+  expect(all.backlog.items).toHaveLength(71)
+  expect(all.active).toBe('p4')
+})
+
+test('0.2.2: get with nothing ready lists the first inbox items with their reasons; get { id } adds that item; get { titles } adds every title', async ($, on) => {
+  const seed = { version: 1, items: [{ id: 'p1', title: 'A', status: 'inbox', size: 'S', note: 'n' }, { id: 'p2', title: 'B', status: 'merged' }, { id: 'p3', title: 'C', status: 'inbox', needs: ['p1'], spec: 'docs/pipeline/specs/p3.md' }] }
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: JSON.stringify(seed), [`${DIR}/specs/p3.md`]: '## What\n\nx\n' })
+  const got = JSON.parse(text(await call($, { action: 'get' })))
+  expect(got.active).toBe(null)
+  expect(got.resume).toBe(null)
+  expect(got.next).toEqual([{ id: 'p1', title: 'A', size: 'S', reason: 'no spec' }, { id: 'p3', title: 'C', reason: 'waits for p1' }])
+  expect(got.item).toBeUndefined()
+  const one = JSON.parse(text(await call($, { action: 'get', id: 'p3' })))
+  expect(one.item).toMatchObject({ id: 'p3', title: 'C', status: 'inbox', needs: ['p1'], spec: 'docs/pipeline/specs/p3.md', readiness: { ready: false, reason: 'waits for p1' } })
+  expect(JSON.parse(text(await call($, { action: 'get', id: 'p9' }))).item).toBe(null)
+  const titles = JSON.parse(text(await call($, { action: 'get', titles: true })))
+  expect(titles.titles).toEqual(['p1 inbox A', 'p2 merged B', 'p3 inbox C'])
+})
+
+test('0.2.2: a ledger write answers one line: the running task, the rulings and the tokens', async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG })
+  await call($, { action: 'add', item: ITEM })
+  await call($, { action: 'ledger', item: 'p1', set: { tasks: [1, 2, 3, 4, 5, 6].map(n => ({ n, title: `T${n}`, status: n < 3 ? 'accepted' : 'pending', dispatches: [] })), rulings: [{ text: 'a', why: 'b', costIfWrong: 'c' }, { text: 'd', why: 'e', costIfWrong: 'f' }] } })
+  const r = text(await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 3, status: 'running', dispatches: [dispatch(674000, 'running')] }], resume: { task: 3, state: 'implementer dispatched', lastVerified: 'a' } } }))
+  expect(r).toBe('ledger p1 · task 3/6 running · 2 rulings · 674k tokens')
+  expect(text(await call($, { action: 'ledger', item: 'p1', set: { final: { verdict: 'approved' }, tasks: [{ n: 4, dispatches: [dispatch(800000, 'done')] }] } }))).toBe('ledger p1 · final approved · 2 rulings · 1.5M tokens')
 })

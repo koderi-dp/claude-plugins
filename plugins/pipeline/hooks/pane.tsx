@@ -4,11 +4,11 @@
 // PRs). Every other surface gets the text block of spec §9, with the view's name. Nothing is only in the panel.
 import type { EngineInterface, RenderElement } from 'claude-code'
 
-import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, View } from '../types'
-import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, METRICS_H, MUTED, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, metricsSvg, modelName, totals } from './draw'
+import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, TaskReview, View } from '../types'
+import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, MERGED_ROW_H, METRICS_H, ROW_H, SESSION_ROW_H, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
-import { WEEK, currentTask, displayTitle, groupCounts, heroSentence, mergedItems, prLabel, queueItems, roleOf, stepsOf, tagOf, taskCounter } from './status'
+import { attemptText, attemptsOf, currentLine, reviewNote, currentTask, displayTitle, groupCounts, heroSentence, leadLine, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, stepsOf, tagOf, taskCounter } from './status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
 type Element = RenderElement
@@ -28,7 +28,6 @@ export const HISTORY_SHOWN = 20
 
 const ACTIVE: ItemStatus[] = ['planning', 'building', 'review']
 const FINISHED_SHOWN = 3
-const TAG_COLOR: Record<TagKind, string | undefined> = { running: ACCENT, done: DONE, blocked: BLOCKED, ready: ACCENT, muted: undefined }
 const FILTERS: { filter: QueueFilter; label: string }[] = [
   { filter: 'inbox', label: 'Inbox' },
   { filter: 'ready', label: 'Ready' },
@@ -55,6 +54,10 @@ export type PanelInput = StatusInput & {
   activeLine: string
   /** The task-minutes limit, for a running card's bar. */
   limitMs: number
+  /** The fix rounds allowed per task, for the attempt trail. */
+  fixRounds: number
+  /** The config's taskReview, for the line under a task the lead read itself. */
+  taskReview?: TaskReview
   onView: (view: View) => void
   onFilter: (filter: QueueFilter) => void
   onSearch: (search: string) => void
@@ -184,7 +187,7 @@ function queueRows(ui: { Text: Comp; Link?: Comp }, d: PanelInput, section: (tit
   if (parked.length) rows.push(<Text dimColor>{`Parked: ${parked.map(i => i.id).join(', ')}`}</Text>)
   section(
     'Merged this week',
-    mergedItems(items, d.now, WEEK).map(i => {
+    mergedThisWeek(items, d.now).map(i => {
       const pr = prLabel(i.pr)
       return (
         <Text color={DONE}>
@@ -274,22 +277,44 @@ function heading(u: Desk, title: string, sub?: string, action?: { key: string; l
   )
 }
 
-/** A row of a list card: the id chip, the title, its meta line and a status tag; pressing it runs `onPress`. */
-function itemRow(u: Desk, item: Item, meta: string, tag: { text: string; kind: TagKind }, onPress: () => void, isExpanded = false): Element {
-  const { Button, Text } = u
+// A card's border and padding take four columns; the control beside a drawn row (the chevron Button, the PR Link) its own.
+const CARD_COLS = 4
+const CHEVRON_COLS = 5
+const LINK_COLS = 9
+/** The width left for a row's drawing inside a card beside a control of `controlCols` columns. */
+const rowWidth = (W: number, controlCols: number) => Math.max(120, W - (CARD_COLS + controlCols) * 8)
+
+/** The meta line of an item's row: `M · Inbox`; the reason is the tag's, and a status the tag already says is not repeated. */
+const metaOf = (item: Item, tag: { text: string }) => line([item.size, tag.text === cap(item.status) ? undefined : cap(item.status)])
+
+/**
+ * A row of a list card as the mockup draws it: the id chip, the title over its meta line and the status tag in one
+ * drawing, with the chevron as a Button beside it (a Button holds only text); pressing the chevron runs `onPress`.
+ */
+function itemRow(u: Desk, item: Item, tag: { text: string; kind: TagKind }, onPress: () => void, W: number, isLast: boolean, isExpanded = false): Element {
+  const { Box, Button, Svg } = u
+  const title = displayTitle(item.title)
+  const meta = metaOf(item, tag)
+  const rw = rowWidth(W, CHEVRON_COLS)
   return (
-    <Button key={`row-${item.id}`} plain onPress={onPress}>
-      <Text color={ACCENT} weight="semibold">
-        {item.id}
-      </Text>
-      {`  ${displayTitle(item.title)}`}
-      <Text dimColor>{meta ? `  ${meta}` : ''}</Text>
-      {'  '}
-      <Text color={TAG_COLOR[tag.kind]} dimColor={tag.kind === 'muted'}>
-        {tag.text}
-      </Text>
-      <Text dimColor>{isExpanded ? '  ⌄' : '  ›'}</Text>
-    </Button>
+    <Box key={`row-box-${item.id}`} flexDirection="row" alignItems="center" gap={1}>
+      <Svg source={itemRowSvg(rw, { id: item.id, title, meta, tag, isLast: isLast && !isExpanded })} alt={`${item.id}: ${line([title, meta, tag.text])}`} width={rw} height={ROW_H} />
+      <Button key={`row-${item.id}`} plain dimColor label={isExpanded ? '⌄' : '›'} onPress={onPress} />
+    </Box>
+  )
+}
+
+/** A merged item's row: the check, id and title drawn, the PR as a Link (or plain text without an address) at the right. */
+function mergedRow(u: Desk, item: Item, W: number, isLast: boolean): Element {
+  const { Box, Svg, Text, Link } = u
+  const title = displayTitle(item.title)
+  const pr = prLabel(item.pr)
+  const rw = rowWidth(W, pr ? LINK_COLS : 0)
+  return (
+    <Box key={`merged-${item.id}`} flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
+      <Svg source={mergedRowSvg(rw, { id: item.id, title, isLast })} alt={`${item.id}: ${line([title, 'merged', pr?.label])}`} width={rw} height={MERGED_ROW_H} />
+      {pr ? pr.href && Link ? <Link href={pr.href}>{`${pr.label} ↗`}</Link> : <Text color={DONE}>{pr.label}</Text> : null}
+    </Box>
   )
 }
 
@@ -313,11 +338,12 @@ function renderOverview(u: Desk, d: PanelInput, W: number): Element {
 }
 
 function renderIdle(u: Desk, d: PanelInput, W: number): Element {
-  const { Box, Svg, Text, Link } = u
+  const { Box, Svg, Text } = u
   const items = d.backlog?.items ?? []
   const inbox = items.filter(i => i.status === 'inbox')
   const ready = items.filter(i => i.status === 'ready')
-  const merged = mergedItems(items, d.now, WEEK)
+  const merged = mergedThisWeek(items, d.now)
+  const recent = mergedItems(items, d.now)
   const hero: Hero = {
     kind: 'idle',
     state: 'PIPELINE IDLE',
@@ -338,24 +364,14 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
     d.onExpand(id)
     d.onView('queue')
   }
-  const rows = list.slice(0, OVERVIEW_ROWS).map(i => {
+  const shown = list.slice(0, OVERVIEW_ROWS)
+  const rows = shown.map((i, n) => {
     const r = d.readiness[i.id]
     const reason = r && !r.ready ? r.reason : undefined
-    return itemRow(u, i, line([i.size, i.status === 'ready' ? 'Ready' : reason ? 'Needs specification' : 'Inbox']), tagOf(i, reason), toQueue(i.id))
+    return itemRow(u, i, tagOf(i, reason), toQueue(i.id), W, n === shown.length - 1 && list.length <= OVERVIEW_ROWS)
   })
-  const mergedRows = merged.slice(0, OVERVIEW_MERGED).map(i => {
-    const pr = prLabel(i.pr)
-    return (
-      <Box key={`merged-${i.id}`} flexDirection="row" justifyContent="space-between" gap={1}>
-        <Text>
-          <Text color={DONE}>✓ </Text>
-          <Text dimColor>{i.id}</Text>
-          {`  ${displayTitle(i.title)}`}
-        </Text>
-        {pr ? pr.href && Link ? <Link href={pr.href}>{`PR ${pr.label} ↗`}</Link> : <Text color={DONE}>{`PR ${pr.label}`}</Text> : null}
-      </Box>
-    )
-  })
+  const recentShown = recent.slice(0, OVERVIEW_MERGED)
+  const mergedRows = recentShown.map((i, n) => mergedRow(u, i, W, n === recentShown.length - 1))
   return (
     <Box flexDirection="column">
       <Svg source={drawn.source} alt={`${hero.state}: ${hero.headline}. ${hero.line}`} width={W} height={drawn.height} />
@@ -365,8 +381,8 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
       {heading(u, ready.length ? 'Up next' : 'Needs specification', undefined, { key: 'goto-queue', label: 'View queue →', onPress: toQueue(null) })}
       {rows.length ? card(u, [...rows, ...(list.length > OVERVIEW_ROWS ? [<Text key="more-items" dimColor>{`and ${list.length - OVERVIEW_ROWS} more in the queue`}</Text>] : [])]) : <Text dimColor>Nothing waiting. Add work with /pipeline add.</Text>}
       {heading(u, 'Recently merged', undefined, { key: 'goto-history', label: 'View history →', onPress: () => d.onView('history') })}
-      {mergedRows.length ? card(u, mergedRows) : <Text dimColor>Nothing merged this week.</Text>}
-      {siblingRows(u, d)}
+      {mergedRows.length ? card(u, mergedRows) : <Text dimColor>Nothing merged yet.</Text>}
+      {siblingRows(u, d, W)}
     </Box>
   )
 }
@@ -399,14 +415,15 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
     const c: AgentCard = { role: cap(role), model: a.model, ...(effort ? { effort } : {}), status: a.status, activity: a.activity, progress: d.limitMs ? Math.min(1, (at - a.startedAt) / d.limitMs) : 0, calls: a.calls, tokens: a.tokens, elapsedMs: at - a.startedAt }
     return <Svg key={a.id} source={agentCardSvg(W, c)} alt={`${c.role}: ${modelName(a.model)}${effort ? ` · ${effort}` : ''}, running, ${a.activity}`} width={W} height={AGENT_CARD_H} />
   })
+  // The current task's attempts from the ledger: Build, Review with its verdict, Fix n of max; the agents atom only before the ledger has any.
+  const attempts = attemptsOf(current, d.fixRounds, d.taskReview)
   const timeline = tasks.map(task => {
     const isCurrent = task.status === 'running' || task.status === 'fix' || (task.status === 'pending' && current?.n === task.n)
     const agent = isCurrent ? running[0] : undefined
-    const dispatch = (task.dispatches ?? []).at(-1)
     const mark = task.status === 'accepted' ? '✓' : task.status === 'blocked' ? '✕' : isCurrent ? '●' : '○'
     const word = task.status === 'accepted' ? 'Accepted' : task.status === 'blocked' ? 'Blocked' : task.status === 'fix' ? 'Fix round' : isCurrent ? 'In progress' : 'Pending'
     const color = task.status === 'accepted' ? DONE : task.status === 'blocked' ? BLOCKED : isCurrent ? ACCENT : undefined
-    const sub = isCurrent ? line([agent ? modelName(agent.model) : dispatch ? modelName(dispatch.model) : undefined, agent ? `${fmtTime(at - agent.startedAt)} elapsed` : undefined]) : ''
+    const sub = isCurrent ? currentLine(task, agent, ledger, d.fixRounds, at) : (reviewNote(task, d.taskReview) ?? '')
     return (
       <Box key={`task-${task.n}`} flexDirection="column">
         <Text color={color} dimColor={!color}>
@@ -427,24 +444,41 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
       <Text dimColor tabular>
         {`${fmtTime(t.time)} elapsed · ${fmtTokens(t.tokens)} tokens · ≈${fmtCost(t.cost)} cost`}
       </Text>
-      {heading(u, 'Active agent', `${running.length} running`, undefined)}
+      {heading(u, running.length ? 'Active agent' : 'Lead', running.length ? `${running.length} running` : undefined, undefined)}
       {current ? <Text dimColor>{`Task ${current.n} / ${tasks.length}`}</Text> : null}
-      {cards.length ? cards : <Text dimColor>No subagent running.</Text>}
-      {finished.map(a => (
-        <Text key={`finished-${a.id}`} color={a.status === 'failed' ? BLOCKED : DONE} dimColor={a.status !== 'failed'}>
-          {line([a.name, modelName(a.model), fmtTime((a.endedAt ?? at) - a.startedAt), a.status])}
-        </Text>
-      ))}
+      {cards.length ? cards : <Text color={ACCENT}>{leadLine(ledger, at)}</Text>}
+      {attempts.length
+        ? attempts.map((a, i) => (
+            <Text key={`attempt-${i}`} color={a.isNote ? undefined : a.verdict === 'FIX REQUIRED' ? BLOCKED : DONE} dimColor={a.verdict !== 'FIX REQUIRED'}>
+              {attemptText(a)}
+            </Text>
+          ))
+        : finished.map(a => (
+            <Text key={`finished-${a.id}`} color={a.status === 'failed' ? BLOCKED : DONE} dimColor={a.status !== 'failed'}>
+              {line([a.name, modelName(a.model), fmtTime((a.endedAt ?? at) - a.startedAt), a.status])}
+            </Text>
+          ))}
       {childRows(u, d)}
       {heading(u, 'Task progress', undefined, { key: 'goto-queue', label: 'All work →', onPress: () => d.onView('queue') })}
       {timeline.length ? <Box flexDirection="column">{timeline}</Box> : <Text dimColor>No ledger yet.</Text>}
       {heading(u, 'Up next', `${ready.length} ready · ${inbox.length} inbox`)}
-      {next ? card(u, [itemRow(u, next, line([next.size, next.status === 'ready' ? 'Ready' : nextReason && !nextReason.ready ? 'Needs specification' : 'Inbox']), tagOf(next, nextReason && !nextReason.ready ? nextReason.reason : undefined), () => {
-        d.onFilter(next.status === 'ready' ? 'ready' : 'inbox')
-        d.onExpand(next.id)
-        d.onView('queue')
-      })]) : <Text dimColor>Nothing else waiting.</Text>}
-      {siblingRows(u, d)}
+      {next
+        ? card(u, [
+            itemRow(
+              u,
+              next,
+              tagOf(next, nextReason && !nextReason.ready ? nextReason.reason : undefined),
+              () => {
+                d.onFilter(next.status === 'ready' ? 'ready' : 'inbox')
+                d.onExpand(next.id)
+                d.onView('queue')
+              },
+              W,
+              true,
+            ),
+          ])
+        : <Text dimColor>Nothing else waiting.</Text>}
+      {siblingRows(u, d, W)}
     </Box>
   )
 }
@@ -477,16 +511,16 @@ function childRows(u: Desk, d: PanelInput): Element | null {
   )
 }
 
-/** The other sessions on this repository, from the live file: title, item, agents; a stale one dim. */
-function siblingRows(u: Desk, d: PanelInput): Element | null {
-  const { Box, Text } = u
+/** The other sessions on this repository, from the live file: each a drawn row of title, item and agents; a stale one faded. */
+function siblingRows(u: Desk, d: PanelInput, W: number): Element | null {
+  const { Box, Svg } = u
   if (!d.siblings.length) return null
-  const rows = d.siblings.map(s => (
-    <Text key={`sibling-${s.sessionId}`} dimColor={s.isStale}>
-      {s.title}
-      <Text dimColor>{`  ${line([s.item, plural(s.agents.filter(a => a.status === 'running').length, 'agent'), s.isStale ? 'stale' : undefined])}`}</Text>
-    </Text>
-  ))
+  const rw = rowWidth(W, 0)
+  const rows = d.siblings.map((s, n) => {
+    const running = s.agents.filter(a => a.status === 'running').length
+    const meta = line([s.item, plural(running, 'agent'), s.isStale ? 'stale' : undefined])
+    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title: s.title, meta, isLive: running > 0, isStale: s.isStale, isLast: n === d.siblings.length - 1 })} alt={line([s.title, meta])} width={rw} height={SESSION_ROW_H} />
+  })
   return (
     <Box flexDirection="column">
       {heading(u, 'Other sessions', `${d.siblings.length}`)}
@@ -497,18 +531,18 @@ function siblingRows(u: Desk, d: PanelInput): Element | null {
 
 // ---------- Queue ----------
 
-function renderQueue(u: Desk, d: PanelInput, _W: number): Element {
+function renderQueue(u: Desk, d: PanelInput, W: number): Element {
   const { Box, Text, Button, Input } = u
   const items = d.backlog?.items ?? []
   const counts = groupCounts(items)
   const { filter, search, expanded } = d.panel
   const list = queueItems(items, filter, search)
   const rows: Element[] = []
-  for (const i of list) {
+  list.forEach((i, n) => {
     const r = d.readiness[i.id]
     const reason = i.status === 'inbox' && r && !r.ready ? r.reason : undefined
     const isOpen = expanded === i.id
-    rows.push(itemRow(u, i, line([i.size, cap(i.status), reason]), tagOf(i, reason), () => d.onExpand(isOpen ? null : i.id), isOpen))
+    rows.push(itemRow(u, i, tagOf(i, reason), () => d.onExpand(isOpen ? null : i.id), W, n === list.length - 1, isOpen))
     if (isOpen) {
       rows.push(
         <Box key={`detail-${i.id}`} flexDirection="column" paddingLeft={2} paddingBottom={1}>
@@ -519,11 +553,13 @@ function renderQueue(u: Desk, d: PanelInput, _W: number): Element {
         </Box>,
       )
     }
-  }
+  })
   return (
     <Box flexDirection="column">
       {heading(u, 'Work queue', 'Priority order')}
-      <Input key="pipeline-search" placeholder="Find an item by name or id…" value={search} submitLabel="search" onInput={(v: string) => d.onSearch(v)} onSubmit={(v: string) => d.onSearch(v)} />
+      <Box key="pipeline-search-box" width={d.bodyColumns}>
+        <Input key="pipeline-search" placeholder="Find an item by name or id…" value={search} submitLabel="find" onInput={(v: string) => d.onSearch(v)} onSubmit={(v: string) => d.onSearch(v)} />
+      </Box>
       <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
         {FILTERS.map(f => (
           <Button key={`filter-${f.filter}`} plain dimColor={filter !== f.filter} label={`${f.label} · ${counts[f.filter]}`} onPress={() => d.onFilter(f.filter)} />
@@ -538,28 +574,15 @@ function renderQueue(u: Desk, d: PanelInput, _W: number): Element {
 // ---------- History ----------
 
 function renderHistory(u: Desk, d: PanelInput, W: number): Element {
-  const { Box, Svg, Text, Button, Link } = u
+  const { Box, Svg, Text, Button } = u
   const items = d.backlog?.items ?? []
   const all = mergedItems(items, d.now)
-  const week = mergedItems(items, d.now, WEEK)
-  const hero: Hero = { kind: 'history', state: 'HISTORY', headline: `${plural(week.length, 'item')} merged`, line: 'Completed this week · last 7 days' }
+  const week = mergedThisWeek(items, d.now)
+  // Everything ever merged is the count; the week counts only what the pipeline merged (an import carries no merge date).
+  const hero: Hero = { kind: 'history', state: 'HISTORY', headline: `${plural(all.length, 'item')} merged`, line: `all time · ${week.length} this week` }
   const drawn = heroSvg(W, hero)
   const shown = d.panel.isMoreShown ? all : all.slice(0, HISTORY_SHOWN)
-  const rows = shown.map(i => {
-    const pr = prLabel(i.pr)
-    return (
-      <Box key={`history-${i.id}`} flexDirection="row" justifyContent="space-between" gap={1}>
-        <Box flexDirection="row" gap={2}>
-          <Text color={DONE} weight="semibold">
-            {i.id}
-          </Text>
-          <Text>{displayTitle(i.title)}</Text>
-          <Text color={DONE}>✓ Merged</Text>
-        </Box>
-        {pr ? pr.href && Link ? <Link href={pr.href}>{`${pr.label} ↗`}</Link> : <Text color={DONE}>{pr.label}</Text> : null}
-      </Box>
-    )
-  })
+  const rows: Element[] = shown.map((i, n) => mergedRow(u, i, W, n === shown.length - 1 && all.length <= HISTORY_SHOWN))
   if (all.length > HISTORY_SHOWN) rows.push(<Button key="history-more" plain label={d.panel.isMoreShown ? 'Show fewer' : `Show all ${all.length} →`} onPress={d.onMore} />)
   return (
     <Box flexDirection="column">

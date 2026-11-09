@@ -48,7 +48,7 @@ docs/pipeline/
   ledgers/<id>/        briefs and reports, written by the lead, not re-read on resume
 ```
 
-Everything under `docs/pipeline/` is committed on the item's branch and merges with the code, except `backlog.json`, which the lead updates on the main branch (see 7.6) so two worktrees never carry diverging copies.
+The files the lead writes by hand (plan, briefs, reports, a spec written at pick) are written in the item's worktree and committed on its branch; they merge with the code. The files the tool writes (`backlog.json`, `BACKLOG.md`, `ledgers/<id>.json`) are always the main checkout's, from a worktree too, and are committed on the main branch at close (see 7.2 step 6), so two worktrees never carry diverging copies. Inside a worktree the engine refuses a hand edit at the main checkout's path, which is why the two homes are strict.
 
 ## 4. The config
 

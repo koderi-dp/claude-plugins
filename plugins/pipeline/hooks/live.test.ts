@@ -52,3 +52,16 @@ test('siblingsOf: every other entry as a sibling, stale past three minutes, the 
   expect(siblingsOf({ sessions: { self: entry(now) } }, 'self', now)).toEqual([])
   expect(siblingsOf({ sessions: { bad: entry(now, { seenAt: 'yesterday' }) } }, 'self', now)[0]!.isStale).toBe(true)
 })
+
+test('siblingsOf: an entry in this session\'s own checkout or worktree is this session\'s (an earlier id of it, after a /clear or a restart), never a sibling', () => {
+  const now = T0 + 10 * 60_000
+  // The screenshot: this session's own entry under its previous id, with its item as the title and no agents.
+  const mine = entry(now - 60_000, { title: 'p1 · grid-track-sizes — Grid row and column sizes', item: 'p1', agents: [], cwd: '/p/main/.claude/worktrees/p1' })
+  const live = { sessions: { self: entry(now), 'old-self': mine, inWorktree: entry(now, { cwd: '/p/wt/task-7/' }), other: entry(now, { cwd: '/p/other', title: 'theirs' }) } }
+  const siblings = siblingsOf(live, 'self', now, [], ['/p/main/.claude/worktrees/p1', '/p/wt/task-7'])
+  expect(siblings.map(s => s.sessionId)).toEqual(['other'])
+  // Without the cwds, the old entry is listed, as before.
+  expect(siblingsOf(live, 'self', now).map(s => s.sessionId)).toEqual(['old-self', 'inWorktree', 'other'])
+  // An entry with no cwd is never matched by an empty own cwd.
+  expect(siblingsOf({ sessions: { blank: entry(now, { cwd: '' }) } }, 'self', now, [], ['']).map(s => s.sessionId)).toEqual(['blank'])
+})

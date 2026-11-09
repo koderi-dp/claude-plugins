@@ -1,6 +1,6 @@
 // The status block of spec §9. Pure: takes and returns plain data. One item's ledger as text is in ledger.ts.
 
-import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, Role, Signal, TaskRecord } from '../types'
+import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, Role, Signal, TaskRecord, TaskReview } from '../types'
 import type { Readiness } from './backlog'
 
 export type StatusInput = {
@@ -41,6 +41,12 @@ export function taskCounter(ledger: Ledger | null): string | undefined {
 export function displayTitle(title: string): string {
   const m = /^[a-z0-9]+(?:-[a-z0-9]+)*\s+(?:—|-)\s+(\S.*)$/.exec(title)
   return m ? m[1]! : title
+}
+
+/** The session's name while it runs an item: `p12 · CSV export`, the title without its slug, cut to 60 characters. */
+export function sessionName(item: Pick<Item, 'id' | 'title'>): string {
+  const title = displayTitle(item.title)
+  return `${item.id} · ${title.length > 60 ? title.slice(0, 59).trimEnd() + '…' : title}`
 }
 
 /** The PR as `#35` with its address when the record is a URL: from `https://…/pull/35`, `#35` or `35`; nothing otherwise. */
@@ -106,7 +112,7 @@ export function statusText(input: StatusInput): string {
   }
   const parked = items.filter(i => i.status === 'parked')
   if (parked.length) lines.push(`Parked: ${parked.map(i => i.id).join(', ')}`)
-  const merged = items.filter(i => i.status === 'merged' && i.updatedAt && now - Date.parse(i.updatedAt) <= WEEK_MS)
+  const merged = mergedThisWeek(items, now)
   if (merged.length) {
     lines.push('Merged this week')
     for (const i of merged) lines.push(itemRow(i, i.pr ?? undefined))
@@ -157,11 +163,24 @@ export function queueItems(items: Item[], filter: QueueFilter, search: string): 
   return filter === 'ready' ? [...list.filter(isActive), ...list.filter(i => !isActive(i))] : list
 }
 
-/** The merged items newest first; `withinMs` keeps those updated in that window. */
+/**
+ * The merged items newest first; `withinMs` keeps those updated in that window. Equal dates (a migration stamps
+ * every imported item with its own date) keep the file's order reversed, the file listing oldest first.
+ */
 export function mergedItems(items: Item[], now: number, withinMs = Infinity): Item[] {
   return items
-    .filter(i => i.status === 'merged' && (withinMs === Infinity || (!!i.updatedAt && now - Date.parse(i.updatedAt) <= withinMs)))
-    .sort((a, b) => (Date.parse(b.updatedAt ?? '') || 0) - (Date.parse(a.updatedAt ?? '') || 0))
+    .map((item, index) => ({ item, index }))
+    .filter(({ item: i }) => i.status === 'merged' && (withinMs === Infinity || (!!i.updatedAt && now - Date.parse(i.updatedAt) <= withinMs)))
+    .sort((a, b) => (Date.parse(b.item.updatedAt ?? '') || 0) - (Date.parse(a.item.updatedAt ?? '') || 0) || b.index - a.index)
+    .map(({ item }) => item)
+}
+
+/**
+ * The items the pipeline merged in the last seven days, newest first: an imported item (its note starts with
+ * `imported`) carries the migration's date, not a merge date, so it never counts.
+ */
+export function mergedThisWeek(items: Item[], now: number): Item[] {
+  return mergedItems(items, now, WEEK_MS).filter(i => !/^imported\b/i.test(i.note ?? ''))
 }
 
 /** The idle hero's sentence: how many wait, how many are ready, and what moves work. */
@@ -205,6 +224,79 @@ export function roleOf(agent: Pick<AgentRun, 'name'>, ledger: Ledger | null): { 
   if (/review/.test(name)) return { role: 'reviewer' }
   if (/implement|build|task \d/.test(name)) return { role: 'implementer' }
   return { role: agent.name }
+}
+
+export type Verdict = 'APPROVED' | 'FIX REQUIRED'
+export type Attempt = {
+  /** `Build`, `Review`, `Fix 1 of 3`, `Final review`, `Escalation`. */
+  label: string
+  model: string
+  /** The dispatch's minutes as a clock, `3:20`. */
+  time: string
+  verdict?: Verdict
+  /** A line of its own, dim, with no model or time: how an accepted task was reviewed. */
+  isNote?: boolean
+}
+
+const verdictOf = (result: string): Verdict | undefined => (/FIX REQUIRED/i.test(result) ? 'FIX REQUIRED' : /APPROVED/i.test(result) ? 'APPROVED' : undefined)
+
+/**
+ * A task's attempt trail from its dispatches, in order: the first implementer dispatch is the Build, each later
+ * one a fix round counted within the task against `fixRounds`; a review carries the verdict its result names.
+ */
+export function attemptsOf(task: Pick<TaskRecord, 'dispatches'> & Partial<Pick<TaskRecord, 'status' | 'review'>> | undefined, fixRounds: number, taskReview?: TaskReview): Attempt[] {
+  let builds = 0
+  const note = task ? reviewNote(task, taskReview) : undefined
+  const trail = (task?.dispatches ?? []).map((d): Attempt => {
+    let label: string
+    if (d.role === 'implementer') {
+      builds += 1
+      label = builds === 1 ? 'Build' : `Fix ${builds - 1} of ${fixRounds}`
+    } else label = d.role === 'reviewer' ? 'Review' : d.role === 'final' ? 'Final review' : 'Escalation'
+    const verdict = verdictOf(d.result ?? '')
+    return { label, model: shortModel(d.model), time: fmtClock((d.minutes ?? 0) * 60_000), ...(verdict ? { verdict } : {}) }
+  })
+  return note ? [...trail, { label: note, model: '', time: '', isNote: true }] : trail
+}
+
+/**
+ * How an accepted task was reviewed when no independent reviewer ran (`review.kind` is `lead-diff`):
+ * `review skipped (taskReview off)` when the config turns per-task review off, `lead read the diff` otherwise.
+ */
+export function reviewNote(task: Partial<Pick<TaskRecord, 'status' | 'review'>>, taskReview?: TaskReview): string | undefined {
+  if (task.status !== 'accepted' || task.review?.kind !== 'lead-diff') return undefined
+  return taskReview === 'off' ? 'review skipped (taskReview off)' : 'lead read the diff'
+}
+
+/** An attempt as one line: `Build · Sonnet · 3:20 ✓`, `Review · Opus · 0:58 · FIX REQUIRED`. */
+export const attemptText = (a: Attempt): string => (a.isNote ? a.label : `${line([a.label, a.model, a.time])}${a.verdict ? ` · ${a.verdict}` : ' ✓'}`)
+
+/**
+ * The current task's second line: in a fix round, `Fix round 1 of 3 · after review: FIX REQUIRED`; with an agent
+ * running, its role, model and clock (`Implementer · Sonnet · 1:48`, `Review · Opus · 0:58`); otherwise the last
+ * dispatch's model.
+ */
+export function currentLine(task: TaskRecord, agent: AgentRun | undefined, ledger: Ledger | null, fixRounds: number, now: number): string {
+  const attempts = attemptsOf(task, fixRounds)
+  if (task.status === 'fix') {
+    const fixes = attempts.filter(a => a.label.startsWith('Fix ')).length
+    const review = [...attempts].reverse().find(a => a.label === 'Review' || a.label === 'Final review')
+    return line([`Fix round ${Math.max(1, fixes)} of ${fixRounds}`, review?.verdict ? `after review: ${review.verdict}` : undefined])
+  }
+  if (agent) {
+    const role = roleOf(agent, ledger).role
+    const word = role === 'reviewer' ? 'Review' : role === 'final' ? 'Final review' : role === 'implementer' ? 'Implementer' : role.charAt(0).toUpperCase() + role.slice(1)
+    return line([word, shortModel(agent.model), fmtClock(now - agent.startedAt)])
+  }
+  const last = (task.dispatches ?? []).at(-1)
+  return last ? shortModel(last.model) : ''
+}
+
+/** What the lead does while no agent runs: `Lead · fix round 1 dispatched · 2:10`, the state from the resume block and the time since it. */
+export function leadLine(ledger: Ledger | null, now: number): string {
+  const state = ledger?.resume?.state || 'between dispatches'
+  const at = Date.parse(ledger?.resume?.at ?? '')
+  return line(['Lead', state, Number.isNaN(at) ? undefined : fmtClock(Math.max(0, now - at))])
 }
 
 export type TagKind = 'running' | 'done' | 'blocked' | 'muted' | 'ready'
