@@ -14,7 +14,7 @@ const VALID_CONFIG = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'f
 
 /** A main checkout at /p/main, this session in its worktree, files in memory; records the writes and the plugin's state. */
 function world(on: On, seed: Record<string, string> = {}, options: { rename?: 'ok' | 'deny' } = {}) {
-  mock.clock(on, { now: NOW })
+  const clock = mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
   const state = new Map<string, unknown>()
@@ -53,7 +53,7 @@ function world(on: On, seed: Record<string, string> = {}, options: { rename?: 'o
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
   on('turn.complete', () => ({ text: '' }) as never)
-  return { files, writes, state, tools, renames }
+  return { files, writes, state, tools, renames, clock }
 }
 
 const text = (r: unknown) => String((r as { result: unknown }).result)
@@ -447,7 +447,7 @@ test('0.2.2: get answers a slim compact JSON under 8,000 characters for a 71-ite
   expect(got.config).toMatchObject({ runner: 'subagent', taskReview: 'risky', merge: 'pr', mergeMethod: 'merge', limits: { fixRounds: expect.any(Number), silentMinutes: expect.any(Number) }, models: { implementer: expect.any(Object), final: expect.any(Object) } })
   // The full answer is today's shape, pretty-printed.
   const all = JSON.parse(full)
-  expect(Object.keys(all).sort()).toEqual(['active', 'backlog', 'children', 'config', 'readiness', 'resume', 'siblings', 'signals'])
+  expect(Object.keys(all).sort()).toEqual(['active', 'backlog', 'children', 'config', 'mergedPending', 'readiness', 'resume', 'siblings', 'signals'])
   expect(all.backlog.items).toHaveLength(71)
   expect(all.active).toBe('p4')
 })
@@ -474,4 +474,100 @@ test('0.2.2: a ledger write answers one line: the running task, the rulings and 
   const r = text(await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 3, status: 'running', dispatches: [dispatch(674000, 'running')] }], resume: { task: 3, state: 'implementer dispatched', lastVerified: 'a' } } }))
   expect(r).toBe('ledger p1 · task 3/6 running · 2 rulings · 674k tokens')
   expect(text(await call($, { action: 'ledger', item: 'p1', set: { final: { verdict: 'approved' }, tasks: [{ n: 4, dispatches: [dispatch(800000, 'done')] }] } }))).toBe('ledger p1 · final approved · 2 rulings · 1.5M tokens')
+})
+
+// ---------- 0.2.3: a PR merged by hand ----------
+
+/** A git whose `origin/main` holds the given branch tips; records every call. */
+function gitWorld(on: On, merged: string[], remoteRefs: string[] = ['refs/remotes/origin/main']) {
+  const runs: string[][] = []
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    runs.push(argv)
+    const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    const sub = argv[3]
+    if (sub === 'fetch') return { value: ok } as never
+    if (sub === 'rev-parse') return { value: { ...ok, exitCode: remoteRefs.includes(argv[6]!) ? 0 : 1 } } as never
+    if (sub === 'merge-base') return { value: { ...ok, exitCode: merged.includes(argv[5]!) ? 0 : 1 } } as never
+    return { value: { ...ok, exitCode: 1, stderr: 'unknown command' } } as never
+  })
+  return runs
+}
+
+const REVIEW_SEED = {
+  [CONFIG]: VALID_CONFIG,
+  [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'Login', status: 'review', pr: '#3' }, { id: 'p2', title: 'Export', status: 'ready' }] }),
+  [`${DIR}/ledgers/p1.json`]: JSON.stringify({ item: 'p1', branch: 'feat/p1', worktree: '.claude/worktrees/p1', tasks: [], rulings: [], blockers: [], tokens: 0 }),
+  [`${DIR}/specs/p2.md`]: '## What\n\nx\n',
+}
+
+test('get answers mergedPending for a review item whose branch tip is on origin/main, fetching once a minute', async ($, on) => {
+  const { clock } = world(on, REVIEW_SEED)
+  const runs = gitWorld(on, ['feat/p1'])
+  const got = JSON.parse(text(await call($, { action: 'get' }))) as { mergedPending?: unknown; active: { id: string } }
+  expect(got.mergedPending).toEqual([{ id: 'p1', branch: 'feat/p1', pr: '#3' }])
+  expect(got.active.id).toBe('p1')
+  expect(runs[0]).toEqual(['git', '-C', MAIN, 'fetch', '-q', 'origin', 'main'])
+  expect(runs.at(-1)).toEqual(['git', '-C', MAIN, 'merge-base', '--is-ancestor', 'feat/p1', 'origin/main'])
+  const fetches = () => runs.filter(r => r[3] === 'fetch').length
+  expect(fetches()).toBe(1)
+  // Within the minute: no second fetch; the check still runs.
+  const full = JSON.parse(text(await call($, { action: 'get', full: true }))) as { mergedPending: unknown }
+  expect(full.mergedPending).toEqual([{ id: 'p1', branch: 'feat/p1', pr: '#3' }])
+  expect(fetches()).toBe(1)
+  // The status block carries the line.
+  expect(text(await call($, { action: 'status' }))).toContain('pipeline: 2 items · 1 ready\np1 merged on main · run /pipeline next or "continue the pipeline" to close it')
+  // Past the minute: fetched again.
+  await clock.advance(60_000)
+  await call($, { action: 'get' })
+  expect(fetches()).toBe(2)
+})
+
+test('get leaves mergedPending out when the tip is not on origin/main, and signals answers it with the signals when it is', async ($, on) => {
+  world(on, REVIEW_SEED)
+  gitWorld(on, [])
+  const got = JSON.parse(text(await call($, { action: 'get' }))) as Record<string, unknown>
+  expect('mergedPending' in got).toBe(false)
+  expect(JSON.parse(text(await call($, { action: 'get', full: true }))).mergedPending).toEqual([])
+  expect(text(await call($, { action: 'signals' }))).toBe('no signals')
+  expect(text(await call($, { action: 'status' }))).not.toContain('merged on main')
+})
+
+test('signals answers { signals, mergedPending } for a merged PR, and a remote tracking tip is preferred', async ($, on) => {
+  world(on, REVIEW_SEED)
+  const runs = gitWorld(on, ['refs/remotes/origin/feat/p1'], ['refs/remotes/origin/main', 'refs/remotes/origin/feat/p1'])
+  expect(JSON.parse(text(await call($, { action: 'signals' })))).toEqual({ signals: [], mergedPending: [{ id: 'p1', branch: 'feat/p1', pr: '#3' }] })
+  expect(runs.at(-1)).toEqual(['git', '-C', MAIN, 'merge-base', '--is-ancestor', 'refs/remotes/origin/feat/p1', 'origin/main'])
+})
+
+test('a building item with a pr is checked, one without is not, and a git that fails reads as not merged', async ($, on) => {
+  const seed = {
+    ...REVIEW_SEED,
+    [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'Login', status: 'building', pr: '#3' }, { id: 'p3', title: 'Other', status: 'building' }] }),
+    [`${DIR}/ledgers/p3.json`]: JSON.stringify({ item: 'p3', branch: 'feat/p3', tasks: [], rulings: [], blockers: [], tokens: 0 }),
+  }
+  world(on, seed)
+  const runs = gitWorld(on, ['feat/p1', 'feat/p3'])
+  const got = JSON.parse(text(await call($, { action: 'get' }))) as { mergedPending?: unknown }
+  expect(got.mergedPending).toEqual([{ id: 'p1', branch: 'feat/p1', pr: '#3' }])
+  expect(runs.some(r => r.includes('feat/p3'))).toBe(false)
+})
+
+test('without a process.run handler the check is unknown and get still answers', async ($, on) => {
+  world(on, REVIEW_SEED)
+  const got = JSON.parse(text(await call($, { action: 'get' }))) as Record<string, unknown>
+  expect('mergedPending' in got).toBe(false)
+  expect(got['active']).toMatchObject({ id: 'p1' })
+})
+
+test('at session start a merged PR with its Close pending is one toast per item', async ($, on) => {
+  world(on, REVIEW_SEED)
+  gitWorld(on, ['feat/p1'])
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push((e as { text: string }).text)
+    return { value: undefined } as never
+  })
+  await start($)
+  expect(toasts).toEqual(['pipeline: p1 merged on main · run /pipeline next or "continue the pipeline" to close it'])
 })

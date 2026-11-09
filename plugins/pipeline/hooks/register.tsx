@@ -11,6 +11,8 @@ import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
 import type { LedgerSet } from './ledger'
 import { parseLive, siblingsOf, withEntry, withoutEntry } from './live'
+import { candidates as mergeCandidates, fetchArgv, findMerged, isFetchDue, mergedLine } from './merged'
+import type { Git, MergedPending } from './merged'
 import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse, specStub } from './migrate'
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { BAND_COMPACT_H, BAND_H, bandSvg, bandText, idleStripSvg, idleStripText } from './draw'
@@ -43,8 +45,8 @@ const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', '
 
 const TOOL_DESCRIPTION =
   'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
-  '`get` { id?, titles?, full? } → compact JSON { active: { id, title, status, note, spec, plan, branch, worktree } | null, resume, signals, children, siblings, counts, next, config }: the active item (planning, building or review), its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (no log), the other sessions on the repository in short, the count per status (planning counts as building), the first three ready (else inbox) items with the reason, and the config keys a run reads (runner, merge, mergeMethod, checks, limits, riskyPaths, protectedPaths, models, taskReview); with `id` also `item`, that item\'s full record and readiness; with `titles` also `titles`, every item as `<id> <status> <title>`; `full: true` answers the whole { config, backlog, readiness, active, resume, signals, children, siblings } instead, large on a long backlog, never needed during a run; ' +
-  '`signals` → only the open watchdog signals as compact JSON [{ kind, agent, agentId?, detail, at }], marked delivered, or `no signals`: the watchdog check; ' +
+  '`get` { id?, titles?, full? } → compact JSON { active: { id, title, status, note, spec, plan, branch, worktree } | null, resume, signals, children, siblings, counts, next, config }: the active item (planning, building or review), its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (no log), the other sessions on the repository in short, the count per status (planning counts as building), the first three ready (else inbox) items with the reason, and the config keys a run reads (runner, merge, mergeMethod, checks, limits, riskyPaths, protectedPaths, models, taskReview), plus `mergedPending` [{ id, branch, pr }] when a review item\'s (or a building item with a pr) branch tip is on origin/mainBranch (fetched at most once a minute): its PR was merged by hand and its Close is pending, so the run skill closes it first; with `id` also `item`, that item\'s full record and readiness; with `titles` also `titles`, every item as `<id> <status> <title>`; `full: true` answers the whole { config, backlog, readiness, active, resume, signals, children, siblings } instead, large on a long backlog, never needed during a run; ' +
+  '`signals` → only the open watchdog signals as compact JSON [{ kind, agent, agentId?, detail, at }], marked delivered, or `no signals`: the watchdog check; with a merged PR whose Close is pending it answers { signals, mergedPending } instead; ' +
   '`status` { id? } → the status block, or one item\'s ledger as text; ' +
   '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers one line, `added p29 · inbox · no spec` (the status after settling, with the reason an inbox item is not ready); ' +
   '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title) and answers `p1 · building` (with `set <fields>` for the others); ' +
@@ -203,6 +205,9 @@ const self = {
   ticker: null as null | { cancel: () => void },
   // The permission mode the engine last told us (a prompt's, a spawn's); a child runs in it.
   permissionMode: '',
+  // The merged-PR check: when origin/<mainBranch> was last fetched, and the items found merged with their Close pending.
+  lastFetch: -Infinity,
+  mergedPending: [] as MergedPending[],
   // The items this session was named after, so an item renames it once, and the name waiting for the turn's end.
   renamed: new Set<string>(),
   pendingRename: '',
@@ -378,6 +383,7 @@ async function gather($: EngineInterface, found: string, c: Config | null, b: Ba
     signals: await read($, signals),
     now: await $.clock.now(),
     fileError: error,
+    mergedPending: self.mergedPending,
   }
 }
 
@@ -419,6 +425,42 @@ async function cleanInput($: EngineInterface, found: string, b: Backlog | null):
   }
   const worktrees = listing.filter(p => p.startsWith('.claude/worktrees/') && p.endsWith('/')).map(p => p.slice('.claude/worktrees/'.length, -1))
   return { listing, planPaths, worktrees }
+}
+
+/**
+ * The items whose PR was merged by hand while their Close never ran: every `review` item, and every `building` item
+ * with a `pr`, whose branch tip is on `origin/<mainBranch>` (fetched at most once per minute per session). The git
+ * calls run through `$.process.run`; a failed one reads as unknown, not merged. The result is kept for the status
+ * block and the panel, which never run git themselves.
+ */
+async function checkMerged($: EngineInterface, found: string, c: Config | null, b: Backlog | null): Promise<MergedPending[]> {
+  try {
+    const ledgers: Record<string, Ledger | null> = {}
+    for (const item of b?.items ?? []) {
+      if (item.status === 'review' || item.status === 'building') ledgers[item.id] = await loadLedger($, found, item.id)
+    }
+    const list = mergeCandidates(b, ledgers)
+    if (!list.length) {
+      self.mergedPending = []
+      return []
+    }
+    const mainBranch = c?.mainBranch ?? DEFAULTS.mainBranch
+    const git: Git = async argv => {
+      try {
+        const r = await $.process.run(argv, { cwd: found, timeoutMs: 60_000 })
+        return { exitCode: r.exitCode }
+      } catch {
+        return null
+      }
+    }
+    const at = await $.clock.now()
+    if (isFetchDue(self.lastFetch, at)) {
+      self.lastFetch = at
+      await git(fetchArgv(found, mainBranch))
+    }
+    self.mergedPending = await findMerged(found, list, mainBranch, git)
+  } catch {}
+  return self.mergedPending
 }
 
 /** Writes the backlog and its generated view, refreshes the atom and answers what was written, settled, with its readiness. */
@@ -488,9 +530,11 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     const ledger = active ? await loadLedger($, found, active.id) : null
     // A child's record without its log (up to 200 KB each): `log { item }` answers the text.
     const kids = (await read($, children)).map(({ log: _log, ...rest }) => rest)
+    // A PR merged by hand: the item's Close is pending, and the run skill does it first.
+    const merged = await checkMerged($, found, c, loaded)
     let answer: string
     if (e.full) {
-      const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings) }
+      const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings), mergedPending: merged }
       if (error) out['error'] = error
       answer = JSON.stringify(out, null, 2)
     } else {
@@ -500,6 +544,7 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
         out['item'] = one ? { ...one, ...(r[one.id] ? { readiness: r[one.id] } : {}) } : null
       }
       if (e.titles) out['titles'] = (loaded?.items ?? []).map(i => `${i.id} ${i.status} ${i.title}`)
+      if (merged.length) out['mergedPending'] = merged
       if (error) out['error'] = error
       answer = JSON.stringify(out)
     }
@@ -509,9 +554,10 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
   }
   if (e.action === 'signals') {
     const open = (await read($, signals)).filter(s => !s.delivered)
-    if (!open.length) return 'no signals'
-    const answer = JSON.stringify(open.map(compactSignal))
-    await markDelivered($)
+    const merged = await checkMerged($, found, c, loaded)
+    if (!open.length && !merged.length) return 'no signals'
+    const answer = merged.length ? JSON.stringify({ signals: open.map(compactSignal), mergedPending: merged }) : JSON.stringify(open.map(compactSignal))
+    if (open.length) await markDelivered($)
     return answer
   }
   if (e.action === 'clean') {
@@ -1369,14 +1415,20 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({ name: 'pipeline', description: TOOL_DESCRIPTION, isDeferred: false, inputSchema: TOOL_SCHEMA })
     } catch {}
+    let loaded: { found: string; config: Config | null; backlog: Backlog | null } | null = null
     try {
-      await loadAll($, await resolveRoot($))
+      const found = await resolveRoot($)
+      loaded = { found, ...(await loadAll($, found)) }
     } catch {}
     try {
       self.sessionRoot = slashes(await $.session.root())
     } catch {}
     try {
       await arrive($)
+    } catch {}
+    // A PR merged by hand since the last session: the person hears it once, in a toast; the status block says it too.
+    try {
+      if (loaded) for (const m of await checkMerged($, loaded.found, loaded.config, loaded.backlog)) $.ui.toast(`pipeline: ${mergedLine(m)}`)
     } catch {}
     return started
   })

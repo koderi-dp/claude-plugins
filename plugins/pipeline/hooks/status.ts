@@ -2,6 +2,8 @@
 
 import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, Role, Signal, TaskRecord, TaskReview } from '../types'
 import type { Readiness } from './backlog'
+import type { MergedPending } from './merged'
+import { mergedLine } from './merged'
 
 export type StatusInput = {
   config: Config | null
@@ -15,6 +17,8 @@ export type StatusInput = {
   now: number
   /** The parse error of a pipeline file, as `<file>: line N: <message>`. */
   fileError?: string | null
+  /** The items whose PR was merged by hand and whose Close is pending. */
+  mergedPending?: MergedPending[]
 }
 
 const ACTIVE: ItemStatus[] = ['planning', 'building', 'review']
@@ -81,6 +85,7 @@ export function statusText(input: StatusInput): string {
   const items = backlog.items
   const ready = items.filter(i => i.status === 'ready')
   if (!fileError) lines.push(`pipeline: ${items.length} item${items.length === 1 ? '' : 's'} · ${ready.length} ready`)
+  for (const m of input.mergedPending ?? []) lines.push(mergedLine(m))
 
   const active = items.filter(i => ACTIVE.includes(i.status))
   if (active.length) {
