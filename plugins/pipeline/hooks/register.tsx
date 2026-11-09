@@ -1464,13 +1464,41 @@ export const register: Register = (on, options) => {
     try {
       if (!e.props.hasSurvey) band = await bandNow($, e.props.isWorking)
     } catch {}
-    if (!band) return idleStrip($, e, next)
+    const strip = band ? '' : await idleText($, e.props.hasSurvey)
+    if (!band && !strip) return next(e)
     // The engine's own placeholder ({ type: 'engine' }) is never nested: the desktop drops a band that nests it.
     const drawn = await Promise.resolve(next(e)).catch(() => null)
     const other = drawn && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
     const cols = e.props.bodyColumns || 100
+    if (!band) {
+      // Nothing active: one slim line with the Open panel button, so the panel is a press away.
+      const button = <Button key="band-panel" plain dimColor hotkey="p" label="Open panel" onPress={() => void showPane($)} />
+      if (e.surface !== 'terminal' && 'Svg' in ui) {
+        const { Svg } = ui
+        const width = Math.max(180, Math.min(1600, cols * 8 - 40)) - 24
+        return (
+          <Box flexDirection="column">
+            <Box flexDirection="row" alignItems="flex-start">
+              <Svg source={idleStripSvg(strip, width)} alt={strip} width={width} height={BAND_COMPACT_H} />
+              {button}
+            </Box>
+            {other}
+          </Box>
+        )
+      }
+      // The row, the gap and the button's `[ Open panel ]` share the columns.
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            <Text dimColor>{idleStripText(strip, Math.max(10, cols - 4 - 'Open panel'.length - 5))}</Text>
+            {button}
+          </Box>
+          {other}
+        </Box>
+      )
+    }
     const panelButton = <Button key="band-panel" plain dimColor hotkey="p" label={(await isPaneOpen($)) ? 'Panel ↗' : 'Panel'} onPress={() => void showPane($)} />
     let isOpen = false
     try {
@@ -1715,47 +1743,17 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
   })
 }
 
-type BandEvent = { surface: string; props: { bodyColumns?: number; hasSurvey?: boolean } }
-
 /**
- * Nothing is active: in a project with a pipeline, one slim line (`pipeline · idle · 28 inbox · next: p2 Brand logos`)
- * with the Open panel button, so the panel is a press away; nothing of its own without a config or with `idleStrip: hide`.
+ * The idle strip's line when nothing is active in a project with a pipeline (`pipeline · idle · 28 inbox · next: p2
+ * Brand logos`); nothing without a config, during a survey, or with `idleStrip: hide`.
  */
-async function idleStrip($: EngineInterface, e: BandEvent, next: (e: BandEvent) => unknown): Promise<unknown> {
-  let text = ''
+async function idleText($: EngineInterface, hasSurvey: boolean | undefined): Promise<string> {
   try {
-    if (isIdleStrip && !e.props.hasSurvey && (await read($, config))) text = `pipeline · ${idleLine((await read($, backlog))?.items ?? [])}`
-  } catch {}
-  if (!text) return next(e)
-  const drawn = await Promise.resolve(next(e)).catch(() => null)
-  const other = drawn && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
-  const ui = $.ui.resolve(e as never)
-  const { Box, Text, Button } = ui
-  const cols = e.props.bodyColumns || 100
-  const button = <Button key="band-panel" plain dimColor hotkey="p" label="Open panel" onPress={() => void showPane($)} />
-  if (e.surface !== 'terminal' && 'Svg' in ui) {
-    const { Svg } = ui
-    const width = Math.max(180, Math.min(1600, cols * 8 - 40)) - 24
-    return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" alignItems="flex-start">
-          <Svg source={idleStripSvg(text, width)} alt={text} width={width} height={BAND_COMPACT_H} />
-          {button}
-        </Box>
-        {other}
-      </Box>
-    )
+    if (!isIdleStrip || hasSurvey || !(await read($, config))) return ''
+    return `pipeline · ${idleLine((await read($, backlog))?.items ?? [])}`
+  } catch {
+    return ''
   }
-  // The row, the gap and the button's `[ Open panel ]` share the columns.
-  return (
-    <Box flexDirection="column">
-      <Box flexDirection="row" gap={1}>
-        <Text dimColor>{idleStripText(text, Math.max(10, cols - 4 - 'Open panel'.length - 5))}</Text>
-        {button}
-      </Box>
-      {other}
-    </Box>
-  )
 }
 
 // The item the band keeps showing after it left the active statuses (blocked, or just merged), until the next turn starts.
