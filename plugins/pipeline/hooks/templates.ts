@@ -38,7 +38,7 @@ Known about working in this repository:
 
 ## Hand back
 
-Write \`{{report}}\`, at most 25 lines: **Commit** (hash), **Changed** (files), **Deviations** (and why), **Evidence** (each command and its last summary line), **Gaps** (seen, not fixed), **Look here** (file:line a reviewer should read).
+Write the report at exactly this path, copied as it stands, \`{{report}}\`, at most 25 lines: **Commit** (hash), **Changed** (files), **Deviations** (and why), **Evidence** (each command and its last summary line), **Gaps** (seen, not fixed), **Look here** (file:line a reviewer should read).
 Then answer in one line and nothing else: \`DONE <hash> · <passed>/<total> tests\` or \`BLOCKED <the question>\`. If a command or a setup step of this repository cost you a failed attempt that the list above would have saved, add \` · fact: <the one line a next implementer needs>\`.
 
 ${END} End the commit message with these lines exactly:
@@ -64,7 +64,7 @@ Same worktree and branch; the task's commits are in place. Fix what is listed, n
 
 ## Hand back
 
-Write \`{{report}}\`, at most 20 lines: **Commit**, **Fixed** (finding → change → test), **Disputed** (with evidence), **Evidence** (commands and their last summary line), **Look here** (file:line).
+Write the report at exactly this path, copied as it stands, \`{{report}}\`, at most 20 lines: **Commit**, **Fixed** (finding → change → test), **Disputed** (with evidence), **Evidence** (commands and their last summary line), **Look here** (file:line).
 Then answer in one line and nothing else: \`DONE <hash> · <fixed>/<findings> fixed\` or \`BLOCKED <the question>\`.
 
 ${END} End the commit message with these lines exactly:
@@ -103,7 +103,7 @@ Run the ones that apply and say "not applicable: <reason>" for the rest. Stop pr
 
 ## Hand back
 
-Write \`{{report}}\`: first line \`APPROVED\` or \`FIX REQUIRED\`; then **Critical** (breaks correctness, data or security), **Important** (wrong under a realistic input, or missing coverage), **Minor** (the lead carries these forward), each finding as \`file:line · what is wrong · how to show it\`; then **Probes**, one line each with the command and its outcome. Any Critical or Important means \`FIX REQUIRED\`.
+Write the report at exactly this path, copied as it stands, \`{{report}}\`: first line \`APPROVED\` or \`FIX REQUIRED\`; then **Critical** (breaks correctness, data or security), **Important** (wrong under a realistic input, or missing coverage), **Minor** (the lead carries these forward), each finding as \`file:line · what is wrong · how to show it\`; then **Probes**, one line each with the command and its outcome. Any Critical or Important means \`FIX REQUIRED\`.
 Then answer in one line and nothing else: \`APPROVED · <n> minor\` or \`FIX REQUIRED · <n> critical · <n> important\`.
 
 ${END}
@@ -141,7 +141,7 @@ Parked on purpose: {{parked}}
 
 ## Hand back
 
-Write \`{{report}}\`: first line \`APPROVED\` or \`FIX REQUIRED\`; then **Acceptance** (the list, each line with its proof or \`MISSING\`), **Critical** / **Important** / **Minor** (each \`task N · file:line · what is wrong · how to show it\`), **Worst case**, **Gate** (the command and its last summary line). Any Critical, Important or MISSING means \`FIX REQUIRED\`.
+Write the report at exactly this path, copied as it stands, \`{{report}}\`: first line \`APPROVED\` or \`FIX REQUIRED\`; then **Acceptance** (the list, each line with its proof or \`MISSING\`), **Critical** / **Important** / **Minor** (each \`task N · file:line · what is wrong · how to show it\`), **Worst case**, **Gate** (the command and its last summary line). Any Critical, Important or MISSING means \`FIX REQUIRED\`.
 Then answer in one line and nothing else: \`APPROVED · gate green\` or \`FIX REQUIRED · <n> critical · <n> important · <n> missing\`.
 
 ${END}

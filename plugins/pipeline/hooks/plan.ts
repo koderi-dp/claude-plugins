@@ -132,6 +132,8 @@ export type BriefInput = {
   ledger: Ledger
   rulesMd: string
   factsMd?: string
+  /** The worktree's absolute path: the report is named by its full path, so a subagent never composes one. */
+  root?: string
   specMd: string
   template?: string
   findings?: string
@@ -159,7 +161,7 @@ export function renderBrief(input: BriefInput): { text: string; brief: string; r
     title: kind === 'final' ? input.itemTitle : task!.title,
     n: String(input.task),
     total: String(plan.tasks.length),
-    report: paths.report,
+    report: input.root ? `${input.root.replace(/\/+$/, '')}/${paths.report}` : paths.report,
     constraints: or(plan.constraints, 'none'),
     checkFast: or(c.checks.fast, 'the focused tests of the files you touch'),
     checkTask: or(task?.check, or(c.checks.task, 'the tests of the package you touch')),

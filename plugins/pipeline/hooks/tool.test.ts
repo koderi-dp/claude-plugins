@@ -839,3 +839,10 @@ test('0.3.2: a fact given at accept is kept in facts.md, once, and reaches the n
   // The answer rendered task 2's brief, with the fact in it.
   expect(files.get(`${WT}/docs/pipeline/ledgers/p1/task-2-brief.md`)).toContain('- run npm ci in the worktree before the first test')
 })
+
+test('0.3.2: a brief names its report by the full path in the worktree', async ($, on) => {
+  const { files } = world(on, { ...BUILD_SEED, [`${WT}/docs/pipeline/plans/p1.md`]: PLAN_MD })
+  choreWorld(on)
+  await call($, { action: 'plan', item: 'p1' })
+  expect(files.get(`${WT}/docs/pipeline/ledgers/p1/task-1-brief.md`)).toContain(`\`${WT}/docs/pipeline/ledgers/p1/task-1-report.md\``)
+})

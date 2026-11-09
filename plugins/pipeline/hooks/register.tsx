@@ -998,6 +998,7 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
   try {
     out = renderBrief({
       kind, item: id, itemTitle: item.title, task: n, round, plan, config: cfg, ledger,
+      root: wt,
       rulesMd: (await readItemFile($, found, wt, 'docs/pipeline/rules.md')) ?? '',
       factsMd: (await readText($, `${found}/${FACTS_FILE}`)) ?? '',
       specMd: (await readItemFile($, found, wt, item.spec ?? `docs/pipeline/specs/${id}.md`)) ?? '',
