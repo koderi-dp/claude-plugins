@@ -40,7 +40,7 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 | `/pipeline park <id>` / `unpark <id>` | Take out of, back into, the queue |
 | `/pipeline stop [id]` | Finish the running task, leave the branch pushed and the ledger current, stop; with an id, kill that item's child session and block the item |
 | `/pipeline log <id>` | The last 60 lines of an item's child session log |
-| `/pipeline clean` | List and remove what `retain` says may go for every merged item |
+| `/pipeline clean` | List and remove what `retain` says may go for every merged item, with its worktree and local branch |
 | `/pipeline panel` | Toggle the panel |
 | `/pipeline config [key=value]` | Show or change the project config |
 
@@ -159,7 +159,7 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 | Skills | `pipeline-init`, `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
 | Templates | `templates/spec.md`, `implementer.md`, `reviewer.md`, `fix.md`, `final.md` |
 | Tool | `mcp__pipeline__pipeline` |
-| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |
+| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `merged.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |
 | Tests | `claude plugin test plugins/pipeline` |
 
 License: MIT.

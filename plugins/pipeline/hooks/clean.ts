@@ -1,8 +1,10 @@
 // What `config.retain` says may go after an item merges (spec §4 `retain`, §10 `clean`). Pure:
-// the caller lists the folders and reads the superpowers pointers; this names the paths and deletes nothing.
+// the caller lists the folders, reads the superpowers pointers and the local branches; this names the paths, and the
+// branch as `branch:<name>`, and deletes nothing.
 
 import type { Backlog, Config, Item } from '../types'
 import { DEFAULTS } from './config'
+import { branchOf } from './runner'
 
 export type CleanInput = {
   config: Config | null
@@ -15,6 +17,10 @@ export type CleanInput = {
   planPaths?: Record<string, string>
   /** The names under `.claude/worktrees/`. */
   worktrees?: string[]
+  /** The local branches (`refs/heads/`), short names. */
+  branches?: string[]
+  /** Per item id, the branch its ledger records, for an item whose record has none. */
+  ledgerBranches?: Record<string, string>
 }
 
 const LEDGERS = 'docs/pipeline/ledgers'
@@ -33,7 +39,13 @@ export function namesId(dir: string, id: string): boolean {
   return new RegExp(`(^|[^a-z0-9])${escaped}(?![a-z0-9])`, 'i').test(dir)
 }
 
-/** The paths that may go: an item's ledger folder, plan, superpowers folders and worktree, each only when on disk and not retained. */
+/** The branch an item ran on: its own, else its ledger's, else `config.branch` with its id. */
+export const itemBranch = (item: Item, ledgerBranch: string | undefined, template: string): string => (typeof item.branch === 'string' && item.branch ? item.branch : ledgerBranch || branchOf(template, item.id))
+
+/**
+ * The paths that may go: an item's ledger folder, plan, superpowers folders and worktree, each only when on disk and
+ * not retained, then its local branch as `branch:<name>` when it exists and is not `mainBranch`.
+ */
 export function cleanList(input: CleanInput): string[] {
   const retain = { ...DEFAULTS.retain, ...(input.config?.retain ?? {}) }
   const paths = new Set(input.listing.map(trim).filter(Boolean))
@@ -41,6 +53,9 @@ export function cleanList(input: CleanInput): string[] {
   const sddDirs = [...new Set([...paths].filter(p => p.startsWith(`${SDD}/`)).map(p => p.slice(SDD.length + 1).split('/')[0]!).filter(Boolean))]
   const pointers = input.planPaths ?? {}
   const worktrees = new Set((input.worktrees ?? []).map(trim))
+  const branches = new Set(input.branches ?? [])
+  const template = input.config?.branch ?? DEFAULTS.branch
+  const mainBranch = input.config?.mainBranch ?? DEFAULTS.mainBranch
 
   const merged = (input.backlog?.items ?? []).filter(i => i.status === 'merged')
   const chosen = input.item === undefined ? merged : merged.filter(i => i.id === input.item)
@@ -60,6 +75,8 @@ export function cleanList(input: CleanInput): string[] {
       }
     }
     if (worktrees.has(item.id) || has(`${WORKTREES}/${item.id}`)) add(`${WORKTREES}/${item.id}/`)
+    const branch = itemBranch(item, input.ledgerBranches?.[item.id], template)
+    if (branch !== mainBranch && branches.has(branch)) add(`branch:${branch}`)
   }
   return out
 }
