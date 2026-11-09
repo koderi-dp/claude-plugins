@@ -33,8 +33,33 @@ export function taskCounter(ledger: Ledger | null): string | undefined {
   return `task ${n ?? 0}/${total}`
 }
 
+/**
+ * The title as shown: a migrated title `grid-track-sizes — Grid row and column sizes`
+ * (a slug of lowercase words joined by hyphens, then an em dash or a hyphen between spaces)
+ * loses its slug. The file and `status <id>` keep the whole title.
+ */
+export function displayTitle(title: string): string {
+  const m = /^[a-z0-9]+(?:-[a-z0-9]+)*\s+(?:—|-)\s+(\S.*)$/.exec(title)
+  return m ? m[1]! : title
+}
+
+/** The PR as `#35` with its address when the record is a URL: from `https://…/pull/35`, `#35` or `35`; nothing otherwise. */
+export function prLabel(pr: string | null | undefined): { label: string; href?: string } | undefined {
+  if (!pr) return undefined
+  const m = /(?:^#?|\/pull\/|\/pulls\/|\/merge_requests\/)(\d+)\/?$/.exec(pr.trim())
+  if (!m) return { label: pr }
+  return /^https?:\/\//.test(pr.trim()) ? { label: `#${m[1]}`, href: pr.trim() } : { label: `#${m[1]}` }
+}
+
+/** The idle line when nothing runs: `idle · 28 inbox · next: p1 Grid row and column sizes`, next being the first ready item, else the first inbox item. */
+export function idleLine(items: Item[]): string {
+  const inbox = items.filter(i => i.status === 'inbox')
+  const next = items.find(i => i.status === 'ready') ?? inbox[0]
+  return line(['idle', `${inbox.length} inbox`, next ? `next: ${next.id} ${displayTitle(next.title)}` : undefined])
+}
+
 function itemRow(item: Item, extra?: string): string {
-  return `  ${line([item.id, item.title, item.size, extra])}`
+  return `  ${line([item.id, displayTitle(item.title), item.size, extra])}`
 }
 
 /** The status block: head line, the active item, agents, signals, then the queues. */

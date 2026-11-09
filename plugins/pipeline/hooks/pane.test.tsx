@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { BLOCKED, DONE, ROWS_SHOWN, RUNNING } from './pane'
+import { BLOCKED, DONE, QUEUE_SHOWN, ROWS_SHOWN, RUNNING } from './pane'
 
 const MAIN = '/p/main'
 const DIR = `${MAIN}/docs/pipeline`
@@ -288,5 +288,96 @@ test('the band above the prompt: the item line and the bar while an item builds,
   expect(svgs).toHaveLength(1)
   expect(svgs[0]!.props['alt']).toBe('p2: p2 · Export · task 2/3 · Implement task 2 · Sonnet 5.5 · 14 min')
   expect(String(svgs[0]!.props['source'])).toContain('33%')
+  await ui.unmount()
+})
+
+/** A migrated project idle: 6 ready with slugged titles, 7 inbox without specs, 10 parked, 7 merged this week with PR URLs, nothing running. */
+const MIGRATED = backlogOf([
+  ...Array.from({ length: 6 }, (_, i) => item(`p${i + 1}`, i === 1 ? 'Plain title' : `ready-item-${i + 1} — Ready item ${i + 1}`, 'ready')),
+  ...Array.from({ length: 7 }, (_, i) => item(`q${i + 1}`, `inbox-item-${i + 1} - Inbox item ${i + 1}`, 'inbox')),
+  ...Array.from({ length: 10 }, (_, i) => item(`k${i + 1}`, `Parked ${i + 1}`, 'parked')),
+  ...Array.from({ length: 7 }, (_, i) => item(`m${i + 1}`, `merged-item-${i + 1} — Merged item ${i + 1}`, 'merged', { pr: i === 0 ? '#9' : `https://x/pull/${30 + i}` })),
+])
+
+test('desktop idle: the idle line, titles without their slug, five rows a section with one dim line for the rest, the PR number as a link, one reason, parked as a count', async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: MIGRATED })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  const texts = async () => (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  // The idle line in place of "No subagents yet.", the cost tiles still in the header.
+  expect(await ui.find({ type: 'Text', text: 'No subagents yet.' })).toBeUndefined()
+  const idle = await ui.find({ type: 'Text', text: /^idle/ })
+  expect(idle?.text).toBe('idle · 7 inbox · next: p1 Ready item 1')
+  expect(idle?.props['dimColor']).toBe(true)
+  expect((await ui.findAll({ type: 'Svg' })).some(s => String(s.props['alt']).includes('≈$'))).toBe(true)
+  // Titles: the slug gone, a title without a dash whole.
+  expect((await ui.find({ type: 'Text', text: /^p1 · / }))?.text).toBe('p1 · Ready item 1 · M')
+  expect((await ui.find({ type: 'Text', text: /^p2 · / }))?.text).toBe('p2 · Plain title · M')
+  expect((await texts()).some(t => t.includes('ready-item-'))).toBe(false)
+  // Five rows a section, then the dim line.
+  expect(await ui.find({ type: 'Text', text: /^p5 · / })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^p6 · / })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^q5 · / })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^q6 · / })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^m5 · / })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^m6 · / })).toBeUndefined()
+  const more = (await ui.findAll({ type: 'Text', text: /^and \d+ more · \/pipeline status$/ })).map(t => t.text)
+  expect(more).toEqual(['and 1 more · /pipeline status', 'and 2 more · /pipeline status', 'and 2 more · /pipeline status'])
+  expect((await ui.find({ type: 'Text', text: /^and 1 more/ }))?.props['dimColor']).toBe(true)
+  // The readiness reason on the first inbox row only, dim.
+  const q1 = await ui.find({ type: 'Text', text: /^q1 · / })
+  expect(q1?.text).toBe('q1 · Inbox item 1 · M · no spec')
+  expect((await ui.findAll({ type: 'Text', text: /^ · no spec$/ }))).toHaveLength(1)
+  expect((await ui.find({ type: 'Text', text: /^q2 · / }))?.text).toBe('q2 · Inbox item 2 · M')
+  // Parked as a count, no ids.
+  expect(await ui.find({ type: 'Text', text: 'Parked: 10' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /k1/ })).toBeUndefined()
+  // The PR as its number: a link for a URL, text for a #NN record.
+  const link = await ui.find({ type: 'Link' })
+  expect(link?.props['href']).toBe('https://x/pull/31')
+  expect(link?.text).toContain('#31')
+  expect((await ui.find({ type: 'Text', text: /^m1 · / }))?.text).toBe('m1 · Merged item 1 · M · #9')
+  const m2 = await ui.find({ type: 'Text', text: /^m2 · / })
+  expect(m2?.text).toMatch(/^m2 · Merged item 2 · M · /)
+  expect(m2?.props['color']).toBe(DONE)
+  // Show more opens every section; Show fewer folds them again.
+  expect((await ui.find({ key: 'queue-more' }))?.props['label']).toBe('Show more · 5')
+  await ui.press({ key: 'queue-more' })
+  expect(await ui.find({ type: 'Text', text: /^p6 · / })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^q7 · / })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^m7 · / })).toBeDefined()
+  expect(await ui.findAll({ type: 'Link' })).toHaveLength(6)
+  expect(await ui.find({ type: 'Text', text: /^and \d+ more/ })).toBeUndefined()
+  expect(await ui.find({ key: 'queue-more' })).toBeUndefined()
+  await ui.press({ key: 'queue-fewer' })
+  expect(await ui.find({ type: 'Text', text: /^p6 · / })).toBeUndefined()
+  expect((await ui.find({ key: 'queue-more' }))?.props['label']).toBe(`Show more · ${6 - QUEUE_SHOWN + 7 - QUEUE_SHOWN + 7 - QUEUE_SHOWN}`)
+  await ui.unmount()
+})
+
+test('desktop idle: next is the first inbox item when nothing is ready, and a small queue has no fold', async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([item('p1', 'Login', 'merged', { pr: '#3' }), item('q1', 'grid-track-sizes — Grid row and column sizes', 'inbox'), item('q2', 'Billing', 'inbox')]) })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  expect((await ui.find({ type: 'Text', text: /^idle/ }))?.text).toBe('idle · 2 inbox · next: q1 Grid row and column sizes')
+  expect(await ui.find({ key: 'queue-more' })).toBeUndefined()
+  expect(await ui.find({ key: 'queue-fewer' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^and \d+ more/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('terminal: the text block keeps eight rows, every reason and the parked ids, with the slug dropped and the PR as its number', async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: MIGRATED })
+  await start($ as never)
+  const ui = await mount($ as never, 'terminal')
+  expect(await ui.find({ type: 'Text', text: /^idle/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^p1 · / }))?.text).toBe('p1 · Ready item 1 · M')
+  expect(await ui.find({ type: 'Text', text: /^p6 · / })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /^q2 · / }))?.text).toBe('q2 · Inbox item 2 · M · no spec')
+  expect(await ui.find({ type: 'Text', text: /^Parked: k1, k2/ })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /^m1 · / }))?.text).toBe('m1 · Merged item 1 · M · #9')
+  expect((await ui.find({ type: 'Link' }))?.props['href']).toBe('https://x/pull/31')
+  expect(await ui.find({ type: 'Text', text: /^and \d+ more/ })).toBeUndefined()
+  expect(await ui.find({ key: 'queue-more' })).toBeUndefined()
   await ui.unmount()
 })

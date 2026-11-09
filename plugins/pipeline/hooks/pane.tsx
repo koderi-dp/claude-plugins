@@ -1,6 +1,7 @@
 // The panel: the status block of spec §9 as a pane, drawn from the same data as the text.
 // The desktop gets the agents panel of savvy-flow (a dotted grid, an SVG header, one card
-// per run, plan rows) with the queue below; every other surface gets the text block.
+// per run, plan rows) with a short queue below (five rows a section, one reason, parked as a
+// count, the PR as a linked number); every other surface gets the text block, eight rows a section.
 // Nothing is only in the panel.
 import type { EngineInterface, RenderElement } from 'claude-code'
 
@@ -8,7 +9,7 @@ import type { AgentRun, Item, ItemStatus, Signal } from '../types'
 import { ACCENT, BLOCKED, DONE, LINE_H, PLAN_H, ROWS_DONE, ROWS_DONE_MORE, ROWS_PLANNED, ROW_H, agentSvg, compactSvg, gridSvg, gridTiles, headerHeight, headerSvg, modelName, plannedSvg, summaryOf, totals } from './draw'
 import type { PlanRow } from './draw'
 import type { StatusInput } from './status'
-import { taskCounter } from './status'
+import { displayTitle, idleLine, prLabel, taskCounter } from './status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
 type Element = RenderElement
@@ -18,8 +19,10 @@ type Comp = (p: Record<string, any>) => Element
 
 export { ACCENT as RUNNING, BLOCKED, DONE }
 
-/** Rows a queue section shows before the Show more button. */
+/** Rows a queue section shows in the text block before the Show more button. */
 export const ROWS_SHOWN = 8
+/** Rows of Ready, Inbox and Merged this week the desktop shows before the fold. */
+export const QUEUE_SHOWN = 5
 
 const ACTIVE: ItemStatus[] = ['planning', 'building', 'review']
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
@@ -42,7 +45,7 @@ export type PanelInput = StatusInput & {
 
 const minutes = (from: number, to: number) => Math.max(0, Math.round((to - from) / 60000))
 const line = (parts: unknown[]) => parts.filter(p => p !== undefined && p !== null && p !== '').join(' · ')
-const itemText = (item: Item, extra?: string) => line([item.id, item.title, item.size, extra])
+const itemText = (item: Item, extra?: string) => line([item.id, displayTitle(item.title), item.size, extra])
 const signalText = (s: Signal) => `${s.kind}: ${line([s.agent, s.detail])}`
 
 /** The active item's line for the header and the band: `p12 · Export · task 3/6`. */
@@ -50,7 +53,7 @@ export function activeTitle(d: Pick<StatusInput, 'backlog' | 'ledger'>): string 
   const active = d.backlog?.items.find(i => ACTIVE.includes(i.status))
   if (!active) return ''
   const own = d.ledger && d.ledger.item === active.id ? d.ledger : null
-  return line([active.id, active.title, taskCounter(own)])
+  return line([active.id, displayTitle(active.title), taskCounter(own)])
 }
 
 /** The ledger's tasks that have not been accepted: what is still to run. */
@@ -64,8 +67,8 @@ export function renderPanel(ui: Ui, d: PanelInput): Element {
 
 /** The text block: the head line, the active item, agents, signals, then the queues, each folded past eight rows. */
 export function renderText(ui: Ui, d: PanelInput): Element {
-  const { Box, Text, Button } = ui as unknown as { Box: Comp; Text: Comp; Button: Comp }
-  const { config, backlog, readiness, ledger, agents, signals, now, fileError } = d
+  const { Box, Text, Button, Link } = ui as unknown as { Box: Comp; Text: Comp; Button: Comp; Link?: Comp }
+  const { config, backlog, ledger, agents, signals, now, fileError } = d
   const rows: Element[] = []
   const { section, hidden } = sections(Text, rows, d.isMoreShown)
 
@@ -91,7 +94,7 @@ export function renderText(ui: Ui, d: PanelInput): Element {
     rows.push(<Text dimColor>Signals</Text>)
     for (const s of open) rows.push(<Text color={BLOCKED} bold>{signalText(s)}</Text>)
   }
-  if (backlog) rows.push(...queueRows(Text, d, section))
+  if (backlog) rows.push(...queueRows({ Text, Link }, d, section, TEXT_QUEUE).rows)
 
   if (hidden() > 0 || d.isMoreShown) {
     rows.push(<Button key="more" plain label={d.isMoreShown ? 'Show fewer' : `Show more (${hidden()} hidden)`} onPress={d.onMore} />)
@@ -113,11 +116,36 @@ function sections(Text: Comp, rows: Element[], isMoreShown: boolean) {
   return { section, hidden: () => hidden }
 }
 
-/** The queue sections: Ready, Blocked, Inbox, Parked, Merged this week. */
-function queueRows(Text: Comp, d: PanelInput, section: (title: string, list: Element[]) => void): Element[] {
+/** How a surface folds the queue: the desktop's tight view against the text block. */
+type QueueStyle = {
+  /** Rows of Ready, Inbox and Merged this week before the fold; Infinity for all. */
+  shown: number
+  /** The readiness reason on the first inbox row only. */
+  firstReasonOnly: boolean
+  /** `Parked: 10` instead of the ids. */
+  parkedCount: boolean
+  /** The text past the fold, from the rows hidden; nothing adds no line. */
+  more: ((hidden: number) => string) | null
+}
+
+const TEXT_QUEUE: QueueStyle = { shown: Infinity, firstReasonOnly: false, parkedCount: false, more: null }
+/** The desktop's queue: five rows a section, one dim line for the rest, one reason, parked as a count. */
+export const DESKTOP_QUEUE: QueueStyle = { shown: QUEUE_SHOWN, firstReasonOnly: true, parkedCount: true, more: n => `and ${n} more · /pipeline status` }
+
+/** The queue sections: Ready, Blocked, Inbox, Parked, Merged this week. Returns the rows and how many the fold hid. */
+function queueRows(ui: { Text: Comp; Link?: Comp }, d: PanelInput, section: (title: string, list: Element[]) => void, style: QueueStyle): { rows: Element[]; hidden: number } {
+  const { Text, Link } = ui
   const rows: Element[] = []
   const items = d.backlog?.items ?? []
-  section(
+  let hidden = 0
+  const fold = (title: string, list: Element[]) => {
+    const cut = list.slice(0, style.shown)
+    const rest = list.length - cut.length
+    hidden += rest
+    if (rest > 0 && style.more) cut.push(<Text dimColor>{style.more(rest)}</Text>)
+    section(title, cut)
+  }
+  fold(
     'Ready',
     items.filter(i => i.status === 'ready').map(i => <Text>{itemText(i, (i.needs ?? []).length ? `needs ${i.needs!.join(' ')}` : undefined)}</Text>),
   )
@@ -125,27 +153,46 @@ function queueRows(Text: Comp, d: PanelInput, section: (title: string, list: Ele
     'Blocked',
     items.filter(i => i.status === 'blocked').map(i => <Text color={BLOCKED}>{itemText(i, i.note || 'no reason recorded')}</Text>),
   )
-  section(
+  fold(
     'Inbox',
     items
       .filter(i => i.status === 'inbox')
-      .map(i => {
+      .map((i, n) => {
         const r = d.readiness[i.id]
+        const withReason = r && !r.ready && (!style.firstReasonOnly || n === 0)
         return (
           <Text>
             {itemText(i)}
-            {r && !r.ready ? <Text dimColor>{` · ${r.reason}`}</Text> : null}
+            {withReason ? <Text dimColor>{` · ${r.reason}`}</Text> : null}
           </Text>
         )
       }),
   )
   const parked = items.filter(i => i.status === 'parked')
-  if (parked.length) rows.push(<Text dimColor>{`Parked: ${parked.map(i => i.id).join(', ')}`}</Text>)
-  section(
+  if (parked.length) rows.push(<Text dimColor>{style.parkedCount ? `Parked: ${parked.length}` : `Parked: ${parked.map(i => i.id).join(', ')}`}</Text>)
+  fold(
     'Merged this week',
-    items.filter(i => i.status === 'merged' && i.updatedAt && d.now - Date.parse(i.updatedAt) <= WEEK_MS).map(i => <Text color={DONE}>{itemText(i, i.pr ?? undefined)}</Text>),
+    items
+      .filter(i => i.status === 'merged' && i.updatedAt && d.now - Date.parse(i.updatedAt) <= WEEK_MS)
+      .map(i => {
+        const pr = prLabel(i.pr)
+        return (
+          <Text color={DONE}>
+            {itemText(i)}
+            {pr ? ' · ' : null}
+            {pr ? pr.href && Link ? <Link href={pr.href}>{pr.label}</Link> : pr.label : null}
+          </Text>
+        )
+      }),
   )
-  return rows
+  return { rows, hidden }
+}
+
+/** Whether the desktop's queue has more rows than its fold shows in any folded section. */
+function queueFolds(d: PanelInput): boolean {
+  const items = d.backlog?.items ?? []
+  const count = (f: (i: Item) => boolean) => items.filter(f).length
+  return Math.max(count(i => i.status === 'ready'), count(i => i.status === 'inbox'), count(i => i.status === 'merged' && !!i.updatedAt && d.now - Date.parse(i.updatedAt) <= WEEK_MS)) > QUEUE_SHOWN
 }
 
 /** Running agents coloured, then the last few finished: failed in the blocked colour, done in the done colour. */
@@ -164,7 +211,7 @@ function agentRows(Text: Comp, agents: AgentRun[], now: number): Element[] {
 
 /** The desktop: the grid, the header, the toggle, signals, Running, Finished, Planned as drawings, then the queue as text. */
 function renderDesktop(ui: Ui, d: PanelInput): Element {
-  const { Box, Text, Button, Svg } = ui as unknown as { Box: Comp; Text: Comp; Button: Comp; Svg: Comp }
+  const { Box, Text, Button, Svg, Link } = ui as unknown as { Box: Comp; Text: Comp; Button: Comp; Svg: Comp; Link?: Comp }
   const at = Math.max(d.now, ...d.agents.map(a => a.startedAt), 0)
   const running = d.agents.filter(a => a.status === 'running').reverse()
   const finished = d.agents.filter(a => a.status !== 'running').reverse()
@@ -192,16 +239,22 @@ function renderDesktop(ui: Ui, d: PanelInput): Element {
   const canFewer = !d.isDoneCollapsed && d.isMoreShown && finished.length > ROWS_DONE
   const open = d.signals.filter(s => !s.delivered)
   const isEmpty = d.agents.length === 0 && planned.length === 0
+  // Idle: nothing runs and no item is active; with a backlog, one line says what is next.
+  const isIdle = running.length === 0 && !title && !!d.backlog
 
   const queue: Element[] = []
   const { section } = sections(Text, queue, true)
   if (d.fileError) queue.push(<Text color={BLOCKED}>{`pipeline: ${d.fileError}`}</Text>)
   if (!d.config && !d.fileError) queue.push(<Text dimColor>pipeline: no config (run /pipeline init)</Text>)
-  if (d.backlog) queue.push(...queueRows(Text, { ...d, isMoreShown: true }, section))
-  else if (d.config && !d.fileError) queue.push(<Text dimColor>pipeline: no backlog (run /pipeline init)</Text>)
+  if (d.backlog) {
+    const q = queueRows({ Text, Link }, d, section, d.isMoreShown ? { ...DESKTOP_QUEUE, shown: Infinity } : DESKTOP_QUEUE)
+    queue.push(...q.rows)
+    if (q.hidden > 0) queue.push(<Button key="queue-more" label={`Show more · ${q.hidden}`} plain onPress={d.onMore} />)
+    else if (d.isMoreShown && queueFolds(d)) queue.push(<Button key="queue-fewer" label="Show fewer" plain onPress={d.onMore} />)
+  } else if (d.config && !d.fileError) queue.push(<Text dimColor>pipeline: no backlog (run /pipeline init)</Text>)
 
   const lines =
-    1 + (isEmpty ? 1 : 0) + open.length + (running.length > 0 ? 1 : 0) + (finished.length > 0 ? 1 : 0) + (planned.length > 0 ? 1 : 0) + (canMore || canFewer ? 1 : 0) + (doneHidden > 0 && !canMore ? 1 : 0) + (planHidden > 0 ? 1 : 0) + queue.length
+    1 + (isEmpty || isIdle ? 1 : 0) + open.length + (running.length > 0 ? 1 : 0) + (finished.length > 0 ? 1 : 0) + (planned.length > 0 ? 1 : 0) + (canMore || canFewer ? 1 : 0) + (doneHidden > 0 && !canMore ? 1 : 0) + (planHidden > 0 ? 1 : 0) + queue.length
   const gridH = headerHeight(title) + lines * LINE_H + (running.length + doneRows.length) * ROW_H + planRows.length * PLAN_H
   const card = (a: AgentRun) => <Svg key={a.id} source={agentSvg(W, a, at, a.status === 'running' ? d.limitMs : 0)} alt={`${a.name}: ${modelName(a.model)}, ${a.status}`} width={W} height={ROW_H} />
   return (
@@ -217,7 +270,8 @@ function renderDesktop(ui: Ui, d: PanelInput): Element {
             {signalText(s)}
           </Text>
         ))}
-        {isEmpty && <Text dimColor>No subagents yet.</Text>}
+        {isIdle && <Text dimColor>{idleLine(d.backlog!.items)}</Text>}
+        {isEmpty && !isIdle && <Text dimColor>No subagents yet.</Text>}
         {running.length > 0 && <Text dimColor>{`Running · ${running.length}`}</Text>}
         {running.map(card)}
         {finished.length > 0 && <Button key="done" label={`${d.isDoneCollapsed ? '▸' : '▾'} Finished · ${finished.length}`} plain onPress={d.onDone} />}

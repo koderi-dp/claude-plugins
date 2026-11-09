@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Backlog, Item, Ledger } from '../types'
 
 import { DEFAULTS } from './config'
-import { statusText, taskCounter } from './status'
+import { displayTitle, idleLine, prLabel, statusText, taskCounter } from './status'
 import type { StatusInput } from './status'
 
 const NOW = Date.parse('2026-11-05T12:00:00Z')
@@ -96,4 +96,36 @@ test('taskCounter reads the resume block and the task list', () => {
   expect(taskCounter(null)).toBe(undefined)
   expect(taskCounter({ ...LEDGER, resume: undefined, tasks: [] })).toBe(undefined)
   expect(taskCounter(LEDGER)).toBe('task 3/6')
+})
+
+test('displayTitle drops a migrated slug and keeps every other title', () => {
+  expect(displayTitle('grid-track-sizes — Grid row and column sizes')).toBe('Grid row and column sizes')
+  expect(displayTitle('export-csv - CSV export')).toBe('CSV export')
+  expect(displayTitle('Grid row and column sizes')).toBe('Grid row and column sizes')
+  expect(displayTitle('Login — the second step')).toBe('Login — the second step')
+  expect(displayTitle('grid-track-sizes—Grid')).toBe('grid-track-sizes—Grid')
+  expect(displayTitle('a-b — ')).toBe('a-b — ')
+})
+
+test('prLabel reads the number from a URL, a #NN or a bare number', () => {
+  expect(prLabel('https://github.com/x/y/pull/35')).toEqual({ label: '#35', href: 'https://github.com/x/y/pull/35' })
+  expect(prLabel('#35')).toEqual({ label: '#35' })
+  expect(prLabel('35')).toEqual({ label: '#35' })
+  expect(prLabel('https://x/compare/a..b')).toEqual({ label: 'https://x/compare/a..b' })
+  expect(prLabel(null)).toBe(undefined)
+  expect(prLabel('')).toBe(undefined)
+})
+
+test('the text status shows migrated titles without their slug', () => {
+  const text = statusText(base({ backlog: backlog(item('p1', 'ready', { title: 'grid-track-sizes — Grid row and column sizes' }), item('p2', 'inbox', { title: 'Plain title' })) }))
+  expect(text).toContain('Ready\n  p1 · Grid row and column sizes\n')
+  expect(text).toContain('Inbox\n  p2 · Plain title')
+  expect(text).not.toContain('grid-track-sizes')
+})
+
+test('idleLine counts the inbox and names the first ready item, else the first inbox item', () => {
+  const inbox = [item('p3', 'inbox', { title: 'grid-track-sizes — Grid row and column sizes' }), item('p4', 'inbox')]
+  expect(idleLine([item('p1', 'merged'), ...inbox, item('p2', 'ready', { title: 'CSV export' })])).toBe('idle · 2 inbox · next: p2 CSV export')
+  expect(idleLine([item('p1', 'merged'), ...inbox])).toBe('idle · 2 inbox · next: p3 Grid row and column sizes')
+  expect(idleLine([item('p1', 'merged')])).toBe('idle · 0 inbox')
 })
