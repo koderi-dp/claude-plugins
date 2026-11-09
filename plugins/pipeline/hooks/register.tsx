@@ -4,6 +4,7 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 import type { AgentRun, Backlog, ChildSession, Config, Item, Ledger, Live, LiveEntry, Panel, QueueFilter, Sibling, Signal, View } from '../types'
 import { addItem, emptyBacklog, moveItem, readiness, removeItem, renderBacklogMd, updateItem } from './backlog'
 import type { Readiness } from './backlog'
+import { slimGet } from './answers'
 import { cleanList, planOf } from './clean'
 import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, serialize } from './files'
@@ -42,7 +43,7 @@ const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', '
 
 const TOOL_DESCRIPTION =
   'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
-  '`get` → JSON { config, backlog, readiness, active, resume, signals, children, siblings }: the active item, its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (id, item, status, lastLine, no log) and the other sessions on the repository; ' +
+  '`get` { id?, titles?, full? } → compact JSON { active: { id, title, status, note, spec, plan, branch, worktree } | null, resume, signals, children, siblings, counts, next, config }: the active item (planning, building or review), its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (no log), the other sessions on the repository in short, the count per status (planning counts as building), the first three ready (else inbox) items with the reason, and the config keys a run reads (runner, merge, mergeMethod, checks, limits, riskyPaths, protectedPaths, models, taskReview); with `id` also `item`, that item\'s full record and readiness; with `titles` also `titles`, every item as `<id> <status> <title>`; `full: true` answers the whole { config, backlog, readiness, active, resume, signals, children, siblings } instead, large on a long backlog, never needed during a run; ' +
   '`status` { id? } → the status block, or one item\'s ledger as text; ' +
   '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers `added <id>` and the status; ' +
   '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title); ' +
@@ -63,7 +64,7 @@ const TOOL_SCHEMA = {
   type: 'object',
   properties: {
     action: { type: 'string', enum: ['get', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
-    id: { type: 'string', description: 'The item id, as p12.' },
+    id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
       description: 'For add: the new item; it starts as inbox. For ledger, start, stop and log: the item id, as p12.',
@@ -78,6 +79,8 @@ const TOOL_SCHEMA = {
     },
     set: { type: 'object', description: 'For update: the fields to merge into the item. For ledger: the fields to merge into the ledger.' },
     to: { description: 'For move: "top" or { after: "<id>" }.' },
+    full: { type: 'boolean', description: 'For get: the whole config, backlog and readiness instead of the slim answer.' },
+    titles: { type: 'boolean', description: 'For get: add every item as id, status and title (the duplicate check).' },
     refresh: { type: 'boolean', description: 'For migrate and migrate-apply: go on although docs/pipeline/ exists; the apply then refreshes titles, sources and links and changes no status.' },
     config: { type: 'object', description: 'For migrate-apply: the corrected config, as migrate drafted it.' },
     items: { type: 'array', description: 'For migrate-apply: the corrected items in queue order (title, status, size, needs, source, spec, plan, pr, note; a building item with branch and resume), as migrate drafted them; needs may name the queue labels.', items: { type: 'object' } },
@@ -157,7 +160,7 @@ async function autoOpen($: EngineInterface, reason: string): Promise<void> {
 const call = (input: Record<string, unknown>) => `${TOOL} ${JSON.stringify(input)}`
 
 const INTAKE_PROMPT = (text: string) =>
-  `Use the pipeline-intake skill for this request: "${text}". First tool call: ${call({ action: 'get' })} (the duplicate check). Then add the item and write its spec as the skill says, and answer in one line. Never start the build.`
+  `Use the pipeline-intake skill for this request: "${text}". First tool call: ${call({ action: 'get', titles: true })} (the duplicate check: every item as id, status and title). Then add the item and write its spec as the skill says, and answer in one line. Never start the build.`
 
 const RUN_PROMPT = (target: string) =>
   `Use the pipeline-run skill. First tool call: ${call({ action: 'get' })}. Then ${target === 'all' ? 'run ready items until none is left' : target ? `run item ${target}` : 'run the first ready item'} as the skill says, from pick to merge, one line per turn.`
@@ -326,6 +329,8 @@ type ToolInput = {
   set?: Partial<Item> | LedgerSet
   to?: 'top' | { after: string }
   refresh?: boolean
+  full?: boolean
+  titles?: boolean
   config?: unknown
   items?: unknown
   rules?: unknown
@@ -426,6 +431,12 @@ async function writeBacklog($: EngineInterface, found: string, c: Config | null,
   return statusNow($, found, c, settled, null)
 }
 
+/** Marks every open signal delivered: an answer carried them. */
+async function markDelivered($: EngineInterface): Promise<void> {
+  await update($, signals, list => list.map(s => (s.delivered ? s : { ...s, delivered: true })))
+  await heartbeat($, true)
+}
+
 async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
   const found = await resolveRoot($)
   const { config: c, backlog: loaded, error } = await loadAll($, found)
@@ -467,14 +478,23 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     const ledger = active ? await loadLedger($, found, active.id) : null
     // A child's record without its log (up to 200 KB each): `log { item }` answers the text.
     const kids = (await read($, children)).map(({ log: _log, ...rest }) => rest)
-    const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings) }
-    if (error) out['error'] = error
-    const answer = JSON.stringify(out, null, 2)
-    // Each signal is delivered once: what this answer carries is marked.
-    if (open.length) {
-      await update($, signals, list => list.map(s => (s.delivered ? s : { ...s, delivered: true })))
-      await heartbeat($, true)
+    let answer: string
+    if (e.full) {
+      const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings) }
+      if (error) out['error'] = error
+      answer = JSON.stringify(out, null, 2)
+    } else {
+      const out: Record<string, unknown> = slimGet({ config: c ? normalizeConfig(c).config : null, backlog: loaded, readiness: r, active, ledger, signals: open, children: kids, siblings: await read($, siblings) })
+      if (e.id !== undefined) {
+        const one = loaded?.items.find(i => i.id === e.id) ?? null
+        out['item'] = one ? { ...one, ...(r[one.id] ? { readiness: r[one.id] } : {}) } : null
+      }
+      if (e.titles) out['titles'] = (loaded?.items ?? []).map(i => `${i.id} ${i.status} ${i.title}`)
+      if (error) out['error'] = error
+      answer = JSON.stringify(out)
     }
+    // Each signal is delivered once: what this answer carries is marked.
+    if (open.length) await markDelivered($)
     return answer
   }
   if (e.action === 'clean') {

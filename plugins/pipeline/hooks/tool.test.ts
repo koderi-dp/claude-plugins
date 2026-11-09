@@ -214,10 +214,10 @@ test('move, park, unpark and remove', async ($, on) => {
   expect(files.get(BACKLOG_MD)).not.toContain('| p2 |')
 })
 
-test('get answers the config, the backlog, the readiness and an empty signal list', async ($, on) => {
+test('get { full } answers the config, the backlog, the readiness and an empty signal list', async ($, on) => {
   world(on, { [CONFIG]: VALID_CONFIG })
   await call($, { action: 'add', item: ITEM })
-  const got = JSON.parse(text(await call($, { action: 'get' })))
+  const got = JSON.parse(text(await call($, { action: 'get', full: true })))
   expect(got.config).toMatchObject({ mainBranch: 'main', merge: 'pr' })
   expect(got.backlog.items[0]).toMatchObject({ id: 'p1', status: 'inbox' })
   expect(got.readiness).toEqual({ p1: { ready: false, reason: 'no spec' } })
@@ -382,10 +382,83 @@ test('I4: get names a planning item as active, with resume null until its ledger
   const backlog = JSON.stringify({ version: 1, items: [{ id: 'p12', title: 'CSV export', status: 'planning', ledger: 'docs/pipeline/ledgers/p12.json' }] })
   const { files } = world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlog, [`${DIR}/ledgers/p12.json`]: JSON.stringify({ item: 'p12', branch: 'feat/p12', worktree: '.claude/worktrees/p12', tasks: [], rulings: [], blockers: [], tokens: 0 }) })
   await start($)
-  const got = JSON.parse(text(await call($, { action: 'get' }))) as { active: unknown; resume: unknown }
-  expect(got.active).toBe('p12')
+  const got = JSON.parse(text(await call($, { action: 'get' }))) as { active: { id: string; branch: unknown; worktree: unknown }; resume: unknown }
+  expect(got.active).toMatchObject({ id: 'p12', status: 'planning', branch: 'feat/p12', worktree: '.claude/worktrees/p12' })
   expect(got.resume).toBe(null)
   files.set(`${DIR}/ledgers/p12.json`, JSON.stringify({ item: 'p12', tasks: [], rulings: [], blockers: [], tokens: 0, resume: { task: 1, state: 'planned', at: '2026-11-05T09:00:00Z' } }))
   const again = JSON.parse(text(await call($, { action: 'get' }))) as { active: unknown; resume: unknown }
   expect(again.resume).toMatchObject({ task: 1, state: 'planned' })
+})
+
+// ---------- 0.2.2: a lean get ----------
+
+/** A backlog the size of catalo's at its first run: 71 items with real-length titles, sources and notes. */
+function bigBacklog(): { backlog: string; files: Record<string, string> } {
+  const statuses = ['merged', 'merged', 'merged', 'building', ...Array(14).fill('ready'), ...Array(45).fill('inbox'), 'blocked', 'blocked', ...Array(6).fill('parked')] as string[]
+  const files: Record<string, string> = {}
+  const list = statuses.map((status, n) => {
+    const id = `p${n + 1}`
+    const spec = status === 'inbox' && n % 3 === 0 ? null : `docs/pipeline/specs/${id}.md`
+    if (spec) files[`${MAIN}/${spec}`] = `## What\n\n${'x '.repeat(200)}\n\n## Open\n\n_Nothing._\n`
+    return {
+      id,
+      title: `${id}-slug — A catalog feature with a title as long as catalo's (${n})`,
+      status,
+      size: (['S', 'M', 'L'] as const)[n % 3],
+      needs: n > 20 && n % 5 === 0 ? [`p${n - 1}`] : [],
+      source: `user, 2026-11-0${(n % 9) + 1}: "${'the person asked for this in a long sentence that the queue quoted verbatim '.repeat(2)}"`,
+      note: `${'A scope note as catalo writes them: what changes, which files, what stays the same, and why it matters. '.repeat(5)}`,
+      spec,
+      plan: status === 'building' || status === 'merged' ? `docs/pipeline/plans/${id}.md` : null,
+      branch: status === 'building' || status === 'merged' ? `feat/${id}` : null,
+      pr: status === 'merged' ? `https://github.com/koderi-dp/catalo/pull/${n}` : null,
+      ledger: status === 'building' ? `docs/pipeline/ledgers/${id}.json` : null,
+      updatedAt: '2026-11-05T09:00:00.000Z',
+    }
+  })
+  files[`${DIR}/ledgers/p4.json`] = JSON.stringify({ item: 'p4', branch: 'feat/p4', worktree: '.claude/worktrees/p4', tasks: [{ n: 1, title: 'One', status: 'accepted', dispatches: [] }, { n: 2, title: 'Two', status: 'running', dispatches: [] }], rulings: [], blockers: [], tokens: 674000, resume: { task: 2, state: 'implementer dispatched', lastVerified: 'abc1234', at: '2026-11-05T09:00:00.000Z' } })
+  return { backlog: JSON.stringify({ version: 1, items: list }, null, 2) + '\n', files }
+}
+
+test('0.2.2: get answers a slim compact JSON under 8,000 characters for a 71-item backlog, with every field the run skill reads', async ($, on) => {
+  const big = bigBacklog()
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: big.backlog, ...big.files })
+  const answer = text(await call($, { action: 'get' }))
+  const full = text(await call($, { action: 'get', full: true }))
+  expect(answer.length).toBeLessThan(8000)
+  expect(answer).not.toContain('\n')
+  const got = JSON.parse(answer)
+  expect(Object.keys(got).sort()).toEqual(['active', 'children', 'config', 'counts', 'next', 'resume', 'siblings', 'signals'])
+  expect(got.active).toEqual({ id: 'p4', title: expect.stringContaining('p4-slug'), status: 'building', note: expect.any(String), spec: 'docs/pipeline/specs/p4.md', plan: 'docs/pipeline/plans/p4.md', branch: 'feat/p4', worktree: '.claude/worktrees/p4' })
+  expect(got.resume).toMatchObject({ task: 2, state: 'implementer dispatched', lastVerified: 'abc1234' })
+  expect(got.signals).toEqual([])
+  expect(got.children).toEqual([])
+  expect(got.counts).toEqual({ inbox: 45, ready: 14, building: 1, review: 0, blocked: 2, parked: 6, merged: 3 })
+  expect(got.next).toEqual([
+    { id: 'p5', title: expect.stringContaining('p5-slug'), size: 'M', reason: 'ready' },
+    { id: 'p6', title: expect.stringContaining('p6-slug'), size: 'L', reason: 'ready' },
+    { id: 'p7', title: expect.stringContaining('p7-slug'), size: 'S', reason: 'ready' },
+  ])
+  expect(Object.keys(got.config).sort()).toEqual(['checks', 'limits', 'merge', 'mergeMethod', 'models', 'protectedPaths', 'riskyPaths', 'runner'])
+  expect(got.config).toMatchObject({ runner: 'subagent', merge: 'pr', mergeMethod: 'merge', limits: { fixRounds: expect.any(Number), silentMinutes: expect.any(Number) }, models: { implementer: expect.any(Object), final: expect.any(Object) } })
+  // The full answer is today's shape, pretty-printed.
+  const all = JSON.parse(full)
+  expect(Object.keys(all).sort()).toEqual(['active', 'backlog', 'children', 'config', 'readiness', 'resume', 'siblings', 'signals'])
+  expect(all.backlog.items).toHaveLength(71)
+  expect(all.active).toBe('p4')
+})
+
+test('0.2.2: get with nothing ready lists the first inbox items with their reasons; get { id } adds that item; get { titles } adds every title', async ($, on) => {
+  const seed = { version: 1, items: [{ id: 'p1', title: 'A', status: 'inbox', size: 'S', note: 'n' }, { id: 'p2', title: 'B', status: 'merged' }, { id: 'p3', title: 'C', status: 'inbox', needs: ['p1'], spec: 'docs/pipeline/specs/p3.md' }] }
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: JSON.stringify(seed), [`${DIR}/specs/p3.md`]: '## What\n\nx\n' })
+  const got = JSON.parse(text(await call($, { action: 'get' })))
+  expect(got.active).toBe(null)
+  expect(got.resume).toBe(null)
+  expect(got.next).toEqual([{ id: 'p1', title: 'A', size: 'S', reason: 'no spec' }, { id: 'p3', title: 'C', reason: 'waits for p1' }])
+  expect(got.item).toBeUndefined()
+  const one = JSON.parse(text(await call($, { action: 'get', id: 'p3' })))
+  expect(one.item).toMatchObject({ id: 'p3', title: 'C', status: 'inbox', needs: ['p1'], spec: 'docs/pipeline/specs/p3.md', readiness: { ready: false, reason: 'waits for p1' } })
+  expect(JSON.parse(text(await call($, { action: 'get', id: 'p9' }))).item).toBe(null)
+  const titles = JSON.parse(text(await call($, { action: 'get', titles: true })))
+  expect(titles.titles).toEqual(['p1 inbox A', 'p2 merged B', 'p3 inbox C'])
 })

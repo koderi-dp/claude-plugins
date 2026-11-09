@@ -135,7 +135,7 @@ test('Review Focus 3: silent after the limit, dead after a restart with the live
 
   const first = await got($)
   expect(first.signals.map(s => s['kind'])).toEqual(['silent', 'dead'])
-  expect(first.active).toBe('p12')
+  expect(first.active).toMatchObject({ id: 'p12' })
   expect(first.resume).toMatchObject({ task: 1, state: 'implementer dispatched', lastVerified: 'abc' })
   const second = await got($)
   expect(second.signals).toEqual([])

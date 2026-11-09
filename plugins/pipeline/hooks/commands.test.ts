@@ -134,7 +134,7 @@ test('the prompts: each submits a turn that names its skill and its first tool c
   expect(submitted).toHaveLength(1)
   expect(last()).toContain('pipeline-intake')
   expect(last()).toContain('"csv export of catalogs"')
-  expect(last()).toContain(`${TOOL} {"action":"get"}`)
+  expect(last()).toContain(`${TOOL} {"action":"get","titles":true}`)
   await run($, 'add')
   expect(submitted).toHaveLength(1)
 
