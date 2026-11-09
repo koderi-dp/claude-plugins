@@ -206,3 +206,26 @@ test('retain: defaults keep plans and drop briefs and superpowers; a wrong type 
   expect(b.config.retain).toEqual({ plans: true, briefs: true, superpowers: false })
   expect(b.problems).toContain('retain.plans: expected a boolean, got string')
 })
+
+test('draftConfig flags a broad risky path: a top-level directory or a whole src tree, named in the source with the narrowing hint', () => {
+  const { config, sources } = draftConfig({
+    scripts: {},
+    makeTargets: [],
+    ci: '',
+    dirs: ['apps', 'packages', 'services', 'docs'],
+    prose: [
+      'All of apps/web/src and packages/ touch auth and payment code; the migrations live in apps/web/migrations.',
+      'The parser under services/pdf-renderer/src/ is risky too, and so is every lock in services/.',
+    ],
+  })
+  expect(config.riskyPaths).toEqual(['apps/web/src/**', 'packages/**', 'apps/web/migrations/**', 'services/pdf-renderer/src/**', 'services/**'])
+  expect(sources['riskyPaths']).toBe(
+    'prose naming risky code (5 directories); apps/web/src/**, packages/**, services/pdf-renderer/src/**, services/** are broad: narrow to the auth, migration, payment or parser folders',
+  )
+  // A narrow path carries no warning.
+  const narrow = draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: ['apps'], prose: ['The auth code under apps/web/src/server/auth is risky.'] })
+  expect(narrow.sources['riskyPaths']).toBe('prose naming risky code (1 directory)')
+  expect(draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: ['apps'], prose: ['Only apps/ holds auth code.'] }).sources['riskyPaths']).toBe(
+    'prose naming risky code (1 directory); apps/** is broad: narrow to the auth, migration, payment or parser folders',
+  )
+})

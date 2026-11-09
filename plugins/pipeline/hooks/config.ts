@@ -181,6 +181,14 @@ function dirsIn(sentence: string, dirs: string[]): string[] {
   return out
 }
 
+const BROAD = 'broad: narrow to the auth, migration, payment or parser folders'
+
+/** A risky path that would send most diffs to review: a whole top-level directory (`packages/**`) or a whole `src` tree (`apps/web/src/**`). */
+function isBroad(glob: string): boolean {
+  const segments = glob.replace(/\/\*\*$/, '').split('/')
+  return segments.length === 1 || segments.at(-1) === 'src'
+}
+
 /** The stop conditions a sentence lists after "ask the user only for", "stop and ask" or "ask only when", or the action of "do not ... without asking". */
 function stopsIn(sentence: string): string[] {
   const asking = /\bdo not\s+(.+?)\s+without asking\b/i.exec(sentence)
@@ -240,7 +248,9 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
   const lines = sentences(found.prose)
   const risky = [...new Set(lines.filter(s => RISKY.test(s)).flatMap(s => dirsIn(s, found.dirs)))]
   config.riskyPaths = risky
-  sources['riskyPaths'] = risky.length ? `prose naming risky code (${risky.length} director${risky.length === 1 ? 'y' : 'ies'})` : NONE
+  const broad = risky.filter(isBroad)
+  const warning = broad.length ? `; ${broad.join(', ')} ${broad.length === 1 ? 'is' : 'are'} ${BROAD}` : ''
+  sources['riskyPaths'] = risky.length ? `prose naming risky code (${risky.length} director${risky.length === 1 ? 'y' : 'ies'})${warning}` : NONE
 
   const stops = [...new Set(lines.flatMap(stopsIn))]
   if (stops.length) {
