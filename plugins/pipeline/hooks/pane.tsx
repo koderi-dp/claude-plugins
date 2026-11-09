@@ -546,7 +546,9 @@ function renderQueue(u: Desk, d: PanelInput, W: number): Element {
   return (
     <Box flexDirection="column">
       {heading(u, 'Work queue', 'Priority order')}
-      <Input key="pipeline-search" placeholder="Find an item by name or id…" value={search} submitLabel="search" onInput={(v: string) => d.onSearch(v)} onSubmit={(v: string) => d.onSearch(v)} />
+      <Box key="pipeline-search-box" width={d.bodyColumns}>
+        <Input key="pipeline-search" placeholder="Find an item by name or id…" value={search} submitLabel="find" onInput={(v: string) => d.onSearch(v)} onSubmit={(v: string) => d.onSearch(v)} />
+      </Box>
       <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
         {FILTERS.map(f => (
           <Button key={`filter-${f.filter}`} plain dimColor={filter !== f.filter} label={`${f.label} · ${counts[f.filter]}`} onPress={() => d.onFilter(f.filter)} />

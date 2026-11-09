@@ -399,6 +399,9 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   const input = await ui.find({ type: 'Input' })
   expect(input?.key).toBe('pipeline-search')
   expect(input?.props['placeholder']).toBe('Find an item by name or id…')
+  // The field spans the row (the mockup's .search), with a short submit label beside it.
+  expect(input?.props['submitLabel']).toBe('find')
+  expect((await ui.find({ key: 'pipeline-search-box' }))?.props['width']).toBe(60)
   // The filters with their counts; Inbox is selected.
   expect((await ui.find({ key: 'filter-inbox' }))?.props['label']).toBe('Inbox · 1')
   expect((await ui.find({ key: 'filter-ready' }))?.props['label']).toBe('Ready · 2')
