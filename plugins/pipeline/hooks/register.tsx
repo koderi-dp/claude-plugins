@@ -1704,6 +1704,7 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
     ledgers,
     activeLine: await specLine($, found, activeItem(b)),
     limitMs: limitsOf(c).taskMinutes * 60_000,
+    fixRounds: limitsOf(c).fixRounds,
     onView: (view: View) => set({ view }),
     onFilter: (filter: QueueFilter) => set({ filter, expanded: null }),
     onSearch: (search: string) => set({ search, expanded: null }),

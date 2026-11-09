@@ -246,6 +246,49 @@ test('tagOf: the word and the colour kind of a row', () => {
   expect(tagOf(item('p1', 'merged'))).toEqual({ text: 'Merged', kind: 'done' })
 })
 
+import { attemptText, attemptsOf, currentLine, leadLine } from './status'
+
+const FIX_TASK: Ledger['tasks'][number] = {
+  n: 2,
+  title: 'The writer',
+  status: 'fix',
+  dispatches: [
+    { role: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', tokens: 10, minutes: 3.3333, result: 'done' },
+    { role: 'reviewer', model: 'claude-opus-5-5', effort: 'high', tokens: 20, minutes: 0.97, result: 'FIX REQUIRED: the test for the empty case is missing' },
+    { role: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', tokens: 5, minutes: 0.62, result: 'done' },
+  ],
+}
+
+test('attemptsOf: the task\'s dispatches as Build, Review with its verdict and Fix n of max, each with its model and minutes as a clock', () => {
+  const trail = attemptsOf(FIX_TASK, 2)
+  expect(trail.map(attemptText)).toEqual(['Build · Sonnet 5.5 · 3:20 ✓', 'Review · Opus 5.5 · 0:58 · FIX REQUIRED', 'Fix 1 of 2 · Sonnet 5.5 · 0:37 ✓'])
+  const more = attemptsOf({ dispatches: [...FIX_TASK.dispatches, { role: 'reviewer', model: 'claude-opus-5-5', effort: 'high', tokens: 1, minutes: 1, result: 'APPROVED with notes' }, { role: 'final', model: 'claude-opus-5-5', effort: 'xhigh', tokens: 1, minutes: 2, result: 'approved' }, { role: 'escalate', model: 'claude-opus-5-5', effort: 'high', tokens: 1, minutes: 0.5, result: '' }] }, 3)
+  expect(more.map(attemptText).slice(3)).toEqual(['Review · Opus 5.5 · 1:00 · APPROVED', 'Final review · Opus 5.5 · 2:00 · APPROVED', 'Escalation · Opus 5.5 · 0:30 ✓'])
+  expect(attemptsOf(undefined, 3)).toEqual([])
+  expect(attemptsOf({ dispatches: [] }, 3)).toEqual([])
+  // review 0.2 C1: a task record without dispatches.
+  expect(attemptsOf({ n: 1, title: 'a', status: 'running' } as unknown as Ledger['tasks'][number], 3)).toEqual([])
+})
+
+test('currentLine: the fix round with the review\'s verdict, else the running agent\'s role, model and clock, else the last dispatch\'s model', () => {
+  const agent = (name: string, model: string) => ({ id: 'a', name, model, status: 'running' as const, startedAt: NOW - 108_000, lastStepAt: NOW, calls: 0, tokens: 0, activity: '', lastCommands: [], failures: 0 })
+  expect(currentLine(FIX_TASK, undefined, LEDGER, 2, NOW)).toBe('Fix round 1 of 2 · after review: FIX REQUIRED')
+  expect(currentLine(FIX_TASK, agent('Implement task 2', 'claude-sonnet-5-5'), LEDGER, 3, NOW)).toBe('Fix round 1 of 3 · after review: FIX REQUIRED')
+  expect(currentLine({ ...FIX_TASK, dispatches: FIX_TASK.dispatches.slice(0, 1) }, undefined, LEDGER, 3, NOW)).toBe('Fix round 1 of 3')
+  const building = { ...FIX_TASK, status: 'running' as const, dispatches: FIX_TASK.dispatches.slice(0, 1) }
+  expect(currentLine(building, agent('Implement task 2', 'claude-sonnet-5-5'), null, 3, NOW)).toBe('Implementer · Sonnet 5.5 · 1:48')
+  expect(currentLine(building, agent('Review task 2', 'claude-opus-5-5'), null, 3, NOW - 50_000)).toBe('Review · Opus 5.5 · 0:58')
+  expect(currentLine(building, agent('Final review of p12', 'claude-opus-5-5'), null, 3, NOW)).toBe('Final review · Opus 5.5 · 1:48')
+  expect(currentLine(building, undefined, null, 3, NOW)).toBe('Sonnet 5.5')
+  expect(currentLine({ ...building, dispatches: [] }, undefined, null, 3, NOW)).toBe('')
+})
+
+test('leadLine: what the lead does and how long since, from the resume block', () => {
+  expect(leadLine({ ...LEDGER, resume: { task: 2, state: 'fix round 1 dispatched', at: new Date(NOW - 130_000).toISOString() } }, NOW)).toBe('Lead · fix round 1 dispatched · 2:10')
+  expect(leadLine({ ...LEDGER, resume: { task: 2, state: 'reading the review of task 2', at: 'not a date' } }, NOW)).toBe('Lead · reading the review of task 2')
+  expect(leadLine(null, NOW)).toBe('Lead · between dispatches')
+})
+
 import { specWhat } from './status'
 
 test('specWhat reads the first paragraph under What, else the first paragraph, cut to 160 characters', () => {

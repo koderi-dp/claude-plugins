@@ -226,6 +226,66 @@ export function roleOf(agent: Pick<AgentRun, 'name'>, ledger: Ledger | null): { 
   return { role: agent.name }
 }
 
+export type Verdict = 'APPROVED' | 'FIX REQUIRED'
+export type Attempt = {
+  /** `Build`, `Review`, `Fix 1 of 3`, `Final review`, `Escalation`. */
+  label: string
+  model: string
+  /** The dispatch's minutes as a clock, `3:20`. */
+  time: string
+  verdict?: Verdict
+}
+
+const verdictOf = (result: string): Verdict | undefined => (/FIX REQUIRED/i.test(result) ? 'FIX REQUIRED' : /APPROVED/i.test(result) ? 'APPROVED' : undefined)
+
+/**
+ * A task's attempt trail from its dispatches, in order: the first implementer dispatch is the Build, each later
+ * one a fix round counted within the task against `fixRounds`; a review carries the verdict its result names.
+ */
+export function attemptsOf(task: Pick<TaskRecord, 'dispatches'> | undefined, fixRounds: number): Attempt[] {
+  let builds = 0
+  return (task?.dispatches ?? []).map(d => {
+    let label: string
+    if (d.role === 'implementer') {
+      builds += 1
+      label = builds === 1 ? 'Build' : `Fix ${builds - 1} of ${fixRounds}`
+    } else label = d.role === 'reviewer' ? 'Review' : d.role === 'final' ? 'Final review' : 'Escalation'
+    const verdict = verdictOf(d.result ?? '')
+    return { label, model: shortModel(d.model), time: fmtClock((d.minutes ?? 0) * 60_000), ...(verdict ? { verdict } : {}) }
+  })
+}
+
+/** An attempt as one line: `Build · Sonnet · 3:20 ✓`, `Review · Opus · 0:58 · FIX REQUIRED`. */
+export const attemptText = (a: Attempt): string => `${line([a.label, a.model, a.time])}${a.verdict ? ` · ${a.verdict}` : ' ✓'}`
+
+/**
+ * The current task's second line: in a fix round, `Fix round 1 of 3 · after review: FIX REQUIRED`; with an agent
+ * running, its role, model and clock (`Implementer · Sonnet · 1:48`, `Review · Opus · 0:58`); otherwise the last
+ * dispatch's model.
+ */
+export function currentLine(task: TaskRecord, agent: AgentRun | undefined, ledger: Ledger | null, fixRounds: number, now: number): string {
+  const attempts = attemptsOf(task, fixRounds)
+  if (task.status === 'fix') {
+    const fixes = attempts.filter(a => a.label.startsWith('Fix ')).length
+    const review = [...attempts].reverse().find(a => a.label === 'Review' || a.label === 'Final review')
+    return line([`Fix round ${Math.max(1, fixes)} of ${fixRounds}`, review?.verdict ? `after review: ${review.verdict}` : undefined])
+  }
+  if (agent) {
+    const role = roleOf(agent, ledger).role
+    const word = role === 'reviewer' ? 'Review' : role === 'final' ? 'Final review' : role === 'implementer' ? 'Implementer' : role.charAt(0).toUpperCase() + role.slice(1)
+    return line([word, shortModel(agent.model), fmtClock(now - agent.startedAt)])
+  }
+  const last = (task.dispatches ?? []).at(-1)
+  return last ? shortModel(last.model) : ''
+}
+
+/** What the lead does while no agent runs: `Lead · fix round 1 dispatched · 2:10`, the state from the resume block and the time since it. */
+export function leadLine(ledger: Ledger | null, now: number): string {
+  const state = ledger?.resume?.state || 'between dispatches'
+  const at = Date.parse(ledger?.resume?.at ?? '')
+  return line(['Lead', state, Number.isNaN(at) ? undefined : fmtClock(Math.max(0, now - at))])
+}
+
 export type TagKind = 'running' | 'done' | 'blocked' | 'muted' | 'ready'
 
 /** The status tag of a row: the word and its colour kind; an inbox item not ready shows its reason (`No spec`). */

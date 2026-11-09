@@ -365,7 +365,9 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   expect(a).toHaveLength(3)
   expect(await ui.find({ type: 'Text', text: /^Active agent/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Task 2 / 3' })).toBeDefined()
-  expect((await ui.find({ type: 'Text', text: /Review task 1/ }))?.props['color']).toBe(BLOCKED)
+  // The current task's trail comes from the ledger's dispatches; an agent of an earlier task (the failed review of task 1) is not listed here.
+  expect((await ui.find({ type: 'Text', text: /^Build · / }))?.text).toBe('Build · Sonnet 5.5 · 0:00 ✓')
+  expect(await ui.find({ type: 'Text', text: /Review task 1/ })).toBeUndefined()
   // The timeline from the ledger.
   const parser = await ui.find({ type: 'Text', text: /^✓ The parser/ })
   expect(parser?.props['color']).toBe(DONE)
@@ -373,7 +375,7 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   const writer = await ui.find({ type: 'Text', text: /^● The writer/ })
   expect(writer?.props['color']).toBe(RUNNING)
   expect(writer?.text).toContain('In progress')
-  expect(await ui.find({ type: 'Text', text: /Sonnet 5\.5 · 5:00 elapsed/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '   Implementer · Sonnet 5.5 · 5:00' })).toBeDefined()
   const command = await ui.find({ type: 'Text', text: /^○ The command/ })
   expect(command?.props['dimColor']).toBe(true)
   // Up next: the first ready item.
@@ -386,6 +388,46 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   await clock.advance(11 * MIN)
   expect((await ui.find({ type: 'Text', text: /^silent:/ }))?.props['color']).toBe(BLOCKED)
   expect(await ui.find({ type: 'Text', text: '1 agent working · 1 open signal' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('desktop running Overview in a fix round: a Lead line instead of an empty agent section, the current task\'s attempt trail from the ledger, and the timeline\'s fix round line', async ($, on) => {
+  const ledger = JSON.parse(LEDGER) as { tasks: Record<string, unknown>[]; resume: Record<string, unknown> }
+  ledger.tasks[1] = {
+    n: 2,
+    title: 'The writer',
+    status: 'fix',
+    dispatches: [
+      { role: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', tokens: 10, minutes: 3.3333, result: 'done' },
+      { role: 'reviewer', model: 'claude-opus-5-5', effort: 'high', tokens: 20, minutes: 0.97, result: 'FIX REQUIRED: the empty case has no test' },
+      { role: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', tokens: 5, minutes: 0.62, result: 'done' },
+    ],
+  }
+  ledger.resume = { task: 2, state: 'fix round 1 dispatched', at: new Date(NOW - 130_000).toISOString() }
+  world(on, { ...SEED, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  // No agent runs: the Lead line, with what it does and since when; no "Active agent · 0 running", no "No subagent running."
+  expect(await ui.find({ type: 'Text', text: /^Active agent/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'No subagent running.' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^Lead$|^Lead · / }))?.text).toBe('Lead')
+  const lead = await ui.find({ type: 'Text', text: /^Lead · / })
+  expect(lead?.text).toBe('Lead · fix round 1 dispatched · 2:10')
+  expect(lead?.props['color']).toBe(RUNNING)
+  expect(await ui.find({ type: 'Text', text: 'Task 2 / 3' })).toBeDefined()
+  // The attempt trail of task 2 from its dispatches, in order; the review that required fixes in amber.
+  const trail = (await ui.findAll({ type: 'Text', text: /^(Build|Review|Fix \d) / })).map(t => [t.text, t.props['color']])
+  expect(trail).toEqual([
+    ['Build · Sonnet 5.5 · 3:20 ✓', DONE],
+    ['Review · Opus 5.5 · 0:58 · FIX REQUIRED', BLOCKED],
+    ['Fix 1 of 3 · Sonnet 5.5 · 0:37 ✓', DONE],
+  ])
+  expect(await ui.find({ type: 'Text', text: /fix round 1 · / })).toBeUndefined()
+  // The timeline: the current task reads Fix round, with the round, the limit and the verdict on its second line.
+  const writer = await ui.find({ type: 'Text', text: /^● The writer/ })
+  expect(writer?.text).toBe('● The writer  Fix round')
+  expect(await ui.find({ type: 'Text', text: '   Fix round 1 of 3 · after review: FIX REQUIRED' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^   opus$/ })).toBeUndefined()
   await ui.unmount()
 })
 

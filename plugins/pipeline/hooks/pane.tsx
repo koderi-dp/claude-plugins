@@ -8,7 +8,7 @@ import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilt
 import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, MERGED_ROW_H, METRICS_H, ROW_H, SESSION_ROW_H, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
-import { currentTask, displayTitle, groupCounts, heroSentence, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, stepsOf, tagOf, taskCounter } from './status'
+import { attemptText, attemptsOf, currentLine, currentTask, displayTitle, groupCounts, heroSentence, leadLine, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, stepsOf, tagOf, taskCounter } from './status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
 type Element = RenderElement
@@ -54,6 +54,8 @@ export type PanelInput = StatusInput & {
   activeLine: string
   /** The task-minutes limit, for a running card's bar. */
   limitMs: number
+  /** The fix rounds allowed per task, for the attempt trail. */
+  fixRounds: number
   onView: (view: View) => void
   onFilter: (filter: QueueFilter) => void
   onSearch: (search: string) => void
@@ -411,14 +413,15 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
     const c: AgentCard = { role: cap(role), model: a.model, ...(effort ? { effort } : {}), status: a.status, activity: a.activity, progress: d.limitMs ? Math.min(1, (at - a.startedAt) / d.limitMs) : 0, calls: a.calls, tokens: a.tokens, elapsedMs: at - a.startedAt }
     return <Svg key={a.id} source={agentCardSvg(W, c)} alt={`${c.role}: ${modelName(a.model)}${effort ? ` · ${effort}` : ''}, running, ${a.activity}`} width={W} height={AGENT_CARD_H} />
   })
+  // The current task's attempts from the ledger: Build, Review with its verdict, Fix n of max; the agents atom only before the ledger has any.
+  const attempts = attemptsOf(current, d.fixRounds)
   const timeline = tasks.map(task => {
     const isCurrent = task.status === 'running' || task.status === 'fix' || (task.status === 'pending' && current?.n === task.n)
     const agent = isCurrent ? running[0] : undefined
-    const dispatch = (task.dispatches ?? []).at(-1)
     const mark = task.status === 'accepted' ? '✓' : task.status === 'blocked' ? '✕' : isCurrent ? '●' : '○'
     const word = task.status === 'accepted' ? 'Accepted' : task.status === 'blocked' ? 'Blocked' : task.status === 'fix' ? 'Fix round' : isCurrent ? 'In progress' : 'Pending'
     const color = task.status === 'accepted' ? DONE : task.status === 'blocked' ? BLOCKED : isCurrent ? ACCENT : undefined
-    const sub = isCurrent ? line([agent ? modelName(agent.model) : dispatch ? modelName(dispatch.model) : undefined, agent ? `${fmtTime(at - agent.startedAt)} elapsed` : undefined]) : ''
+    const sub = isCurrent ? currentLine(task, agent, ledger, d.fixRounds, at) : ''
     return (
       <Box key={`task-${task.n}`} flexDirection="column">
         <Text color={color} dimColor={!color}>
@@ -439,14 +442,20 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
       <Text dimColor tabular>
         {`${fmtTime(t.time)} elapsed · ${fmtTokens(t.tokens)} tokens · ≈${fmtCost(t.cost)} cost`}
       </Text>
-      {heading(u, 'Active agent', `${running.length} running`, undefined)}
+      {heading(u, running.length ? 'Active agent' : 'Lead', running.length ? `${running.length} running` : undefined, undefined)}
       {current ? <Text dimColor>{`Task ${current.n} / ${tasks.length}`}</Text> : null}
-      {cards.length ? cards : <Text dimColor>No subagent running.</Text>}
-      {finished.map(a => (
-        <Text key={`finished-${a.id}`} color={a.status === 'failed' ? BLOCKED : DONE} dimColor={a.status !== 'failed'}>
-          {line([a.name, modelName(a.model), fmtTime((a.endedAt ?? at) - a.startedAt), a.status])}
-        </Text>
-      ))}
+      {cards.length ? cards : <Text color={ACCENT}>{leadLine(ledger, at)}</Text>}
+      {attempts.length
+        ? attempts.map((a, i) => (
+            <Text key={`attempt-${i}`} color={a.verdict === 'FIX REQUIRED' ? BLOCKED : DONE} dimColor={a.verdict !== 'FIX REQUIRED'}>
+              {attemptText(a)}
+            </Text>
+          ))
+        : finished.map(a => (
+            <Text key={`finished-${a.id}`} color={a.status === 'failed' ? BLOCKED : DONE} dimColor={a.status !== 'failed'}>
+              {line([a.name, modelName(a.model), fmtTime((a.endedAt ?? at) - a.startedAt), a.status])}
+            </Text>
+          ))}
       {childRows(u, d)}
       {heading(u, 'Task progress', undefined, { key: 'goto-queue', label: 'All work →', onPress: () => d.onView('queue') })}
       {timeline.length ? <Box flexDirection="column">{timeline}</Box> : <Text dimColor>No ledger yet.</Text>}
