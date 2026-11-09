@@ -1,0 +1,6 @@
+# Resume
+
+1. `{ "action": "begin", "item": "p12" }` for the active item `get` named (or the `blocked` one the user named): it reuses the worktree and branch, recreating the worktree from the pushed branch when the folder is gone, and answers `resume: task N/M · <state> · verified <sha>`. Enter the worktree it names (`EnterWorktree` with `path`; not in a child session, which is already there).
+2. Check the tree: `git status --porcelain` and `git log --oneline <verified>..HEAD`. A commit after the verified one is the implementer's claim, not verification: run the task's check yourself and treat the result as step 5 of that task. Uncommitted changes from a dead agent stay: they are the tree the re-dispatch starts from.
+3. Continue from the state: `planning` with no tasks → step 3; `planned` or `task N accepted` → step 4; `implementer dispatched`, `fix round R dispatched` or `review dispatched` → the Agent call again with the brief already on disk (the open dispatch's `brief` in `status p12`) and a line saying what the tree already holds, or the `brief` call again when the file is gone; `final review dispatched`, `gate red` or `gate run` → step 8; an item with a `pr` → step 9's wait.
+4. Say so in one line: `p12 · resumed at task 3/6 · fix round 2 · tree verified at b70de44`.

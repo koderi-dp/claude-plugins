@@ -37,7 +37,7 @@ test('childPrompt names the item, the run skill, the subagent runner, the worktr
   expect(p).toContain('runner subagent')
   expect(p).toContain('this directory')
   expect(p).toMatch(/already .*building/)
-  expect(p).toContain('mcp__pipeline__pipeline {"action":"get"}')
+  expect(p).toContain('mcp__pipeline__pipeline {"action":"begin","item":"p12"}')
   expect(p).not.toMatch(/EnterWorktree(?!.*(?:not|never|skip))/i)
   expect(childPrompt('p12', { isResume: true })).toContain('Resume')
 })

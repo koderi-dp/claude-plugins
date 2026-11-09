@@ -534,16 +534,18 @@ function childRows(u: Desk, d: PanelInput): Element | null {
 /** The other sessions on this repository, from the live file: each a drawn row of title, item and agents; a stale one faded. */
 function siblingRows(u: Desk, d: PanelInput, W: number): Element | null {
   const { Box, Svg } = u
-  if (!d.siblings.length) return null
+  // A session silent for half an hour that runs nothing has ended without saying so: not listed. Before that it is faded.
+  const shown = d.siblings.filter(x => d.now - Date.parse(x.seenAt) < 30 * 60_000 || x.agents.some(a => a.status === 'running'))
+  if (!shown.length) return null
   const rw = rowWidth(W, 0)
-  const rows = d.siblings.map((s, n) => {
+  const rows = shown.map((s, n) => {
     const running = s.agents.filter(a => a.status === 'running').length
     const { title, meta, isIdle } = siblingLabel(s)
-    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title, meta, isLive: running > 0, isStale: s.isStale, isDim: isIdle, isLast: n === d.siblings.length - 1 })} alt={line([title, meta])} width={rw} height={SESSION_ROW_H} />
+    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title, meta, isLive: running > 0, isStale: s.isStale, isDim: isIdle, isLast: n === shown.length - 1 })} alt={line([title, meta])} width={rw} height={SESSION_ROW_H} />
   })
   return (
     <Box flexDirection="column">
-      {heading(u, 'Other sessions', `${d.siblings.length}`)}
+      {heading(u, 'Other sessions', `${shown.length}`)}
       {card(u, rows)}
     </Box>
   )

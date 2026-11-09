@@ -163,6 +163,7 @@ export function renderBrief(input: BriefInput): { text: string; brief: string; r
     checkFast: or(c.checks.fast, 'the focused tests of the files you touch'),
     checkTask: or(task?.check, or(c.checks.task, 'the tests of the package you touch')),
     checkGate: or(c.checks.gate, 'the full test suite'),
+    process: c.superpowers === 'on' ? 'A skill the session has for testing, debugging or verification may be used inside a step; this brief decides what is done.' : 'This brief is the whole process: invoke no skill (no superpowers skill, no planning or brainstorming skill) and dispatch no agent.',
     attribution: or(input.attribution ?? (typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''), '(no attribution lines)'),
   }
   if (task) {

@@ -20,7 +20,7 @@ export type SlimInput = {
 export const NEXT = 3
 
 /** The keys of the config the run skill reads; the rest (stop, afterMerge, retain, notify…) is read from the file when needed. */
-const CONFIG_KEYS = ['runner', 'merge', 'mergeMethod', 'checks', 'limits', 'riskyPaths', 'protectedPaths', 'models', 'taskReview'] as const
+const CONFIG_KEYS = ['runner', 'merge', 'mergeMethod', 'checks', 'limits', 'riskyPaths', 'protectedPaths', 'models', 'taskReview', 'superpowers'] as const
 
 /**
  * The default `get` answer: the active item with its branch and worktree, its resume block, the open signals, the
@@ -39,7 +39,7 @@ export function slimGet(input: SlimInput): Record<string, unknown> {
   const next = queue.map(i => {
     const judged = r[i.id]
     const reason = i.status === 'ready' ? 'ready' : judged && !judged.ready ? judged.reason : 'ready'
-    return { id: i.id, title: i.title, ...(i.size ? { size: i.size } : {}), reason }
+    return { id: i.id, title: i.title, ...(i.size ? { size: i.size } : {}), ...(i.spec ? { spec: i.spec } : {}), reason }
   })
   const config: Record<string, unknown> | null = c ? {} : null
   if (c && config) for (const k of CONFIG_KEYS) if (c[k] !== undefined) config[k] = c[k]
@@ -88,12 +88,15 @@ export function ledgerLine(ledger: Ledger): string {
   else if (ledger.resume) {
     const n = ledger.resume.task
     const own = tasks.find(t => t.n === n)
-    parts.push(own ? `task ${n}/${tasks.length} ${own.status}` : `task ${n}/${tasks.length} · ${ledger.resume.state}`)
+    const isDone = tasks.length > 0 && tasks.every(t => t.status === 'accepted')
+    parts.push(isDone ? `${tasks.length}/${tasks.length} tasks accepted` : own ? `task ${n}/${tasks.length} ${own.status}` : `task ${Math.min(n, tasks.length)}/${tasks.length} · ${ledger.resume.state}`)
   } else parts.push(tasks.length ? `${tasks.length} task${tasks.length === 1 ? '' : 's'}` : 'no tasks')
   const rulings = (ledger.rulings ?? []).length
   if (rulings) parts.push(`${rulings} ruling${rulings === 1 ? '' : 's'}`)
   const blockers = (ledger.blockers ?? []).length
   if (blockers) parts.push(`${blockers} blocker${blockers === 1 ? '' : 's'}`)
   if (ledger.tokens) parts.push(`${fmtTokens(ledger.tokens)} tokens`)
+  const lead = ledger['lead'] as { tokens?: number } | undefined
+  if (lead?.tokens) parts.push(`lead ${fmtTokens(lead.tokens)}`)
   return parts.join(' · ')
 }

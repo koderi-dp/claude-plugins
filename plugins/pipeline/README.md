@@ -63,6 +63,7 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 | `mergeMethod` | `merge` | `merge` (a merge commit) or `squash` |
 | `stop` | six conditions | Free text the run skill reads: when it blocks the item and asks instead of deciding |
 | `afterMerge` | `["docs/pipeline/BACKLOG.md"]` | Paths to regenerate, commands to run or skills to invoke after a merge |
+| `superpowers` | `off` | `off`: the lead and every brief use the pipeline's own process and invoke no superpowers skill, even when the plugin is installed; `on`: testing and debugging skills may be used inside a step |
 | `retain` | `plans` true, `briefs` false, `superpowers` false | What stays after an item merges; the spec and the ledger always stay |
 | `notify` | `milestones` | `off`, `milestones` (started, PR open, merged, blocked, a watchdog signal) or `all` |
 | `renameSession` | `true` | Name the session after the item it runs (`p12 · CSV export`) when an update starts it, and a child session from its start; `false` leaves the names alone |
@@ -94,11 +95,14 @@ Every tool answer stays in the lead's conversation and is read again on every la
 | `signals` | Only the open watchdog signals, or `no signals`; the wake-up's check |
 | `add`, `update`, `move`, `park`, `unpark`, `remove` | One line: `added p29 · inbox · no spec`, `p12 · building`, `removed p2 · 70 items left` |
 | `ledger` | One line: `ledger p12 · task 3/6 running · 2 rulings · 674k tokens` |
-| `plan` | One line: `p12 · building · 5 tasks · next: brief task 1`, or the problems of the plan |
-| `brief` | One line with the Agent call: `p12 · task 2/5 · Agent model sonnet effort medium · prompt: Read docs/pipeline/ledgers/p12/task-2-brief.md and follow it.` |
+| `begin` | One line: the status, the branch, the base and the worktree to enter; refused when another live session runs the item |
+| `plan` | One line: `p12 · building · 5 tasks · plan committed · next: brief task 1`, or the problems of the plan |
+| `brief` | One line with the Agent call: `p12 · task 2/5 · Agent subagent_type pipeline:implementer model sonnet effort medium · prompt: Read docs/pipeline/ledgers/p12/task-2-brief.md and follow it.` |
+| `accept` | One line: `p12 · task 2 accepted · 2/5 · a1b2c3d..c0de111 · pushed · next: brief task 3` |
+| `gate` | One line: `p12 · gate green · final approved · pushed · next: open the PR`, or the red gate's last lines |
 | `status`, `status { id }` | The full status block, or one item's whole ledger: the explicit way to read them |
 
-The tool does the clerical work of a run: it checks the plan and seeds the ledger's tasks, renders every brief from the plan task, the config, `rules.md` and the spec, opens the dispatch in the ledger, and decides from the diff whether a task needs an independent review. The lead writes no brief and no task list. A subagent answers one line (`DONE <hash> · 14/14 tests`, `FIX REQUIRED · 1 critical`) and writes its report to a file the lead opens only when it needs the findings. The lead runs each task's check itself before it accepts.
+The lead's turns are most of an item's cost, because every turn re-reads the conversation; in a measured run the lead was 95% of it. So the tool does the clerical work of a run in single calls: it makes the worktree and claims the item (`begin`), checks the plan, seeds the ledger's tasks and commits the plan, renders every brief from the plan task, the config, `rules.md` and the spec, opens the dispatch in the ledger, and decides from the diff whether a task needs an independent review. It commits the records and pushes at each accept, and runs `checks.gate` itself (`gate`), so a gate is never green by assumption. The lead writes no brief, no task list, no record commit. Subagents run as the plugin's own agent types, `pipeline:implementer` and `pipeline:reviewer`, which carry only the tools they need. The ledger records the lead's own tokens as `lead`, and an agent's count in the panel is fresh tokens, not what is re-read from the cache. A subagent answers one line (`DONE <hash> · 14/14 tests`, `FIX REQUIRED · 1 critical`) and writes its report to a file the lead opens only when it needs the findings. The lead runs each task's check itself before it accepts.
 
 The run skill calls `get` once per item and after a restart, `signals` for watchdog checks and `status` only when you ask; it passes briefs and reports to subagents by path and reads a result with `git diff --stat` first. With `runner: session` each item runs in a fresh child context, so one item's history never weighs on the next. The lead runs on the session's model while the subagents use `models`: starting the lead session on Opus or Sonnet keeps a Fable budget for the final reviews.
 
