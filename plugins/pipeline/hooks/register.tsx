@@ -10,7 +10,7 @@ import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
 import type { LedgerSet } from './ledger'
 import { parseLive, withEntry, withoutEntry } from './live'
-import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse } from './migrate'
+import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse, specStub } from './migrate'
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { BAR_ROW_H, barSvg, barText, modelName } from './draw'
 import type { Bar } from './draw'
@@ -49,7 +49,7 @@ const TOOL_DESCRIPTION =
   '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists; ' +
   '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/), for one merged item or for every merged item; it deletes nothing, the caller removes them with git rm -r and commits; ' +
   '`migrate` { refresh? } → JSON { sources, config, sourcesOfConfig, items, rules, active, bulk: { files, count }, unsure, report }: reads the project\'s queue, workflow prose, ledgers, scripts and CI and drafts the config, the items, the rules (the queue\'s open decisions among them, as before-dispatch stops) and the active item, writing nothing; refused when config.json exists unless refresh; ' +
-  '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of files given the line and the bulk files to git rm; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
+  '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger, a spec stub from the title and note for every inbox or building item without one, so the needs-free ones settle to ready), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of spec stubs, the count of files given the line and the bulk files to git rm; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
   'Every write re-reads backlog.json, merges, regenerates BACKLOG.md and answers the status text; a file that does not parse is refused with its line and left alone.'
 
 const TOOL_SCHEMA = {
@@ -725,6 +725,18 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
     await $.fs.write(p.ledger(id), serialize(ledger))
     next = updateItem(next, id, { ledger: file }, now)
   }
+  // A spec stub for every item added now that lands inbox or building without one, so settle can make the
+  // needs-free ones ready; an existing file at the stub's path is left alone.
+  let stubs = 0
+  for (const item of next.items) {
+    if (!fresh.has(item.id) || (item.status !== 'inbox' && item.status !== 'building') || item.spec) continue
+    const file = `docs/pipeline/specs/${item.id}.md`
+    if (!(await $.fs.exists(p.spec(item.id)))) {
+      await $.fs.write(p.spec(item.id), specStub(item.id, item.title, item.note, item.source))
+      stubs += 1
+    }
+    next = updateItem(next, item.id, { spec: file }, now)
+  }
   const status = await writeBacklog($, found, normalizeConfig(nextConfig).config, next)
 
   // The Historical line, once, on the old queue and ledger files.
@@ -738,7 +750,7 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
     added += 1
   }
   const bulk = bulkToRemove(listing, incrementsOf(increments, next.items).merged)
-  const lines = [status, `historical line added to ${added} file${added === 1 ? '' : 's'}`]
+  const lines = [status, `spec stubs written for ${stubs} item${stubs === 1 ? '' : 's'}`, `historical line added to ${added} file${added === 1 ? '' : 's'}`]
   if (bulk.count) lines.push(`bulk: ${bulk.count} files of merged increments to remove with git rm once the user confirms (kept with retain.superpowers):`, ...bulk.files)
   return lines.join('\n')
 }

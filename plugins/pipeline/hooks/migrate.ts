@@ -483,6 +483,38 @@ export function activeFromBranches(branches: string[], ledgers: SourceText[]): A
   return out
 }
 
+// ---------- spec stubs ----------
+
+/**
+ * The spec an imported item starts with, under the five headings of templates/spec.md: What is the note (the title when
+ * the note is empty), Why names the source, Acceptance has one line, Out of scope and Open are empty, so the item is ready
+ * once its needs are merged.
+ */
+export function specStub(id: string, title: string, note: string | undefined, source: string | undefined): string {
+  const what = (note ?? '').trim() || title.trim()
+  const why = (source ?? '').trim()
+  return [
+    `# ${id}: ${title.trim()}`,
+    '',
+    '## What',
+    '',
+    what,
+    '',
+    '## Why',
+    '',
+    why ? `Imported from ${why.replace(/\.$/, '')}.` : 'Imported by the migration.',
+    '',
+    '## Acceptance',
+    '',
+    '- [ ] As described in What.',
+    '',
+    '## Out of scope',
+    '',
+    '## Open',
+    '',
+  ].join('\n')
+}
+
 // ---------- history ----------
 
 /** The line prepended to each old queue and ledger file. */

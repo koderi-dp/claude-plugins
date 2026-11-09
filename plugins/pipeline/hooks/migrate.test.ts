@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { CATALO_BACKLOG as CATALO, CATALO_QUEUE_2026_11 as QUEUE, OPENHUDDLE_CLAUDE as OH_CLAUDE, OPENHUDDLE_WORKFLOW as OH_WORKFLOW } from './fixtures'
-import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse } from './migrate'
+import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse, specStub } from './migrate'
 
 // Review Focus 5: the catalo backlog
 
@@ -648,4 +648,13 @@ test('decisionsFromBacklogMd: each open decision is a before-dispatch stop rule 
   ])
   expect(itemsFromBacklogMd(text, 'docs/queue.md').map(i => i.title)).toEqual(['Export jobs'])
   expect(decisionsFromBacklogMd(CATALO, 'docs/backlog.md')).toEqual([])
+})
+
+test('specStub: the five headings, What from the note or the title, Why from the source, Open empty', () => {
+  const stub = specStub('p7', 'Brand logos', 'imported from docs/backlog.md, unverified. Brands as records with a logo image.', 'docs/backlog.md: Queue')
+  expect(stub.split('\n').filter(l => l.startsWith('## '))).toEqual(['## What', '## Why', '## Acceptance', '## Out of scope', '## Open'])
+  expect(stub.startsWith('# p7: Brand logos\n\n## What\n\nimported from docs/backlog.md, unverified. Brands as records with a logo image.\n\n## Why\n\nImported from docs/backlog.md: Queue.\n')).toBe(true)
+  expect(stub).toContain('\n## Acceptance\n\n- [ ] As described in What.\n')
+  expect(stub.endsWith('\n## Out of scope\n\n## Open\n')).toBe(true)
+  expect(specStub('p8', 'Table element', '', undefined)).toContain('## What\n\nTable element\n\n## Why\n\nImported by the migration.\n')
 })
