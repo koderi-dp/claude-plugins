@@ -83,6 +83,10 @@ const BACKLOG_MD = [
   '- [ ] Export jobs and downloads.',
   '- [ ] Brand filters (later).',
   '- [x] Search over articles. Merged in [PR #12](https://github.com/acme/app/pull/12), [plan](superpowers/plans/2026-11-01-search.md).',
+  '',
+  '## Open decisions',
+  '',
+  '- 2026-11-04 · user · Rename the organizations table.',
 ].join('\n')
 
 const SEARCH_LEDGER = [
@@ -107,6 +111,8 @@ const EXPORT_LEDGER = [
 ].join('\n')
 
 const SDD = `${MAIN}/.superpowers/sdd`
+const TOP_LEDGER = '# Progress ledger\n\nCurrent entries are in the increment folders; the archive holds the rest.\n'
+const ARCHIVE = '# Progress archive\n\n## Historical status — catalog builder core merged — 2026-11-01\n'
 
 /** The catalo-like tree: CLAUDE.md links the queue, package.json has scripts, one merged and one open increment, two branches. */
 const TREE: Record<string, string> = {
@@ -115,6 +121,8 @@ const TREE: Record<string, string> = {
   [`${MAIN}/docs/backlog.md`]: BACKLOG_MD,
   [`${MAIN}/docs/superpowers/plans/2026-11-01-search.md`]: '# Search plan\n',
   [`${MAIN}/docs/superpowers/plans/2026-11-03-export.md`]: '# Export plan\n',
+  [`${SDD}/progress.md`]: TOP_LEDGER,
+  [`${SDD}/progress-archive.md`]: ARCHIVE,
   [`${SDD}/2026-11-01-search/progress.md`]: SEARCH_LEDGER,
   [`${SDD}/2026-11-01-search/task-1-brief.md`]: 'brief\n',
   [`${SDD}/2026-11-01-search/logs/task-1.log`]: 'log\n',
@@ -138,6 +146,8 @@ test('migrate drafts the config with sources, the items, the rules, the active i
     'docs/backlog.md',
     'docs/superpowers/plans/2026-11-01-search.md',
     'docs/superpowers/plans/2026-11-03-export.md',
+    '.superpowers/sdd/progress.md',
+    '.superpowers/sdd/progress-archive.md',
     '.superpowers/sdd/2026-11-01-search/progress.md',
     '.superpowers/sdd/2026-11-03-export/progress.md',
     'package.json',
@@ -160,6 +170,11 @@ test('migrate drafts the config with sources, the items, the rules, the active i
 
   expect(d.rules.some(x => x.source === 'CLAUDE.md' && x.group === 'before the PR' && x.line.startsWith('Never push to main'))).toBe(true)
   expect(d.rules.some(x => x.source === 'CLAUDE.md' && x.group === 'in every implementer brief' && /Playwright/.test(x.line))).toBe(true)
+  // The open decision of the queue is a stop rule, not an item.
+  expect(d.rules.filter(x => x.source === 'docs/backlog.md: Open decisions')).toEqual([
+    { group: 'before dispatch', line: 'Stop before Rename the organizations table: open user decision since 2026-11-04.', source: 'docs/backlog.md: Open decisions' },
+  ])
+  expect(d.report).toContain('docs/backlog.md: 3 items (1 merged, 1 parked), 1 open decision')
 
   expect(d.active).toEqual([{
     title: 'export',
@@ -210,8 +225,9 @@ test('migrate-apply writes the four files, the ledger of the building item, maps
     { id: 'Q2', title: 'Second queue entry', status: 'inbox', needs: ['Q1', 'Q9'], note: 'imported from CLAUDE.md, unverified' },
   ]
   const r = text(await call($, { action: 'migrate-apply', config: d.config, items, rules: d.rules }))
-  expect(r.startsWith('pipeline: 6 items')).toBe(true)
-  expect(r).toContain('\nhistorical line added to 4 files\n')
+  expect(r.startsWith('pipeline: 6 items · 2 ready')).toBe(true)
+  expect(r).toContain('\nspec stubs written for 4 items\n')
+  expect(r).toContain('\nhistorical line added to 6 files\n')
   expect(r).toContain('bulk: 2 files of merged increments to remove')
   expect(r.endsWith('\n.superpowers/sdd/2026-11-01-search/task-1-brief.md\n.superpowers/sdd/2026-11-01-search/logs/task-1.log')).toBe(true)
 
@@ -221,14 +237,16 @@ test('migrate-apply writes the four files, the ledger of the building item, maps
   expect(JSON.parse(files.get(`${DIR}/config.json`)!)).toMatchObject({ version: 1, checks: { fast: 'npm run check:fast' }, limits: { fixRounds: 3 } })
   expect(files.get(`${DIR}/rules.md`)).toContain('## Before the PR')
   expect(files.get(`${DIR}/rules.md`)).toContain('Never push to main directly; every slice merges through a pull request. (CLAUDE.md)')
+  expect(files.get(`${DIR}/rules.md`)).toContain('Stop before Rename the organizations table: open user decision since 2026-11-04. (docs/backlog.md: Open decisions)')
 
   const backlog = JSON.parse(files.get(`${DIR}/backlog.json`)!) as { items: Record<string, unknown>[] }
+  // Every inbox and building item got a spec stub, so the needs-free ones settled to ready; p6 waits for p5.
   expect(backlog.items.map(i => [i.id, i.title, i.status])).toEqual([
-    ['p1', 'Export jobs and downloads', 'inbox'],
+    ['p1', 'Export jobs and downloads', 'ready'],
     ['p2', 'Brand filters (later)', 'parked'],
     ['p3', 'Search over articles', 'merged'],
     ['p4', 'export', 'building'],
-    ['p5', 'First queue entry', 'inbox'],
+    ['p5', 'First queue entry', 'ready'],
     ['p6', 'Second queue entry', 'inbox'],
   ])
   // Queue labels become the ids they got; an unknown label goes into the note.
@@ -250,9 +268,68 @@ test('migrate-apply writes the four files, the ledger of the building item, maps
   expect(files.get(`${SDD}/2026-11-01-search/final-review.md`)).toBe(`${line}\n\nfinal\n`)
   expect(files.get(`${SDD}/2026-11-01-search/progress.md`)).toBe(`${line}\n\n${SEARCH_LEDGER}`)
   expect(files.get(`${SDD}/2026-11-03-export/progress.md`)).toBe(`${line}\n\n${EXPORT_LEDGER}`)
+  // The top-level ledger and its archive too, not only the nested progress.md files.
+  expect(files.get(`${SDD}/progress.md`)).toBe(`${line}\n\n${TOP_LEDGER}`)
+  expect(files.get(`${SDD}/progress-archive.md`)).toBe(`${line}\n\n${ARCHIVE}`)
   expect(files.get(`${SDD}/2026-11-01-search/logs/task-1.log`)).toBe('log\n')
   expect(files.get(`${MAIN}/docs/superpowers/plans/2026-11-01-search.md`)).toBe('# Search plan\n')
   expect(files.has(`${SDD}/2026-11-01-search/task-1-brief.md`)).toBe(true)
+})
+
+test('migrate-apply writes a spec stub from the title and note for every inbox and building item without one, and needs-free items become ready', async ($, on) => {
+  const { files, writes } = world(on, TREE)
+  const d = JSON.parse(text(await call($, { action: 'migrate' }))) as Draft
+  const items = [
+    ...d.items,
+    ...d.active,
+    { title: 'Has a spec already', status: 'inbox', spec: 'docs/specs/own.md', note: 'kept' },
+    { title: 'Second queue entry', status: 'inbox', needs: ['p1'], note: 'imported from CLAUDE.md, unverified' },
+  ]
+  files.set(`${MAIN}/docs/specs/own.md`, '# own\n\n## Open\n')
+  const r = text(await call($, { action: 'migrate-apply', config: d.config, items, rules: d.rules }))
+  // p1, p4 and p6; p5 brought its own spec, p2 and p3 get none.
+  expect(r).toContain('\nspec stubs written for 3 items\n')
+  const backlog = JSON.parse(files.get(`${DIR}/backlog.json`)!) as { items: Record<string, unknown>[] }
+  for (const i of backlog.items) {
+    if (i['status'] !== 'inbox' && i['status'] !== 'ready' && i['status'] !== 'building') continue
+    expect(typeof i['spec']).toBe('string')
+    expect(files.has(`${MAIN}/${String(i['spec'])}`)).toBe(true)
+  }
+  expect(backlog.items.map(i => [i['id'], i['status'], i['spec']])).toEqual([
+    ['p1', 'ready', 'docs/pipeline/specs/p1.md'],
+    ['p2', 'parked', null],
+    ['p3', 'merged', null],
+    ['p4', 'building', 'docs/pipeline/specs/p4.md'],
+    ['p5', 'ready', 'docs/specs/own.md'],
+    ['p6', 'inbox', 'docs/pipeline/specs/p6.md'],
+  ])
+  // The stub: the five headings of templates/spec.md, What from the note, Why from the source, one acceptance line, Out of scope and Open empty.
+  expect(files.get(`${DIR}/specs/p1.md`)).toBe([
+    '# p1: Export jobs and downloads',
+    '',
+    '## What',
+    '',
+    'imported from docs/backlog.md, unverified',
+    '',
+    '## Why',
+    '',
+    'Imported from docs/backlog.md: Remaining.',
+    '',
+    '## Acceptance',
+    '',
+    '- [ ] As described in What.',
+    '',
+    '## Out of scope',
+    '',
+    '## Open',
+    '',
+  ].join('\n'))
+  expect(files.get(`${DIR}/specs/p4.md`)).toContain('# p4: export')
+  // Nothing is stubbed for a parked or merged item, and an existing spec is not overwritten.
+  expect(files.has(`${DIR}/specs/p2.md`)).toBe(false)
+  expect(files.has(`${DIR}/specs/p3.md`)).toBe(false)
+  expect(files.get(`${MAIN}/docs/specs/own.md`)).toBe('# own\n\n## Open\n')
+  expect(writes.filter(w => w.startsWith(`${DIR}/specs/`)).length).toBe(3)
 })
 
 test('a second apply is refused without refresh; with refresh it changes no status and adds no second historical line', async ($, on) => {
@@ -267,8 +344,8 @@ test('a second apply is refused without refresh; with refresh it changes no stat
   )
   expect(writes.length).toBe(writesBefore)
 
-  // The user set p1 to merged by hand and the old queue now calls the first item something else; the refresh keeps the status.
-  files.set(`${DIR}/backlog.json`, files.get(`${DIR}/backlog.json`)!.replace('"status": "inbox"', '"status": "merged"'))
+  // The user set p1 (ready after its stub) to merged by hand and the old queue now calls the first item something else; the refresh keeps the status.
+  files.set(`${DIR}/backlog.json`, files.get(`${DIR}/backlog.json`)!.replace('"status": "ready"', '"status": "merged"'))
   const again = JSON.parse(text(await call($, { action: 'migrate', refresh: true }))) as Draft
   const edited = again.items.map((i, k) => (k === 0 ? { ...i, title: 'Export jobs and downloads', source: 'docs/backlog.md: Remaining (refreshed)', status: 'inbox' } : i))
   const r = text(await call($, { action: 'migrate-apply', refresh: true, config: again.config, items: [...edited, ...again.active], rules: again.rules }))
@@ -284,6 +361,8 @@ test('a second apply is refused without refresh; with refresh it changes no stat
   // Exactly one historical line.
   expect(files.get(`${MAIN}/docs/backlog.md`)!.split('Historical.').length).toBe(2)
   expect(files.get(`${SDD}/2026-11-03-export/progress.md`)!.split('Historical.').length).toBe(2)
+  expect(files.get(`${SDD}/progress.md`)!.split('Historical.').length).toBe(2)
+  expect(files.get(`${SDD}/progress-archive.md`)!.split('Historical.').length).toBe(2)
   // The ledger of the building item is not written twice, and its link stays the tool's own.
   expect(writes.filter(w => w === `${DIR}/ledgers/p4.json`).length).toBe(1)
   expect(after.items[3]).toMatchObject({ id: 'p4', status: 'building', ledger: 'docs/pipeline/ledgers/p4.json' })

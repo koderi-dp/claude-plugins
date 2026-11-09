@@ -1,7 +1,8 @@
 // The live file of spec §8: one entry per running session, keyed by session id,
 // never committed. Pure: the caller reads and writes through the engine.
 
-import type { AgentRun, Live, LiveEntry, Signal } from '../types'
+import type { AgentRun, Live, LiveEntry, Sibling, Signal } from '../types'
+import { STALE_MS } from './watch'
 
 /** An entry no heartbeat refreshed for a day is dropped on the next write. */
 export const DROP_MS = 24 * 60 * 60_000
@@ -57,4 +58,28 @@ export function withoutEntry(live: Live, id: string): Live {
   const sessions = { ...live.sessions }
   delete sessions[id]
   return { ...live, sessions }
+}
+
+/**
+ * The other sessions of the live file as the panel shows them: every entry but this session's and the
+ * excluded ids (the children this session runs, drawn on their own), stale once no heartbeat refreshed it
+ * for STALE_MS, so a session that died shows dim until the watchdog drops its entry.
+ */
+export function siblingsOf(live: Live, selfId: string, nowMs: number, excludeIds: readonly string[] = []): Sibling[] {
+  const out: Sibling[] = []
+  for (const [sessionId, s] of Object.entries(live.sessions)) {
+    if (sessionId === selfId || excludeIds.includes(sessionId)) continue
+    out.push({
+      sessionId,
+      title: s.title,
+      cwd: s.cwd,
+      ...(s.branch ? { branch: s.branch } : {}),
+      ...(s.item ? { item: s.item } : {}),
+      seenAt: s.seenAt,
+      agents: s.agents,
+      signals: s.signals,
+      isStale: ageOf(s, nowMs) > STALE_MS,
+    })
+  }
+  return out
 }

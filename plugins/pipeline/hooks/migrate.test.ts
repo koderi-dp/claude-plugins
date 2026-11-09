@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CATALO_BACKLOG as CATALO, OPENHUDDLE_CLAUDE as OH_CLAUDE, OPENHUDDLE_WORKFLOW as OH_WORKFLOW } from './fixtures'
-import { activeFromBranches, bulkToRemove, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, rulesFromProse } from './migrate'
+import { CATALO_BACKLOG as CATALO, CATALO_QUEUE_2026_11 as QUEUE, OPENHUDDLE_CLAUDE as OH_CLAUDE, OPENHUDDLE_WORKFLOW as OH_WORKFLOW } from './fixtures'
+import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse, specStub } from './migrate'
 
 // Review Focus 5: the catalo backlog
 
@@ -440,7 +440,7 @@ test('renderRulesMd numbers the lines under one heading per group, each ending w
 test('findSources picks only present files, in the order of the spec', () => {
   const listing = [
     './CLAUDE.md', 'apps/web/CLAUDE.md', 'docs/backlog.md', 'docs/superpowers/specs/a.md', 'docs/superpowers/plans/b.md',
-    '.superpowers/sdd/progress.md', '.superpowers/sdd/2026-11-03-slice/progress.md', '.superpowers/sdd/final-review.md',
+    '.superpowers/sdd/progress.md', '.superpowers/sdd/progress-archive.md', '.superpowers/sdd/2026-11-03-slice/progress.md', '.superpowers/sdd/final-review.md',
     '.claude/skills/agent-dispatch/SKILL.md', '.claude/skills/x/notes.md', 'package.json', '.github/workflows/ci.yml',
     'docs/storage.md', 'src/index.ts', 'README.md',
   ]
@@ -454,10 +454,12 @@ test('findSources picks only present files, in the order of the spec', () => {
   expect(findSources(listing, claudeMd)).toEqual([
     'CLAUDE.md', 'apps/web/CLAUDE.md', 'docs/backlog.md', '.superpowers/sdd/progress.md',
     'docs/superpowers/specs/a.md', 'docs/superpowers/plans/b.md',
-    '.superpowers/sdd/2026-11-03-slice/progress.md',
+    '.superpowers/sdd/progress-archive.md', '.superpowers/sdd/2026-11-03-slice/progress.md',
     '.claude/skills/agent-dispatch/SKILL.md', 'package.json', '.github/workflows/ci.yml',
   ])
   expect(findSources([], '')).toEqual([])
+  // The top-level ledger and its archive are sources without a link from CLAUDE.md too.
+  expect(findSources(['.superpowers/sdd/progress-archive.md', '.superpowers/sdd/progress.md'], '')).toEqual(['.superpowers/sdd/progress-archive.md', '.superpowers/sdd/progress.md'])
 })
 
 // Active items
@@ -543,3 +545,118 @@ test('bulkToRemove lists the files of merged increments except progress.md and t
   expect(bulkToRemove(listing, [])).toEqual({ files: [], count: 0 })
 })
 
+
+// The catalo queue after its 2026-11-05 rewrite: Item · Size · State · Scope · Links, a Done table and open decisions.
+
+const REPO = 'https://github.com/koderi-dp/catalo'
+
+test('catalo queue: thirteen queue rows and four done rows become items by State, with the size, the scope as note and no decision among them', () => {
+  const items = itemsFromBacklogMd(QUEUE, 'docs/backlog.md', REPO)
+  // By hand from the fixture: 13 queue rows (1 Running, 1 Review, 1 Blocked, 7 Queued, 3 Later) and 4 done rows; the 3 open decisions are not items.
+  expect(items).toHaveLength(17)
+  expect(items.map(i => [i.title, i.status, i.size])).toEqual([
+    ['page-background-image — Page background image', 'building', 'M'],
+    ['panel-splitters — Resizable editor side panels', 'building', 'S'],
+    ['app-themes — App themes per user', 'blocked', 'S'],
+    ['grid-track-sizes — Grid row and column sizes', 'inbox', 'M'],
+    ['brand-logos — Brand logos', 'inbox', 'M'],
+    ['two-page-spreads — Two-page spreads', 'inbox', 'L'],
+    ['section-delete-pages — Delete a section with its pages', 'inbox', 'S'],
+    ['multi-page-delete-clear — Multi-page delete and clear', 'inbox', 'S'],
+    ['templates-screen — Templates screen', 'inbox', 'S'],
+    ['editor-hardening — Editor hardening', 'inbox', 'S'],
+    ['card-style-across-pages — Card style across pages', 'parked', 'M'],
+    ['worker-slice — Worker slice', 'parked', 'L'],
+    ['integrations — Integrations, ERP connectors, AI', 'parked', 'L'],
+    ['edit-inside-groups — Edit inside groups', 'merged', undefined],
+    ['pdf-delivery — PDF delivery, slices 1–3', 'merged', undefined],
+    ['catalog-ui-fixes — Catalog UI fixes (Keraterm review)', 'merged', undefined],
+    ['catalog-builder-core — Catalog builder core (slice 1)', 'merged', undefined],
+  ])
+  expect(items.filter(i => i.status === 'inbox')).toHaveLength(7)
+  expect(items.filter(i => i.status === 'building')).toHaveLength(2)
+  expect(items.filter(i => i.status === 'parked')).toHaveLength(3)
+  expect(items.filter(i => i.status === 'merged')).toHaveLength(4)
+  for (const i of items.slice(0, 13)) expect(i.source).toBe('docs/backlog.md: Queue')
+  for (const i of items.slice(13)) expect(i.source).toBe('docs/backlog.md: Done')
+  expect(items.some(i => /ECI|PDF\/X validator|AGPL/.test(i.title ?? ''))).toBe(false)
+})
+
+test('catalo queue: the scope is the whole note, the Links cell is appended, a Running or Review row notes its state and a Blocked row keeps the scope', () => {
+  const items = itemsFromBacklogMd(QUEUE, 'docs/backlog.md', REPO)
+  const by = (slug: string) => items.find(i => i.title?.startsWith(`${slug} —`))
+  expect(by('brand-logos')?.note).toBe('imported from docs/backlog.md, unverified. Brands as records with a logo image, shown on product cards; `brand` is plain text today. The Keraterm pages show a manufacturer logo per card.')
+  expect(by('grid-track-sizes')?.note).toBe(
+    'imported from docs/backlog.md, unverified. A grid row or column with a fixed size in mm (a thin header row) while the others share the rest: page document (v2 compatible), renderer, editor geometry, Page tab and "with header" presets. Exports of documents without track sizes stay identical. User request, 2026-11-05. Links: Renderer change',
+  )
+  expect(by('editor-hardening')?.note?.endsWith(' Links: [items][fold]')).toBe(true)
+  expect(by('multi-page-delete-clear')?.note?.endsWith(' Links: Pairs with section-delete-pages')).toBe(true)
+  expect(by('page-background-image')?.note?.startsWith('imported from docs/backlog.md; row Running. A page setting beside the background colour')).toBe(true)
+  expect(by('page-background-image')?.note?.endsWith(' Links: Renderer change')).toBe(true)
+  expect(by('panel-splitters')?.note?.startsWith('imported from docs/backlog.md; row Review. Drag handles')).toBe(true)
+  expect(by('app-themes')?.note).toBe(
+    "imported from docs/backlog.md; row Blocked. Waits for the user's choice of the curated theme set from tweakcn (for example Claude, Clean Slate, Ocean Breeze, Sage Green). Themes change the app's look only (colour tokens in `apps/web/src/styles.css`). User request, 2026-11-09.",
+  )
+  // A markdown link in the scope becomes its text.
+  expect(by('integrations')?.note).toBe('imported from docs/backlog.md, unverified. Delivery phases 2–4 of the platform spec (roadmap).')
+  for (const i of items) expect(i.pr === undefined || i.status === 'merged').toBe(true)
+})
+
+test('catalo queue: a Done row is merged with the PR as a full URL when the repo is known, else #NN, with the sha in the note', () => {
+  const items = itemsFromBacklogMd(QUEUE, 'docs/backlog.md', REPO)
+  const done = items.filter(i => i.status === 'merged')
+  expect(done.map(i => [i.pr, i.note])).toEqual([
+    [`${REPO}/pull/35`, 'imported from docs/backlog.md; merged at 94f2ec6'],
+    [`${REPO}/pull/18`, 'imported from docs/backlog.md; merged at 50c2e46; PRs #18, #21, #23'],
+    [`${REPO}/pull/9`, 'imported from docs/backlog.md; merged at 9564f3e, 779fdee; PRs #9, #10'],
+    [undefined, 'imported from docs/backlog.md; merged at 0776421; no PR link'],
+  ])
+  const bare = itemsFromBacklogMd(QUEUE, 'docs/backlog.md').filter(i => i.status === 'merged')
+  expect(bare.map(i => i.pr)).toEqual(['#35', '#18', '#9', undefined])
+  expect(bare[0]?.note).toBe('imported from docs/backlog.md; merged at 94f2ec6')
+})
+
+test('repoWebUrl: an ssh or https origin becomes the web URL of the repository, anything else nothing', () => {
+  expect(repoWebUrl('git@github.com:koderi-dp/catalo.git')).toBe('https://github.com/koderi-dp/catalo')
+  expect(repoWebUrl('https://github.com/koderi-dp/catalo.git')).toBe('https://github.com/koderi-dp/catalo')
+  expect(repoWebUrl('https://github.com/koderi-dp/catalo')).toBe('https://github.com/koderi-dp/catalo')
+  expect(repoWebUrl('ssh://git@gitlab.example.com/group/app.git')).toBe('https://gitlab.example.com/group/app')
+  expect(repoWebUrl(null)).toBeUndefined()
+  expect(repoWebUrl('/srv/git/app.git')).toBeUndefined()
+})
+
+test('a State column counts as the Status column of the older table shapes too', () => {
+  const text = ['## Queue', '', '| Work | State | Evidence |', '| --- | --- | --- |', '| Brand logos | Queued | Logos on cards. |', '| Plan 1b | Done | Merged (`36da4b2`). |', '| Worker | Later | Phase 2. |', '| Themes | Blocked | Waits for the palette. |'].join('\n')
+  const items = itemsFromBacklogMd(text, 'docs/backlog.md')
+  expect(items.map(i => [i.title, i.status, i.note])).toEqual([
+    ['Brand logos', 'inbox', 'imported from docs/backlog.md, unverified. Logos on cards'],
+    ['Plan 1b', 'merged', 'imported from docs/backlog.md; no PR link'],
+    ['Worker', 'parked', 'imported from docs/backlog.md, unverified. Phase 2'],
+    ['Themes', 'blocked', 'imported from docs/backlog.md; row Blocked. Waits for the palette'],
+  ])
+})
+
+test('decisionsFromBacklogMd: each open decision is a before-dispatch stop rule with its date, and the queue makes no item of it', () => {
+  const rules = decisionsFromBacklogMd(QUEUE, 'docs/backlog.md')
+  expect(rules).toEqual([
+    { group: 'before dispatch', line: "Stop before ECI's written permission to redistribute `PSOcoated_v3.icc` (or a profile swap) before any public repository or an image distributed outside the organisation: open user decision since 2026-11-03.", source: 'docs/backlog.md: Open decisions' },
+    { group: 'before dispatch', line: "Stop before Buy a PDF/X validator (callas pdfToolbox, Acrobat Preflight), or take the print shop's preflight of the first production file as the conformance check; ask the shop for its required output profile: open user decision since 2026-11-03.", source: 'docs/backlog.md: Open decisions' },
+    { group: 'before dispatch', line: 'Stop before Confirm the AGPL, GPL and ECI obligations in licensing before any public deployment: open user decision since 2026-11-03.', source: 'docs/backlog.md: Open decisions' },
+  ])
+  const text = ['## Decisions pending', '', '- [ ] Pick the S3 region.', '- Rename the org table (asked 2026-11-01).', '', '## Queue', '', '- [ ] Export jobs.'].join('\n')
+  expect(decisionsFromBacklogMd(text, 'docs/queue.md').map(r => r.line)).toEqual([
+    'Stop before Pick the S3 region: open user decision.',
+    'Stop before Rename the org table (asked 2026-11-01): open user decision since 2026-11-01.',
+  ])
+  expect(itemsFromBacklogMd(text, 'docs/queue.md').map(i => i.title)).toEqual(['Export jobs'])
+  expect(decisionsFromBacklogMd(CATALO, 'docs/backlog.md')).toEqual([])
+})
+
+test('specStub: the five headings, What from the note or the title, Why from the source, Open empty', () => {
+  const stub = specStub('p7', 'Brand logos', 'imported from docs/backlog.md, unverified. Brands as records with a logo image.', 'docs/backlog.md: Queue')
+  expect(stub.split('\n').filter(l => l.startsWith('## '))).toEqual(['## What', '## Why', '## Acceptance', '## Out of scope', '## Open'])
+  expect(stub.startsWith('# p7: Brand logos\n\n## What\n\nimported from docs/backlog.md, unverified. Brands as records with a logo image.\n\n## Why\n\nImported from docs/backlog.md: Queue.\n')).toBe(true)
+  expect(stub).toContain('\n## Acceptance\n\n- [ ] As described in What.\n')
+  expect(stub.endsWith('\n## Out of scope\n\n## Open\n')).toBe(true)
+  expect(specStub('p8', 'Table element', '', undefined)).toContain('## What\n\nTable element\n\n## Why\n\nImported by the migration.\n')
+})

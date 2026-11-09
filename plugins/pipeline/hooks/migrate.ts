@@ -118,7 +118,7 @@ export function findSources(listing: string[], claudeMd: string): string[] {
   }
   addMatching(p => /^docs\/superpowers\/specs\/[^/]+$/.test(p))
   addMatching(p => /^docs\/superpowers\/plans\/[^/]+$/.test(p))
-  addMatching(p => /^\.superpowers\/sdd\/(?:.*\/)?progress\.md$/.test(p))
+  addMatching(p => /^\.superpowers\/sdd\/(?:.*\/)?progress(?:-archive)?\.md$/.test(p))
   addMatching(p => /^docs\/superpowers\/ledgers\/[^/]+$/.test(p))
   addMatching(p => /^\.claude\/skills\/[^/]+\/SKILL\.md$/.test(p))
   add('Makefile')
@@ -134,8 +134,20 @@ const DEFERRED = /\b(later|V1|phase 2)\b/i
 const DEFERRED_HEADING = /\blater\b|\bphases?\s+[2-9]\b/i
 const FOLLOW_UPS = /^named follow-ups\b/i
 const WORK_HEADER = /\b(?:work|scope)\b/i
-const STATUS_OF: Record<string, Item['status']> = { done: 'merged', queued: 'inbox', later: 'parked' }
+const STATUS_OF: Record<string, Item['status']> = { done: 'merged', queued: 'inbox', later: 'parked', running: 'building', review: 'building', blocked: 'blocked' }
+const SIZE_OF: Record<string, Item['size']> = { tiny: 'S', small: 'S', medium: 'M', large: 'L', s: 'S', m: 'M', l: 'L' }
 const RULE_ROW = /^\|\s*:?-{2,}/
+const DECISION_HEADING = /\bdecisions?\b/i
+const PR_NUMBERS = /#(\d+)\b/g
+const SHAS = /`([0-9a-f]{7,40})`/g
+
+/** The web URL of a repository from its origin remote (`git@host:owner/name.git`, `ssh://git@host/owner/name.git`, `https://host/owner/name.git`); nothing for a local path. */
+export function repoWebUrl(remote: string | null | undefined): string | undefined {
+  if (!remote) return undefined
+  const m = /^(?:https?:\/\/(?:[^@/]+@)?|ssh:\/\/(?:[^@/]+@)?|git@)([^/:]+)[/:](.+?)(?:\.git)?\/?$/.exec(remote.trim())
+  if (!m || !m[1] || !m[2] || m[2].startsWith('/')) return undefined
+  return `https://${m[1]}/${m[2]}`
+}
 
 /** The first spec and the first plan a bullet links (`.../specs/x.md`, `.../plans/x.md`), resolved against the queue file's folder. */
 function linksOf(body: string, file: string): { spec?: string; plan?: string } {
@@ -154,28 +166,46 @@ function linksOf(body: string, file: string): { spec?: string; plan?: string } {
 /** The cells of a table row, markdown stripped. */
 const cellsOf = (row: string) => row.split('|').slice(1, -1).map(c => stripMd(c))
 
+/** The cells of a table row as written, trimmed; reference links such as `[items][fold]` survive. */
+const rawCellsOf = (row: string) => row.split('|').slice(1, -1).map(c => c.trim())
+
+/** The shape of a table from its header: the columns it has, by name, and whether its second column lists work. */
+type Table = { status: number; size: number; scope: number; links: number; merged: number; work: boolean }
+
 /**
  * Backlog items from a markdown queue, in document order: `- [ ]` / `- [x]` bullets; the rows of a table with a `Status`
- * column (Done is merged, Later parked, the rest inbox; the first cell is the title, the third the note); the rows of a
- * table whose second column names work or scope, or that sits under a "Named follow-ups" heading (Done or Delivered rows
- * merged, Implemented rows dropped, the rest parked under a later-phases heading and inbox elsewhere); and the plain
- * bullets of a "Named follow-ups" section that has no table.
+ * or `State` column (Done is merged, Later parked, Running and Review building with the row noted, Blocked blocked with
+ * the scope as the note, the rest inbox; the first cell is the title; a `Scope` cell is the whole note and a `Links` cell
+ * is appended to it, else the third cell's first sentence is the note; a `Size` cell tiny or small is S, medium M, large L);
+ * the rows of a table with a `Merged` column (every row merged, with `(#NN)` as the PR, a full URL when `repoUrl` is
+ * known, and the sha in the note); the rows of a table whose second column names work or scope, or that sits under a
+ * "Named follow-ups" heading (Done or Delivered rows merged, Implemented rows dropped, the rest parked under a later-phases
+ * heading and inbox elsewhere); and the plain bullets of a "Named follow-ups" section that has no table. Nothing under a
+ * heading that names decisions is an item: `decisionsFromBacklogMd` reads those.
  */
-export function itemsFromBacklogMd(text: string, file: string): Partial<Item>[] {
+export function itemsFromBacklogMd(text: string, file: string, repoUrl?: string): Partial<Item>[] {
   const out: Partial<Item>[] = []
   const unverified = `imported from ${file}, unverified`
+  /** The PR a cell or row names: a full link, or `(#NN)` as a URL under `repoUrl` when known, else `#NN`. */
+  const prOf = (body: string): string | undefined => {
+    const link = PR_LINK.exec(body)?.[0]
+    if (link) return link
+    const n = [...body.matchAll(PR_NUMBERS)][0]?.[1]
+    if (!n) return undefined
+    return repoUrl ? `${repoUrl.replace(/\/+$/, '')}/pull/${n}` : `#${n}`
+  }
   const merged = (title: string, body: string, source: string, links: { spec?: string; plan?: string }): Partial<Item> => {
-    const pr = PR_LINK.exec(body)?.[0]
+    const pr = prOf(body)
     return pr
       ? { title, status: 'merged', pr, source, ...links, note: `imported from ${file}` }
       : { title, status: 'merged', source, ...links, note: `imported from ${file}; no PR link` }
   }
   const all = units(text)
   const sectionsWithTable = new Set(all.filter(u => u.kind === 'row').map(u => u.section))
-  // The shape of the table being read, from its header row: the index of its Status column, or whether it lists work.
-  let table: { status: number; work: boolean } | null = null
+  let table: Table | null = null
   for (const u of all) {
     const source = `${file}: ${u.heading}`
+    if (DECISION_HEADING.test(u.heading)) continue
     if (u.kind === 'bullet') {
       const box = /^\[([ xX])\]\s+(.*)$/s.exec(u.text)
       if (box) {
@@ -200,22 +230,51 @@ export function itemsFromBacklogMd(text: string, file: string): Partial<Item>[] 
     if (u.kind !== 'row') continue
     if (u.rowIndex === 0) {
       const header = cellsOf(u.text).map(c => c.toLowerCase())
-      table = { status: header.indexOf('status'), work: WORK_HEADER.test(header[1] ?? '') || FOLLOW_UPS.test(u.heading) }
+      const status = header.indexOf('status') >= 0 ? header.indexOf('status') : header.indexOf('state')
+      table = {
+        status,
+        size: header.indexOf('size'),
+        scope: header.indexOf('scope'),
+        links: header.indexOf('links'),
+        merged: status < 0 ? header.indexOf('merged') : -1,
+        work: WORK_HEADER.test(header[1] ?? '') || FOLLOW_UPS.test(u.heading),
+      }
       continue
     }
     if (!table || RULE_ROW.test(u.text)) continue
     const cells = cellsOf(u.text)
-    const title = firstSentence(cells[0] ?? '')
+    // A `Scope` table keeps its `slug — Title` cell whole; the older shapes take the first sentence.
+    const title = table.scope >= 0 ? (cells[0] ?? '') : firstSentence(cells[0] ?? '')
     if (!title) continue
+    const sizeWord = table.size >= 0 ? (cells[table.size] ?? '').toLowerCase() : ''
+    const size = SIZE_OF[sizeWord]
+    const sized = size ? { size } : {}
+    if (table.merged >= 0) {
+      const cell = cells[table.merged] ?? ''
+      const shas = [...cell.matchAll(SHAS)].map(m => m[1])
+      const prs = [...cell.matchAll(PR_NUMBERS)].map(m => `#${m[1]}`)
+      const pr = prOf(cell)
+      const parts = [`imported from ${file}`]
+      if (shas.length) parts.push(`merged at ${shas.join(', ')}`)
+      if (prs.length > 1) parts.push(`PRs ${prs.join(', ')}`)
+      if (!pr) parts.push('no PR link')
+      out.push({ title, status: 'merged', ...(pr ? { pr } : {}), source, ...linksOf(u.text, file), note: parts.join('; ') })
+      continue
+    }
     if (table.status >= 0) {
-      const status = STATUS_OF[(cells[table.status] ?? '').toLowerCase()] ?? 'inbox'
+      const word = (cells[table.status] ?? '').toLowerCase()
+      const status = STATUS_OF[word] ?? 'inbox'
       const links = linksOf(u.text, file)
       if (status === 'merged') {
-        out.push(merged(title, u.text, source, links))
+        out.push({ ...merged(title, u.text, source, links), ...sized })
         continue
       }
-      const detail = firstSentence(cells[2] ?? cells[1] ?? '', LINE_MAX)
-      out.push({ title, status, source, ...links, note: detail ? `${unverified}. ${detail}` : unverified })
+      const detail = table.scope >= 0 ? (cells[table.scope] ?? '') : firstSentence(cells[2] ?? cells[1] ?? '', LINE_MAX)
+      const linkCell = table.links >= 0 ? (rawCellsOf(u.text)[table.links] ?? '') : ''
+      const tail = [detail, linkCell ? `Links: ${linkCell}` : ''].filter(Boolean).join(' ')
+      // A row in flight or blocked is not unverified work to pick: the note names the row's own state.
+      const lead = status === 'building' || status === 'blocked' ? `imported from ${file}; row ${word[0]?.toUpperCase()}${word.slice(1)}` : unverified
+      out.push({ title, status, ...sized, source, ...links, note: tail ? `${lead}. ${tail}` : lead })
       continue
     }
     if (!table.work) continue
@@ -227,6 +286,28 @@ export function itemsFromBacklogMd(text: string, file: string): Partial<Item>[] 
     }
     const status = DEFERRED_HEADING.test(u.heading) ? 'parked' : 'inbox'
     out.push({ title, status, source, note: detail ? `${unverified}. ${detail}` : unverified })
+  }
+  return out
+}
+
+/**
+ * The open decisions of a queue, as rules to stop on before dispatch: one per bullet under a heading that names decisions,
+ * `Stop before <the decision>: open user decision since <date>.`, the date the bullet's first (the ` · user · ` owner
+ * segments dropped), `since` left out when it names none.
+ */
+export function decisionsFromBacklogMd(text: string, file: string): MigrateRule[] {
+  const out: MigrateRule[] = []
+  for (const u of units(text)) {
+    if (u.kind !== 'bullet' || !DECISION_HEADING.test(u.heading)) continue
+    let body = stripMd(u.text.replace(/^\[[ xX]\]\s+/, ''))
+    const date = /\b(\d{4}-\d{2}-\d{2})\b/.exec(body)?.[1]
+    body = body
+      .replace(/^\d{4}-\d{2}-\d{2}\s*(?:[·•|–—-]\s*)?/, '')
+      .replace(/^(?:[\w-]+\s*[·•|]\s*)+/, '')
+      .replace(/[.\s]+$/, '')
+      .trim()
+    if (!body) continue
+    out.push({ group: 'before dispatch', line: `Stop before ${body}: open user decision${date ? ` since ${date}` : ''}.`, source: `${file}: ${u.heading}` })
   }
   return out
 }
@@ -400,6 +481,38 @@ export function activeFromBranches(branches: string[], ledgers: SourceText[]): A
     })
   }
   return out
+}
+
+// ---------- spec stubs ----------
+
+/**
+ * The spec an imported item starts with, under the five headings of templates/spec.md: What is the note (the title when
+ * the note is empty), Why names the source, Acceptance has one line, Out of scope and Open are empty, so the item is ready
+ * once its needs are merged.
+ */
+export function specStub(id: string, title: string, note: string | undefined, source: string | undefined): string {
+  const what = (note ?? '').trim() || title.trim()
+  const why = (source ?? '').trim()
+  return [
+    `# ${id}: ${title.trim()}`,
+    '',
+    '## What',
+    '',
+    what,
+    '',
+    '## Why',
+    '',
+    why ? `Imported from ${why.replace(/\.$/, '')}.` : 'Imported by the migration.',
+    '',
+    '## Acceptance',
+    '',
+    '- [ ] As described in What.',
+    '',
+    '## Out of scope',
+    '',
+    '## Open',
+    '',
+  ].join('\n')
 }
 
 // ---------- history ----------

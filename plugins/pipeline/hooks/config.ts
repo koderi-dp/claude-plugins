@@ -1,6 +1,6 @@
 // The config: defaults, validation and the draft made from what a project shows. Pure.
 
-import type { Config, ModelSpec, Role } from '../types'
+import type { Config, ModelSpec, Role, Runner } from '../types'
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'default'] as const
 const ROLES: Role[] = ['implementer', 'reviewer', 'final', 'escalate']
@@ -18,7 +18,8 @@ export const DEFAULTS: Config = {
     final: { model: 'opus', effort: 'xhigh' },
     escalate: { model: 'opus', effort: 'high' },
   },
-  limits: { fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000 },
+  limits: { fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000, parallel: 1 },
+  runner: 'subagent',
   merge: 'pr',
   mergeMethod: 'merge',
   retain: { plans: true, briefs: false, superpowers: false },
@@ -115,7 +116,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
       }
   }
 
-  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify'])
+  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify'])
   const extra = Object.fromEntries(Object.entries(raw).filter(([k]) => !known.has(k)))
   const config: Config = {
     ...extra,
@@ -127,6 +128,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
     protectedPaths: strings('protectedPaths', DEFAULTS.protectedPaths),
     models,
     limits,
+    runner: oneOf<Runner>('runner', ['subagent', 'session'] as const, DEFAULTS.runner),
     merge: oneOf('merge', ['auto', 'pr'] as const, DEFAULTS.merge),
     mergeMethod: oneOf('mergeMethod', ['merge', 'squash'] as const, DEFAULTS.mergeMethod),
     stop: strings('stop', DEFAULTS.stop),
@@ -181,6 +183,14 @@ function dirsIn(sentence: string, dirs: string[]): string[] {
   return out
 }
 
+const BROAD = 'broad: narrow to the auth, migration, payment or parser folders'
+
+/** A risky path that would send most diffs to review: a whole top-level directory (`packages/**`) or a whole `src` tree (`apps/web/src/**`). */
+function isBroad(glob: string): boolean {
+  const segments = glob.replace(/\/\*\*$/, '').split('/')
+  return segments.length === 1 || segments.at(-1) === 'src'
+}
+
 /** The stop conditions a sentence lists after "ask the user only for", "stop and ask" or "ask only when", or the action of "do not ... without asking". */
 function stopsIn(sentence: string): string[] {
   const asking = /\bdo not\s+(.+?)\s+without asking\b/i.exec(sentence)
@@ -202,7 +212,7 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
   const make = found.makeTargets
   const npm = (name: string) => `npm run ${name}`
 
-  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'afterMerge', 'retain', 'notify']) sources[key] = 'default'
+  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'limits.parallel', 'runner', 'afterMerge', 'retain', 'notify']) sources[key] = 'default'
 
   const fast = ['check:fast', 'lint:fast'].find(n => n in scripts)
   if (fast) {
@@ -240,7 +250,9 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
   const lines = sentences(found.prose)
   const risky = [...new Set(lines.filter(s => RISKY.test(s)).flatMap(s => dirsIn(s, found.dirs)))]
   config.riskyPaths = risky
-  sources['riskyPaths'] = risky.length ? `prose naming risky code (${risky.length} director${risky.length === 1 ? 'y' : 'ies'})` : NONE
+  const broad = risky.filter(isBroad)
+  const warning = broad.length ? `; ${broad.join(', ')} ${broad.length === 1 ? 'is' : 'are'} ${BROAD}` : ''
+  sources['riskyPaths'] = risky.length ? `prose naming risky code (${risky.length} director${risky.length === 1 ? 'y' : 'ies'})${warning}` : NONE
 
   const stops = [...new Set(lines.flatMap(stopsIn))]
   if (stops.length) {

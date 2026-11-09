@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Pipeline | Prompt Band Redesign</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#151516;color:#e8e8ea}
+*{box-sizing:border-box}body{margin:0;padding:35px 16px}button{font:inherit;cursor:pointer}button:focus-visible{outline:2px solid #b6a5ff;outline-offset:3px}
+.demo{max-width:890px;margin:0 auto}.intro{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:23px;flex-wrap:wrap}.eyebrow{font-size:10px;font-weight:700;letter-spacing:1.6px;color:#a495e4;margin:0 0 7px}.title{font-size:22px;font-weight:680;letter-spacing:-.6px;margin:0 0 5px}.desc{font-size:12px;color:#93939b;margin:0}
+.controls{display:flex;gap:7px;flex-wrap:wrap}.group{display:flex;padding:3px;border:1px solid #303035;background:#1c1d20;border-radius:9px}.group button{font-size:11px;border:0;border-radius:6px;padding:7px 11px;background:transparent;color:#9d9da7}.group button.selected{background:#38333f;color:#f5f1ff}
+.workspace{padding:22px;background:#19191b;border:1px solid #34343a;border-radius:15px;box-shadow:0 24px 70px rgba(0,0,0,.2)}.chat-placeholder{height:190px;display:flex;flex-direction:column;justify-content:flex-end;padding:0 10px 18px;gap:13px}.fake-line{height:8px;border-radius:5px;background:#28282c}.fake-msg{font-size:12px;color:#a8a8b0}.fake-msg strong{color:#dbdbe1;font-weight:550}
+.band{background:#25242a;border:1px solid #494153;border-radius:11px;padding:10px 13px 11px;box-shadow:0 4px 15px #0002;position:relative;overflow:hidden}.band:before{content:"";position:absolute;inset:0 auto 0 0;width:2px;background:var(--status-color,#b39bff)}.top{display:flex;align-items:center;gap:9px;min-width:0}.indicator{width:7px;height:7px;border-radius:50%;background:var(--status-color,#b39bff);box-shadow:0 0 0 3px color-mix(in srgb,var(--status-color,#b39bff) 12%,transparent);flex:none}.identifier{font-size:11px;color:#a8a3b6;font-weight:650;font-variant-numeric:tabular-nums}.work-title{font-size:12px;font-weight:650;color:#f0eff2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}.state{border:1px solid color-mix(in srgb,var(--status-color,#b39bff) 30%,transparent);background:color-mix(in srgb,var(--status-color,#b39bff) 11%,transparent);color:var(--status-color,#b39bff);font-size:9px;line-height:1;padding:5px 7px;border-radius:5px;font-weight:700;letter-spacing:.6px;white-space:nowrap}.count{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;color:#d6d2db;white-space:nowrap}.separator{height:13px;width:1px;background:#43404a;flex:none}.chevron{display:grid;place-items:center;background:transparent;color:#a9a6b0;border:0;padding:2px}.chevron svg{transition:transform .15s}.chevron.open svg{transform:rotate(180deg)}
+.bottom{display:flex;align-items:center;gap:13px;margin-top:10px;margin-left:16px}.segments{display:flex;gap:4px;width:145px;flex:none}.seg{height:5px;border-radius:4px;flex:1;background:#404048}.seg.accepted{background:#69c99a}.seg.current{background:var(--status-color,#a990fc)}.description{font-size:11px;color:#a4a2ac;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}.clock{font-size:11px;color:#a5a1af;font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:auto}
+.input{margin-top:8px;display:flex;align-items:center;gap:10px;border-radius:13px;background:#2c2c2f;border:1px solid #414146;min-height:49px;padding:0 14px}.plus{font-size:21px;color:#c1c1c8;line-height:1}.prompt{font-size:13px;color:#85858e;flex:1}.mic{font-size:18px;color:#cacad1}
+.details{margin-top:8px;border-radius:10px;border:1px solid #37353e;background:#201f24;padding:12px 14px}.details-head{display:flex;justify-content:space-between;color:#adaab6;font-size:11px;margin-bottom:10px}.task{display:flex;align-items:center;gap:9px;font-size:11px;padding:6px 0;color:#b9b7c0}.task .check{width:15px;height:15px;border:1px solid #5d5764;border-radius:50%;display:grid;place-items:center;font-size:9px;flex:none}.task .check.accepted{color:#79ddb0;border-color:#397258;background:#273f35}.task .check.current{border-color:var(--status-color,#b39bff);color:var(--status-color,#b39bff)}
+.caption{margin-top:16px;color:#9b99a2;font-size:12px;line-height:1.7}.caption strong{color:#e5dfe9}
+.band.compact{padding:10px 12px}.band.compact .bottom{display:none}.band.compact .work-title{font-weight:590}.band.compact .state{display:none}.band.compact .count{color:#b6a7ef}
+@media(max-width:570px){body{padding:18px 10px}.workspace{padding:12px}.chat-placeholder{height:115px}.state{display:none}.bottom{gap:9px}.segments{width:84px}.separator{display:none}.count{font-size:10px}.band{padding:11px 9px}.top{gap:6px}.bottom{margin-left:12px}.clock{font-size:10px}}
+</style>
+</head>
+<body>
+<div class="demo">
+ <div class="intro"><div><p class="eyebrow">CLAUDE CODE / PIPELINE</p><h1 class="title">Prompt progress band</h1><p class="desc">Context-first progress with no title inside the progress track.</p></div>
+ <div class="controls"><div class="group" id="modes"><button data-mode="running" class="selected">Running</button><button data-mode="review">Review</button><button data-mode="blocked">Blocked</button><button data-mode="merged">Merged</button><button data-mode="idle">Idle</button></div><div class="group" id="density"><button data-density="normal" class="selected">Standard</button><button data-density="compact">Compact</button></div></div></div>
+ <div class="workspace">
+  <div class="chat-placeholder"><div class="fake-msg"><strong>p1</strong> · planning → building · plan written and task 1/3 dispatched</div><div class="fake-line" style="width:79%"></div><div class="fake-line" style="width:58%"></div><div class="fake-line" style="width:67%"></div></div>
+  <div class="band" id="band" style="--status-color:#b69aff">
+   <div class="top"><span class="indicator"></span><span class="identifier" id="id">p1</span><span class="work-title" id="work">Show saved password and SSH key state in custom credentials</span><span class="state" id="status">BUILDING</span><span class="separator"></span><span class="count" id="count">Task 1 / 3</span><button class="chevron" id="expand" aria-label="Show task details" aria-expanded="false"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button></div>
+   <div class="bottom"><div class="segments" id="segments"><span class="seg current"></span><span class="seg"></span><span class="seg"></span></div><span class="description" id="activity">Implementer · Sonnet 5.5 · running npm run lint</span><span class="clock" id="time">3:44</span></div>
+  </div>
+  <div class="details" id="details" hidden><div class="details-head"><b>Execution tasks</b><span id="detail-summary">0 accepted · 1 running</span></div><div id="tasks"></div></div>
+  <div class="input"><span class="plus">+</span><span class="prompt">Type / for commands</span><span class="mic">♩</span></div>
+ </div>
+ <p class="caption"><strong>Designed for a 650–800px prompt area.</strong> The bar uses three independent segments: green = accepted, violet = currently running, gray = pending. The percentage never implies a task is complete before its acceptance. The full title remains available through expansion.</p>
+</div>
+<script>
+(()=>{
+let mode='running',density='normal',expanded=false;
+const data={
+ running:{color:'#b69aff',state:'BUILDING',count:'Task 1 / 3',activity:'Implementer · Sonnet 5.5 · running npm run lint',time:'3:44',accepted:0,current:0,summary:'0 accepted · 1 running'},
+ review:{color:'#b69aff',state:'REVIEW',count:'Task 3 / 3',activity:'Reviewer · Opus · validating final diff',time:'18:26',accepted:2,current:2,summary:'2 accepted · 1 in review'},
+ blocked:{color:'#f0b56f',state:'BLOCKED',count:'Task 2 / 3',activity:'Lint check failed · needs attention',time:'14:08',accepted:1,current:1,summary:'1 accepted · 1 blocked'},
+ merged:{color:'#6dd9a1',state:'MERGED',count:'3 / 3 accepted',activity:'PR merged · all checks passed',time:'24:12',accepted:3,current:-1,summary:'3 accepted · merged'},
+ idle:{color:'#96929f',state:'READY',count:'3 tasks',activity:'Next in queue · waiting to start',time:'—',accepted:0,current:-1,summary:'3 pending'}
+};
+const tasks=['Add API to expose saved secret state','Update credential field-state helpers','Wire password and SSH key forms'];
+const $=(id)=>document.getElementById(id);
+function render(){const d=data[mode];$('band').style.setProperty('--status-color',d.color);$('band').classList.toggle('compact',density==='compact');$('status').textContent=d.state;$('count').textContent=d.count;$('activity').textContent=d.activity;$('time').textContent=d.time;$('segments').innerHTML=tasks.map((_,i)=>`<span class="seg ${i<d.accepted?'accepted':i===d.current?'current':''}"></span>`).join('');$('detail-summary').textContent=d.summary;$('tasks').innerHTML=tasks.map((t,i)=>`<div class="task"><span class="check ${i<d.accepted?'accepted':i===d.current?'current':''}">${i<d.accepted?'✓':i===d.current?'•':''}</span><span>${t}</span></div>`).join('');$('details').hidden=!expanded;$('expand').classList.toggle('open',expanded);$('expand').setAttribute('aria-expanded',String(expanded));document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('selected',b.dataset.mode===mode));document.querySelectorAll('[data-density]').forEach(b=>b.classList.toggle('selected',b.dataset.density===density));}
+document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.mode;render()}));document.querySelectorAll('[data-density]').forEach(b=>b.addEventListener('click',()=>{density=b.dataset.density;render()}));$('expand').addEventListener('click',()=>{expanded=!expanded;render()});render();
+})();
+</script>
+</body>
+</html>

@@ -7,7 +7,8 @@ test('DEFAULTS carries every key of the config', () => {
   expect(DEFAULTS.mainBranch).toBe('main')
   expect(DEFAULTS.branch).toBe('feat/<id>')
   expect(DEFAULTS.merge).toBe('pr')
-  expect(DEFAULTS.limits).toEqual({ fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000 })
+  expect(DEFAULTS.limits).toEqual({ fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000, parallel: 1 })
+  expect(DEFAULTS.runner).toBe('subagent')
   expect(Object.keys(DEFAULTS.models).sort()).toEqual(['escalate', 'final', 'implementer', 'reviewer'])
   expect(DEFAULTS.notify).toBe('milestones')
   expect(DEFAULTS.stop.length).toBeGreaterThan(0)
@@ -21,6 +22,14 @@ test('normalizeConfig fills missing keys from the defaults without problems', ()
   expect(config.limits).toEqual(DEFAULTS.limits)
   expect(config.models.reviewer).toEqual(DEFAULTS.models.reviewer)
   expect(config.stop).toEqual(DEFAULTS.stop)
+})
+
+test('normalizeConfig: runner is subagent or session, limits.parallel a number', () => {
+  expect(normalizeConfig({ runner: 'session', limits: { parallel: 3 } })).toMatchObject({ config: { runner: 'session', limits: { ...DEFAULTS.limits, parallel: 3 } }, problems: [] })
+  const { config, problems } = normalizeConfig({ runner: 'thread', limits: { parallel: 'two' } })
+  expect(problems).toEqual(['limits.parallel: expected a number, got string', 'runner: expected "subagent" or "session", got "thread"'])
+  expect(config.runner).toBe('subagent')
+  expect(config.limits.parallel).toBe(1)
 })
 
 test('normalizeConfig names a wrong merge value and falls back to the default', () => {
@@ -205,4 +214,27 @@ test('retain: defaults keep plans and drop briefs and superpowers; a wrong type 
   const b = normalizeConfig({ retain: { briefs: true, plans: 'yes' } })
   expect(b.config.retain).toEqual({ plans: true, briefs: true, superpowers: false })
   expect(b.problems).toContain('retain.plans: expected a boolean, got string')
+})
+
+test('draftConfig flags a broad risky path: a top-level directory or a whole src tree, named in the source with the narrowing hint', () => {
+  const { config, sources } = draftConfig({
+    scripts: {},
+    makeTargets: [],
+    ci: '',
+    dirs: ['apps', 'packages', 'services', 'docs'],
+    prose: [
+      'All of apps/web/src and packages/ touch auth and payment code; the migrations live in apps/web/migrations.',
+      'The parser under services/pdf-renderer/src/ is risky too, and so is every lock in services/.',
+    ],
+  })
+  expect(config.riskyPaths).toEqual(['apps/web/src/**', 'packages/**', 'apps/web/migrations/**', 'services/pdf-renderer/src/**', 'services/**'])
+  expect(sources['riskyPaths']).toBe(
+    'prose naming risky code (5 directories); apps/web/src/**, packages/**, services/pdf-renderer/src/**, services/** are broad: narrow to the auth, migration, payment or parser folders',
+  )
+  // A narrow path carries no warning.
+  const narrow = draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: ['apps'], prose: ['The auth code under apps/web/src/server/auth is risky.'] })
+  expect(narrow.sources['riskyPaths']).toBe('prose naming risky code (1 directory)')
+  expect(draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: ['apps'], prose: ['Only apps/ holds auth code.'] }).sources['riskyPaths']).toBe(
+    'prose naming risky code (1 directory); apps/** is broad: narrow to the auth, migration, payment or parser folders',
+  )
 })

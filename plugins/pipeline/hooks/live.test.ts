@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { AgentRun, LiveEntry } from '../types'
-import { DROP_MS, parseLive, withEntry, withoutEntry } from './live'
+import { DROP_MS, parseLive, siblingsOf, withEntry, withoutEntry } from './live'
+import { STALE_MS } from './watch'
 
 const T0 = Date.parse('2026-11-05T10:00:00Z')
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -37,4 +38,17 @@ test('withoutEntry removes one session and leaves the rest', () => {
   const live = { sessions: { a: entry(T0), b: entry(T0) } }
   expect(Object.keys(withoutEntry(live, 'a').sessions)).toEqual(['b'])
   expect(Object.keys(withoutEntry(live, 'zzz').sessions)).toEqual(['a', 'b'])
+})
+
+test('siblingsOf: every other entry as a sibling, stale past three minutes, the excluded ids left out', () => {
+  const now = T0 + 10 * 60_000
+  const live = { sessions: { self: entry(now), fresh: entry(now - STALE_MS, { branch: 'feat/p12', item: 'p12', title: 'p12 · CSV export' }), old: entry(now - STALE_MS - 1), child: entry(now, { item: 'p3' }) } }
+  const siblings = siblingsOf(live, 'self', now, ['child'])
+  expect(siblings.map(s => s.sessionId)).toEqual(['fresh', 'old'])
+  expect(siblings[0]).toEqual({ sessionId: 'fresh', title: 'p12 · CSV export', cwd: '/p/main', branch: 'feat/p12', item: 'p12', seenAt: iso(now - STALE_MS), agents: [run], signals: [], isStale: false })
+  expect(siblings[1]).toMatchObject({ sessionId: 'old', isStale: true })
+  expect(siblings[1]).not.toHaveProperty('branch')
+  expect(siblingsOf(live, 'self', now)).toHaveLength(3)
+  expect(siblingsOf({ sessions: { self: entry(now) } }, 'self', now)).toEqual([])
+  expect(siblingsOf({ sessions: { bad: entry(now, { seenAt: 'yesterday' }) } }, 'self', now)[0]!.isStale).toBe(true)
 })
