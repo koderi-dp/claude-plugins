@@ -4,7 +4,7 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 import type { AgentRun, Backlog, ChildSession, Config, Item, Ledger, Live, LiveEntry, Panel, QueueFilter, Sibling, Signal, View } from '../types'
 import { addItem, emptyBacklog, moveItem, readiness, removeItem, renderBacklogMd, updateItem } from './backlog'
 import type { Readiness } from './backlog'
-import { itemState, ledgerLine, slimGet } from './answers'
+import { compactSignal, itemState, ledgerLine, slimGet } from './answers'
 import { cleanList, planOf } from './clean'
 import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, serialize } from './files'
@@ -34,7 +34,7 @@ const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const TICK_MS = 30_000
 const HEARTBEAT_MS = 2000
-const WAKE_PROMPT = 'pipeline: check the watchdog signals with the pipeline tool'
+const WAKE_PROMPT = `pipeline: check the watchdog signals with the pipeline tool: ${TOOL} {"action":"signals"}`
 /** The log file of a child, under the main checkout's .git (shared by every worktree, never committed). */
 const childLog = (found: string, id: string) => `${found}/.git/pipeline/${id}.log`
 const LOG_WRITE_MS = 1000
@@ -44,6 +44,7 @@ const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', '
 const TOOL_DESCRIPTION =
   'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
   '`get` { id?, titles?, full? } → compact JSON { active: { id, title, status, note, spec, plan, branch, worktree } | null, resume, signals, children, siblings, counts, next, config }: the active item (planning, building or review), its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (no log), the other sessions on the repository in short, the count per status (planning counts as building), the first three ready (else inbox) items with the reason, and the config keys a run reads (runner, merge, mergeMethod, checks, limits, riskyPaths, protectedPaths, models, taskReview); with `id` also `item`, that item\'s full record and readiness; with `titles` also `titles`, every item as `<id> <status> <title>`; `full: true` answers the whole { config, backlog, readiness, active, resume, signals, children, siblings } instead, large on a long backlog, never needed during a run; ' +
+  '`signals` → only the open watchdog signals as compact JSON [{ kind, agent, agentId?, detail, at }], marked delivered, or `no signals`: the watchdog check; ' +
   '`status` { id? } → the status block, or one item\'s ledger as text; ' +
   '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers one line, `added p29 · inbox · no spec` (the status after settling, with the reason an inbox item is not ready); ' +
   '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title) and answers `p1 · building` (with `set <fields>` for the others); ' +
@@ -63,7 +64,7 @@ const TOOL_DESCRIPTION =
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
@@ -504,6 +505,13 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     }
     // Each signal is delivered once: what this answer carries is marked.
     if (open.length) await markDelivered($)
+    return answer
+  }
+  if (e.action === 'signals') {
+    const open = (await read($, signals)).filter(s => !s.delivered)
+    if (!open.length) return 'no signals'
+    const answer = JSON.stringify(open.map(compactSignal))
+    await markDelivered($)
     return answer
   }
   if (e.action === 'clean') {

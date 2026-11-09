@@ -133,6 +133,26 @@ test('Review Focus 3: silent after the limit, dead after a restart with the live
   expect(live(files).sessions['self']!.agents).toEqual([])
   expect(pushes).toHaveLength(2)
 
+  // The signals action answers only the open signals, compact, and delivers them; get and signals then have none.
+  const sig = text(await call($, { action: 'signals' }))
+  expect(sig).not.toContain('\n')
+  expect(sig.length).toBeLessThan(600)
+  const parsed = JSON.parse(sig) as Record<string, unknown>[]
+  expect(parsed.map(s => s['kind'])).toEqual(['silent', 'dead'])
+  expect(parsed[0]).toEqual({ kind: 'silent', agent: 'Implement Task 1', agentId: 'agent-t1', detail: expect.any(String), at: expect.any(Number) })
+  expect(text(await call($, { action: 'signals' }))).toBe('no signals')
+  expect((await got($)).signals).toEqual([])
+})
+
+test('get delivers the open signals once too', async ($, on) => {
+  const backlog = JSON.stringify({ version: 1, items: [{ id: 'p12', title: 'CSV export', status: 'building', ledger: 'docs/pipeline/ledgers/p12.json' }] })
+  const ledger = JSON.stringify({ item: 'p12', tasks: [{ n: 1, title: 'a', status: 'running', dispatches: [] }], rulings: [], blockers: [], tokens: 0, resume: { task: 1, state: 'implementer dispatched', lastVerified: 'abc', at: '2026-11-05T09:00:00.000Z' } })
+  const { clock, state } = world(on, { [CONFIG]: config(), [BACKLOG]: backlog, [`${DIR}/ledgers/p12.json`]: ledger })
+  await start($)
+  await spawn($, 'Implement Task 1')
+  await step($, 'agent-t1')
+  await clock.advance(10 * MIN)
+  await start($)
   const first = await got($)
   expect(first.signals.map(s => s['kind'])).toEqual(['silent', 'dead'])
   expect(first.active).toMatchObject({ id: 'p12' })
@@ -214,7 +234,7 @@ test('wake-up: one ScheduleWakeup while an agent runs, never two pending, none w
   await spawn($, 'Implement Task 1')
   await complete($, {})
   expect(wakeups).toHaveLength(1)
-  expect(wakeups[0]).toMatchObject({ delaySeconds: 600, prompt: 'pipeline: check the watchdog signals with the pipeline tool' })
+  expect(wakeups[0]).toMatchObject({ delaySeconds: 600, prompt: 'pipeline: check the watchdog signals with the pipeline tool: mcp__pipeline__pipeline {"action":"signals"}' })
   await complete($, {})
   expect(wakeups).toHaveLength(1)
   await clock.advance(10 * MIN + 1000)
