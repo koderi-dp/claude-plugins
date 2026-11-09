@@ -267,6 +267,8 @@ export type Attempt = {
   verdict?: Verdict
   /** A line of its own, dim, with no model or time: how an accepted task was reviewed. */
   isNote?: boolean
+  /** The dispatch has no result yet: it is the one still running. */
+  isOpen?: boolean
 }
 
 const verdictOf = (result: string): Verdict | undefined => (/FIX REQUIRED/i.test(result) ? 'FIX REQUIRED' : /APPROVED/i.test(result) ? 'APPROVED' : undefined)
@@ -285,7 +287,9 @@ export function attemptsOf(task: Pick<TaskRecord, 'dispatches'> & Partial<Pick<T
       label = builds === 1 ? 'Build' : `Fix ${builds - 1} of ${fixRounds}`
     } else label = d.role === 'reviewer' ? 'Review' : d.role === 'final' ? 'Final review' : 'Escalation'
     const verdict = verdictOf(d.result ?? '')
-    return { label, model: shortModel(d.model), time: fmtClock((d.minutes ?? 0) * 60_000), ...(verdict ? { verdict } : {}) }
+    // A dispatch with no result yet is the one still running: no clock, no check.
+    const isOpen = !(d.result ?? '').trim() && !(d.minutes ?? 0)
+    return { label, model: shortModel(d.model), time: fmtClock((d.minutes ?? 0) * 60_000), ...(verdict ? { verdict } : {}), ...(isOpen ? { isOpen: true } : {}) }
   })
   return note ? [...trail, { label: note, model: '', time: '', isNote: true }] : trail
 }
@@ -300,7 +304,8 @@ export function reviewNote(task: Partial<Pick<TaskRecord, 'status' | 'review'>>,
 }
 
 /** An attempt as one line: `Build · Sonnet · 3:20 ✓`, `Review · Opus · 0:58 · FIX REQUIRED`. */
-export const attemptText = (a: Attempt): string => (a.isNote ? a.label : `${line([a.label, a.model, a.time])}${a.verdict ? ` · ${a.verdict}` : ' ✓'}`)
+export const attemptText = (a: Attempt): string =>
+  a.isNote ? a.label : a.isOpen ? `${line([a.label, a.model])} · in progress` : `${line([a.label, a.model, a.time])}${a.verdict ? ` · ${a.verdict}` : ' ✓'}`
 
 /**
  * The current task's second line: in a fix round, `Fix round 1 of 3 · after review: FIX REQUIRED`; with an agent
@@ -415,7 +420,7 @@ export function taskRowsOf(d: TaskRowsInput): TaskRow[] {
     }
     row.lead = leadLine(d.ledger, d.now)
     row.history = attempts.length
-      ? attempts.map(a => ({ text: attemptText(a), kind: a.isNote ? ('muted' as const) : a.verdict === 'FIX REQUIRED' ? ('blocked' as const) : ('done' as const) }))
+      ? attempts.map(a => ({ text: attemptText(a), kind: a.isNote || a.isOpen ? ('muted' as const) : a.verdict === 'FIX REQUIRED' ? ('blocked' as const) : ('done' as const) }))
       : finishedOfTask(d.agents, task, d.ledger)
           .slice(-3)
           .reverse()

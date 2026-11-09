@@ -438,7 +438,7 @@ test('taskRowsOf: in a fix round with no agent, the current task reads Fix round
   expect(rows[1]!.history).toEqual([
     { text: 'Build · Sonnet 5.5 · 3:20 ✓', kind: 'done' },
     { text: 'Review · Opus 5.5 · 0:58 · FIX REQUIRED', kind: 'blocked' },
-    { text: 'Fix 1 of 2 · Sonnet 5.5 · 0:00 ✓', kind: 'done' },
+    { text: 'Fix 1 of 2 · Sonnet 5.5 · in progress', kind: 'muted' },
   ])
   expect(rows[2]).toEqual({ n: 3, kind: 'blocked', eyebrow: '03 · BLOCKED', badge: 'Blocked', badgeKind: 'blocked', title: 'The Page tab follows the drag live', sub: 'blocked: the schema is undecided', history: [] })
 })
@@ -466,4 +466,19 @@ test('activityLines: one line per accepted task with the implementer, the model,
   ]
   expect(activityLines(tasks, 'off')).toEqual(['✓ Task 1 accepted · Implementer (Opus 5.5) · 4:34 · review skipped', '✓ Task 2 accepted · Implementer (Sonnet 5.5) · 4:00 · review APPROVED', '✓ Task 3 accepted · review skipped'])
   expect(activityLines(tasks, 'risky')[0]).toBe('✓ Task 1 accepted · Implementer (Opus 5.5) · 4:34 · lead read the diff')
+})
+
+test('attemptsOf: a dispatch without a result is the running one, drawn as in progress without a check', () => {
+  const task = {
+    dispatches: [
+      { role: 'implementer' as const, model: 'claude-sonnet-5-5', effort: 'medium', tokens: 1000, minutes: 3.33, result: 'done' },
+      { role: 'reviewer' as const, model: 'claude-opus-5-5', effort: 'high', tokens: 500, minutes: 1, result: 'FIX REQUIRED: x' },
+      { role: 'implementer' as const, model: 'claude-sonnet-5-5', effort: 'medium', tokens: 0, minutes: 0, result: '' },
+    ],
+  }
+  const lines = attemptsOf(task, 2).map(attemptText)
+  expect(lines[0]).toMatch(/^Build · .* ✓$/)
+  expect(lines[1]).toContain('FIX REQUIRED')
+  expect(lines[2]).toBe(`Fix 1 of 2 · ${lines[2].split(' · ')[1]} · in progress`)
+  expect(lines[2]).not.toContain('✓')
 })
