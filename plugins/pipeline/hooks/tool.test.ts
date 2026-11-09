@@ -443,8 +443,8 @@ test('0.2.2: get answers a slim compact JSON under 8,000 characters for a 71-ite
     { id: 'p6', title: expect.stringContaining('p6-slug'), size: 'L', reason: 'ready' },
     { id: 'p7', title: expect.stringContaining('p7-slug'), size: 'S', reason: 'ready' },
   ])
-  expect(Object.keys(got.config).sort()).toEqual(['checks', 'limits', 'merge', 'mergeMethod', 'models', 'protectedPaths', 'riskyPaths', 'runner'])
-  expect(got.config).toMatchObject({ runner: 'subagent', merge: 'pr', mergeMethod: 'merge', limits: { fixRounds: expect.any(Number), silentMinutes: expect.any(Number) }, models: { implementer: expect.any(Object), final: expect.any(Object) } })
+  expect(Object.keys(got.config).sort()).toEqual(['checks', 'limits', 'merge', 'mergeMethod', 'models', 'protectedPaths', 'riskyPaths', 'runner', 'taskReview'])
+  expect(got.config).toMatchObject({ runner: 'subagent', taskReview: 'risky', merge: 'pr', mergeMethod: 'merge', limits: { fixRounds: expect.any(Number), silentMinutes: expect.any(Number) }, models: { implementer: expect.any(Object), final: expect.any(Object) } })
   // The full answer is today's shape, pretty-printed.
   const all = JSON.parse(full)
   expect(Object.keys(all).sort()).toEqual(['active', 'backlog', 'children', 'config', 'readiness', 'resume', 'siblings', 'signals'])

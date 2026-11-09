@@ -1,6 +1,6 @@
 // The status block of spec §9. Pure: takes and returns plain data. One item's ledger as text is in ledger.ts.
 
-import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, Role, Signal, TaskRecord } from '../types'
+import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, Role, Signal, TaskRecord, TaskReview } from '../types'
 import type { Readiness } from './backlog'
 
 export type StatusInput = {
@@ -234,6 +234,8 @@ export type Attempt = {
   /** The dispatch's minutes as a clock, `3:20`. */
   time: string
   verdict?: Verdict
+  /** A line of its own, dim, with no model or time: how an accepted task was reviewed. */
+  isNote?: boolean
 }
 
 const verdictOf = (result: string): Verdict | undefined => (/FIX REQUIRED/i.test(result) ? 'FIX REQUIRED' : /APPROVED/i.test(result) ? 'APPROVED' : undefined)
@@ -242,9 +244,10 @@ const verdictOf = (result: string): Verdict | undefined => (/FIX REQUIRED/i.test
  * A task's attempt trail from its dispatches, in order: the first implementer dispatch is the Build, each later
  * one a fix round counted within the task against `fixRounds`; a review carries the verdict its result names.
  */
-export function attemptsOf(task: Pick<TaskRecord, 'dispatches'> | undefined, fixRounds: number): Attempt[] {
+export function attemptsOf(task: Pick<TaskRecord, 'dispatches'> & Partial<Pick<TaskRecord, 'status' | 'review'>> | undefined, fixRounds: number, taskReview?: TaskReview): Attempt[] {
   let builds = 0
-  return (task?.dispatches ?? []).map(d => {
+  const note = task ? reviewNote(task, taskReview) : undefined
+  const trail = (task?.dispatches ?? []).map((d): Attempt => {
     let label: string
     if (d.role === 'implementer') {
       builds += 1
@@ -253,10 +256,20 @@ export function attemptsOf(task: Pick<TaskRecord, 'dispatches'> | undefined, fix
     const verdict = verdictOf(d.result ?? '')
     return { label, model: shortModel(d.model), time: fmtClock((d.minutes ?? 0) * 60_000), ...(verdict ? { verdict } : {}) }
   })
+  return note ? [...trail, { label: note, model: '', time: '', isNote: true }] : trail
+}
+
+/**
+ * How an accepted task was reviewed when no independent reviewer ran (`review.kind` is `lead-diff`):
+ * `review skipped (taskReview off)` when the config turns per-task review off, `lead read the diff` otherwise.
+ */
+export function reviewNote(task: Partial<Pick<TaskRecord, 'status' | 'review'>>, taskReview?: TaskReview): string | undefined {
+  if (task.status !== 'accepted' || task.review?.kind !== 'lead-diff') return undefined
+  return taskReview === 'off' ? 'review skipped (taskReview off)' : 'lead read the diff'
 }
 
 /** An attempt as one line: `Build · Sonnet · 3:20 ✓`, `Review · Opus · 0:58 · FIX REQUIRED`. */
-export const attemptText = (a: Attempt): string => `${line([a.label, a.model, a.time])}${a.verdict ? ` · ${a.verdict}` : ' ✓'}`
+export const attemptText = (a: Attempt): string => (a.isNote ? a.label : `${line([a.label, a.model, a.time])}${a.verdict ? ` · ${a.verdict}` : ' ✓'}`)
 
 /**
  * The current task's second line: in a fix round, `Fix round 1 of 3 · after review: FIX REQUIRED`; with an agent

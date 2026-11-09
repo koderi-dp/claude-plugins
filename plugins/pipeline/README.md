@@ -50,6 +50,7 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 | `branch` | `feat/<id>` | The branch name per item |
 | `checks` | `{}` | `fast` per edit, `task` before each hand-back, `gate` before the PR; any tier may be omitted |
 | `riskyPaths` | `[]` | Globs; a task whose diff touches one gets an independent reviewer who probes |
+| `taskReview` | `risky` | Per-task review: `risky` gives a task an independent reviewer only when its diff touches `riskyPaths`; `always` gives every task one; `off` gives none, the lead's own reading of the diff is the review. The final review runs whatever the setting. `/pipeline config taskReview=off` |
 | `protectedPaths` | `[".github/workflows/**"]` | Globs; a subagent's Edit or Write there is denied by the mod |
 | `models` | sonnet medium, opus high, opus xhigh, opus high | `implementer`, `reviewer`, `final`, `escalate`, each `{ model, effort }` |
 | `limits` | `fixRounds` 3, `silentMinutes` 10, `taskMinutes` 45, `itemTokens` 4000000, `parallel` 1 | What the watchdog and the run skill enforce; `parallel` is how many child sessions `run all` keeps going under `runner: session` |

@@ -27,7 +27,7 @@ const PANE = 'pipeline'
 const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
 const USAGE =
   'pipeline: status [id] | panel | config [key=value] | init | add <text> | next | run <id> | run all | migrate | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
-const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify']
+const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'stop', 'afterMerge', 'retain', 'notify']
 const CONFIG_FILE = 'docs/pipeline/config.json'
 const BACKLOG_FILE = 'docs/pipeline/backlog.json'
 const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
@@ -1779,6 +1779,7 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
     activeLine: await specLine($, found, activeItem(b)),
     limitMs: limitsOf(c).taskMinutes * 60_000,
     fixRounds: limitsOf(c).fixRounds,
+    taskReview: c ? normalizeConfig(c).config.taskReview : DEFAULTS.taskReview,
     onView: (view: View) => set({ view }),
     onFilter: (filter: QueueFilter) => set({ filter, expanded: null }),
     onSearch: (search: string) => set({ search, expanded: null }),

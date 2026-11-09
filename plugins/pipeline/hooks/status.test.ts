@@ -246,7 +246,7 @@ test('tagOf: the word and the colour kind of a row', () => {
   expect(tagOf(item('p1', 'merged'))).toEqual({ text: 'Merged', kind: 'done' })
 })
 
-import { attemptText, attemptsOf, currentLine, leadLine } from './status'
+import { attemptText, attemptsOf, currentLine, leadLine, reviewNote } from './status'
 
 const FIX_TASK: Ledger['tasks'][number] = {
   n: 2,
@@ -316,4 +316,15 @@ test('bandOf: the state tag and colour per status, the count, the segments and t
   expect(merged).toMatchObject({ state: 'MERGED', color: BAND_COLORS.merged, count: '6 / 6 accepted', activity: 'Merged · #35', summary: '6 accepted · merged' })
   expect(merged.segments.every(s => s === 'accepted')).toBe(true)
   expect(bandOf(item('p12', 'ready'), { ...LEDGER, resume: undefined, tasks: LEDGER.tasks.map(t => ({ ...t, status: 'pending' as const })) }, undefined, NOW)).toMatchObject({ state: 'READY', color: BAND_COLORS.idle, count: '6 tasks', activity: 'Next in queue · waiting to start', summary: '0 accepted · 6 pending' })
+})
+
+test('taskReview: a task accepted on the lead\'s reading of the diff ends its trail with a dim line saying so', () => {
+  const accepted = { n: 3, title: 'c', status: 'accepted' as const, dispatches: [{ role: 'implementer' as const, model: 'claude-sonnet-5-5', effort: 'medium', tokens: 1, minutes: 2, result: 'done' }], review: { kind: 'lead-diff' as const, verdict: 'approved · taskReview off' } }
+  expect(attemptsOf(accepted, 3, 'off').map(attemptText)).toEqual(['Build · Sonnet 5.5 · 2:00 ✓', 'review skipped (taskReview off)'])
+  expect(attemptsOf(accepted, 3, 'risky').map(attemptText)).toEqual(['Build · Sonnet 5.5 · 2:00 ✓', 'lead read the diff'])
+  expect(attemptsOf(accepted, 3).at(-1)).toMatchObject({ label: 'lead read the diff', isNote: true })
+  expect(reviewNote(accepted, 'always')).toBe('lead read the diff')
+  // An independent review, or a task not yet accepted, adds nothing.
+  expect(attemptsOf({ ...accepted, review: { kind: 'independent', verdict: 'approved' } }, 3, 'off')).toHaveLength(1)
+  expect(attemptsOf({ ...accepted, status: 'running' }, 3, 'off')).toHaveLength(1)
 })

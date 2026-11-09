@@ -431,6 +431,29 @@ test('desktop running Overview in a fix round: a Lead line instead of an empty a
   await ui.unmount()
 })
 
+test('taskReview: an accepted task the lead read itself shows a dim line under it, naming taskReview off when the config says so', async ($, on) => {
+  const ledger = JSON.parse(LEDGER) as { tasks: Record<string, unknown>[] }
+  ledger.tasks[0] = { ...ledger.tasks[0], status: 'accepted', review: { kind: 'lead-diff', verdict: 'approved · taskReview off' } }
+  const off = JSON.stringify({ ...JSON.parse(VALID_CONFIG), taskReview: 'off' }) + '\n'
+  world(on, { ...SEED, [CONFIG]: off, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  const note = await ui.find({ type: 'Text', text: '   review skipped (taskReview off)' })
+  expect(note).toBeDefined()
+  expect(note?.props['dimColor']).toBe(true)
+  await ui.unmount()
+})
+
+test('taskReview: with the default setting the same task reads lead read the diff', async ($, on) => {
+  const ledger = JSON.parse(LEDGER) as { tasks: Record<string, unknown>[] }
+  ledger.tasks[0] = { ...ledger.tasks[0], status: 'accepted', review: { kind: 'lead-diff', verdict: 'approved' } }
+  world(on, { ...SEED, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  expect(await ui.find({ type: 'Text', text: '   lead read the diff' })).toBeDefined()
+  await ui.unmount()
+})
+
 // ---------- Queue ----------
 
 test('desktop Queue: the search narrows rows live, the filters switch groups with counts, a row expands to its note and the status command', async ($, on) => {

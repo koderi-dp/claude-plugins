@@ -4,11 +4,11 @@
 // PRs). Every other surface gets the text block of spec §9, with the view's name. Nothing is only in the panel.
 import type { EngineInterface, RenderElement } from 'claude-code'
 
-import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, View } from '../types'
+import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, TaskReview, View } from '../types'
 import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, MERGED_ROW_H, METRICS_H, ROW_H, SESSION_ROW_H, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
-import { attemptText, attemptsOf, currentLine, currentTask, displayTitle, groupCounts, heroSentence, leadLine, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, stepsOf, tagOf, taskCounter } from './status'
+import { attemptText, attemptsOf, currentLine, reviewNote, currentTask, displayTitle, groupCounts, heroSentence, leadLine, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, stepsOf, tagOf, taskCounter } from './status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
 type Element = RenderElement
@@ -56,6 +56,8 @@ export type PanelInput = StatusInput & {
   limitMs: number
   /** The fix rounds allowed per task, for the attempt trail. */
   fixRounds: number
+  /** The config's taskReview, for the line under a task the lead read itself. */
+  taskReview?: TaskReview
   onView: (view: View) => void
   onFilter: (filter: QueueFilter) => void
   onSearch: (search: string) => void
@@ -414,14 +416,14 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
     return <Svg key={a.id} source={agentCardSvg(W, c)} alt={`${c.role}: ${modelName(a.model)}${effort ? ` · ${effort}` : ''}, running, ${a.activity}`} width={W} height={AGENT_CARD_H} />
   })
   // The current task's attempts from the ledger: Build, Review with its verdict, Fix n of max; the agents atom only before the ledger has any.
-  const attempts = attemptsOf(current, d.fixRounds)
+  const attempts = attemptsOf(current, d.fixRounds, d.taskReview)
   const timeline = tasks.map(task => {
     const isCurrent = task.status === 'running' || task.status === 'fix' || (task.status === 'pending' && current?.n === task.n)
     const agent = isCurrent ? running[0] : undefined
     const mark = task.status === 'accepted' ? '✓' : task.status === 'blocked' ? '✕' : isCurrent ? '●' : '○'
     const word = task.status === 'accepted' ? 'Accepted' : task.status === 'blocked' ? 'Blocked' : task.status === 'fix' ? 'Fix round' : isCurrent ? 'In progress' : 'Pending'
     const color = task.status === 'accepted' ? DONE : task.status === 'blocked' ? BLOCKED : isCurrent ? ACCENT : undefined
-    const sub = isCurrent ? currentLine(task, agent, ledger, d.fixRounds, at) : ''
+    const sub = isCurrent ? currentLine(task, agent, ledger, d.fixRounds, at) : (reviewNote(task, d.taskReview) ?? '')
     return (
       <Box key={`task-${task.n}`} flexDirection="column">
         <Text color={color} dimColor={!color}>
@@ -447,7 +449,7 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
       {cards.length ? cards : <Text color={ACCENT}>{leadLine(ledger, at)}</Text>}
       {attempts.length
         ? attempts.map((a, i) => (
-            <Text key={`attempt-${i}`} color={a.verdict === 'FIX REQUIRED' ? BLOCKED : DONE} dimColor={a.verdict !== 'FIX REQUIRED'}>
+            <Text key={`attempt-${i}`} color={a.isNote ? undefined : a.verdict === 'FIX REQUIRED' ? BLOCKED : DONE} dimColor={a.verdict !== 'FIX REQUIRED'}>
               {attemptText(a)}
             </Text>
           ))

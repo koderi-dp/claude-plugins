@@ -11,6 +11,7 @@ test('DEFAULTS carries every key of the config', () => {
   expect(DEFAULTS.runner).toBe('subagent')
   expect(Object.keys(DEFAULTS.models).sort()).toEqual(['escalate', 'final', 'implementer', 'reviewer'])
   expect(DEFAULTS.notify).toBe('milestones')
+  expect(DEFAULTS.taskReview).toBe('risky')
   expect(DEFAULTS.stop.length).toBeGreaterThan(0)
 })
 
@@ -143,7 +144,7 @@ test('draftConfig with nothing found answers the defaults with every source name
   expect(config.stop).toEqual(DEFAULTS.stop)
   expect(sources['riskyPaths']).toBe('none found; fill in')
   expect(sources['checks.task']).toBe('none found; fill in')
-  for (const key of ['mainBranch', 'branch', 'models', 'limits.fixRounds', 'limits.silentMinutes', 'merge', 'stop', 'notify', 'afterMerge', 'protectedPaths']) {
+  for (const key of ['mainBranch', 'branch', 'models', 'limits.fixRounds', 'limits.silentMinutes', 'merge', 'stop', 'notify', 'afterMerge', 'protectedPaths', 'taskReview']) {
     expect(sources[key]).toBe('default')
   }
 })
@@ -246,4 +247,14 @@ test('draftConfig flags a broad risky path: a top-level directory or a whole src
   expect(draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: ['apps'], prose: ['Only apps/ holds auth code.'] }).sources['riskyPaths']).toBe(
     'prose naming risky code (1 directory); apps/** is broad: narrow to the auth, migration, payment or parser folders',
   )
+})
+
+test('taskReview: risky by default, always and off kept, anything else named with the allowed values', () => {
+  expect(normalizeConfig({}).config.taskReview).toBe('risky')
+  expect(normalizeConfig({ taskReview: 'always' }).config.taskReview).toBe('always')
+  expect(normalizeConfig({ taskReview: 'off' })).toMatchObject({ config: { taskReview: 'off' }, problems: [] })
+  const wrong = normalizeConfig({ taskReview: 'sometimes' })
+  expect(wrong.problems).toEqual(['taskReview: expected "risky", "always" or "off", got "sometimes"'])
+  expect(wrong.config.taskReview).toBe('risky')
+  expect(draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: [], prose: [] }).config.taskReview).toBe('risky')
 })
