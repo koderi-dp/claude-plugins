@@ -402,7 +402,7 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
   const timeline = tasks.map(task => {
     const isCurrent = task.status === 'running' || task.status === 'fix' || (task.status === 'pending' && current?.n === task.n)
     const agent = isCurrent ? running[0] : undefined
-    const dispatch = task.dispatches.at(-1)
+    const dispatch = (task.dispatches ?? []).at(-1)
     const mark = task.status === 'accepted' ? '✓' : task.status === 'blocked' ? '✕' : isCurrent ? '●' : '○'
     const word = task.status === 'accepted' ? 'Accepted' : task.status === 'blocked' ? 'Blocked' : task.status === 'fix' ? 'Fix round' : isCurrent ? 'In progress' : 'Pending'
     const color = task.status === 'accepted' ? DONE : task.status === 'blocked' ? BLOCKED : isCurrent ? ACCENT : undefined

@@ -190,14 +190,15 @@ export function stepsOf(item: Item | null, ledger: Ledger | null): Step[] {
 /** The task an agent works on: the ledger's running or fix task, else the resume block's. */
 export function currentTask(ledger: Ledger | null): TaskRecord | undefined {
   if (!ledger) return undefined
-  return ledger.tasks.find(t => t.status === 'running' || t.status === 'fix') ?? ledger.tasks.find(t => t.n === ledger.resume?.task)
+  const tasks = ledger.tasks ?? []
+  return tasks.find(t => t.status === 'running' || t.status === 'fix') ?? tasks.find(t => t.n === ledger.resume?.task)
 }
 
 const ROLES: Role[] = ['implementer', 'reviewer', 'final', 'escalate']
 
 /** The role of a running agent: the current task's last dispatch when the ledger has one, else a role its name spells, else its name. */
 export function roleOf(agent: Pick<AgentRun, 'name'>, ledger: Ledger | null): { role: string; effort?: string } {
-  const last = currentTask(ledger)?.dispatches.at(-1)
+  const last = (currentTask(ledger)?.dispatches ?? []).at(-1)
   if (last && ROLES.includes(last.role)) return { role: last.role, ...(last.effort && last.effort !== 'default' ? { effort: last.effort } : {}) }
   const name = agent.name.toLowerCase()
   if (/final/.test(name)) return { role: 'final' }

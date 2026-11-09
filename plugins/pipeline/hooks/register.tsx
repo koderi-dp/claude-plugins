@@ -330,10 +330,17 @@ async function readLedger($: EngineInterface, found: string, id: string): Promis
   return loadJson<Ledger>($, paths(found).ledger(id), ledgerFile(id))
 }
 
-/** The ledger of an item, when its file is on disk and parses. */
+/**
+ * The ledger of an item, when its file is on disk and parses, normalised through the merge so every consumer sees
+ * the arrays (a hand-made file, or one from another tool, may leave `tasks`, `rulings` or `blockers` out).
+ */
 async function loadLedger($: EngineInterface, found: string, id: string): Promise<Ledger | null> {
   try {
-    return (await readLedger($, found, id)).value
+    const parsed = (await readLedger($, found, id)).value
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const set = parsed as unknown as LedgerSet
+    const lists = { tasks: Array.isArray(set.tasks) ? set.tasks : [], rulings: Array.isArray(set.rulings) ? set.rulings : [], blockers: Array.isArray(set.blockers) ? set.blockers.filter((b): b is string => typeof b === 'string') : [] }
+    return mergeLedger(emptyLedger(id), { ...set, ...lists }, await nowIso($))
   } catch {
     return null
   }

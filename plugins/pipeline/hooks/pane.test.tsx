@@ -593,3 +593,22 @@ test('the band stays for a blocked item until the next turn starts, then goes', 
   expect(src).toContain(`fill="${BAND_COLORS.merged}"`)
   await ui.unmount()
 })
+
+test('review 0.2 C1: a ledger file without a tasks array (valid JSON) draws the desktop Overview and the band without an error', async ($, on) => {
+  const seed = { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([item('p2', 'Export', 'building', { spec: 'docs/pipeline/specs/p2.md', ledger: 'docs/pipeline/ledgers/p2.json' })]), [`${DIR}/ledgers/p2.json`]: JSON.stringify({ item: 'p2', tokens: 0 }) + '\n', [`${DIR}/specs/p2.md`]: SPEC }
+  world(on, seed)
+  await start($ as never)
+  await spawn($ as never, 'Implement task 1', 1)
+  const ui = await mount($ as never, 'desktop')
+  expect(await ui.find({ type: 'Text', text: /^pipeline: / })).toBeUndefined()
+  const a = await alts(ui)
+  expect(a[0]).toBe('BUILDING · P2: Export, 0 of 0 tasks accepted')
+  expect(a.length).toBeGreaterThanOrEqual(2)
+  expect((await ui.find({ type: 'Text', text: 'No ledger yet.' }))?.text).toBe('No ledger yet.')
+  await ui.unmount()
+  // The band above the prompt draws from the same ledger.
+  const bar = await band($ as never, 'desktop')
+  expect(await bar.find({ type: 'Text', text: /^pipeline: / })).toBeUndefined()
+  expect((await bar.find({ type: 'Svg' }))?.props['alt']).toMatch(/^p2 BUILDING: Export, , Implementer/)
+  await bar.unmount()
+})

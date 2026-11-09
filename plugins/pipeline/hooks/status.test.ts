@@ -192,6 +192,17 @@ test('currentTask is the running or fix task, else the resume block\'s', () => {
   expect(currentTask(null)).toBe(undefined)
 })
 
+test('review 0.2 C1: a ledger without a tasks array (valid JSON from another tool) gives no current task, the name\'s role and an empty band', () => {
+  const bare = { item: 'p12', tokens: 0 } as unknown as Ledger
+  expect(currentTask(bare)).toBe(undefined)
+  expect(roleOf({ name: 'Implement task 3' }, bare)).toEqual({ role: 'implementer' })
+  const noDispatches = { ...LEDGER, tasks: LEDGER.tasks.map(t => ({ n: t.n, title: t.title, status: t.status })) } as unknown as Ledger
+  expect(currentTask(noDispatches)?.n).toBe(3)
+  expect(roleOf({ name: 'Review task 3' }, noDispatches)).toEqual({ role: 'reviewer' })
+  expect(bandOf(item('p12', 'building'), bare, undefined, NOW)).toMatchObject({ state: 'BUILDING', count: '', segments: [], tasks: [] })
+  expect(stepsOf(item('p12', 'building'), bare).map(s => s.state)).toEqual(['done', 'current', 'pending', 'pending'])
+})
+
 test('roleOf: the current task\'s last dispatch, else the name\'s role word, else the name', () => {
   const dispatched = { ...LEDGER, tasks: LEDGER.tasks.map(t => (t.n === 3 ? { ...t, dispatches: [{ role: 'reviewer' as const, model: 'x', effort: 'high', tokens: 1, minutes: 1, result: '' }] } : t)) }
   expect(roleOf({ name: 'Implement task 3' }, dispatched)).toEqual({ role: 'reviewer', effort: 'high' })
