@@ -1279,7 +1279,7 @@ async function arrive($: EngineInterface): Promise<void> {
   let current = parseLive((await readText($, path)) ?? '')
   const dead = deadAgents(current, id, at)
   // Nothing that ran before this start is still running.
-  await update($, agents, list => list.map(a => (a.status === 'running' ? { ...a, status: 'failed', endedAt: at } : a)))
+  await update($, agents, list => list.map((a): AgentRun => (a.status === 'running' ? { ...a, status: 'failed', endedAt: at } : a)))
   if (dead.sessions.length) {
     // A signal the atom still holds (the state survived) is not doubled; the restored ones stay undelivered.
     const before = await read($, signals)
