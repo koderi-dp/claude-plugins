@@ -528,18 +528,76 @@ test('a migrated project: imported items carry the migration date, so the Histor
 
 // ---------- the band above the prompt ----------
 
-test('the band draws nothing of its own when nothing is active', async ($, on) => {
-  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([item('p3', 'Search', 'ready')]) })
+test('the band draws nothing of its own in a project without a pipeline', async ($, on) => {
+  world(on)
   await start($ as never)
-  const ui = await band($ as never, 'terminal')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await band($ as never, surface)
+    expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
+    expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
+    expect(await ui.find({ key: 'band-expand' })).toBeUndefined()
+    expect(await ui.find({ key: 'band-panel' })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test('idle: a one-line strip with the idle line and an Open panel button that opens the pane; cut to a narrow width; the terminal row cut to the columns', async ($, on) => {
+  const { opened } = world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE })
+  await start($ as never)
+  let ui = await band($ as never, 'desktop', { bodyColumns: 100 })
+  const svg = await ui.find({ type: 'Svg' })
+  expect(svg?.props['alt']).toBe('pipeline · idle · 28 inbox · next: p1 Grid row and column sizes')
+  expect(svg?.props['height']).toBe(28)
+  const src = String(svg?.props['source'])
+  expect(src).toContain('>pipeline · idle · 28 inbox · next: p1 Grid row and column sizes<')
+  expect(src).not.toContain('class="live"')
+  expect(await ui.find({ key: 'band-expand' })).toBeUndefined()
+  const button = await ui.find({ key: 'band-panel' })
+  expect(button?.props['label']).toBe('Open panel')
+  expect(button?.props['hotkey']).toBe('p')
+  expect(opened).toEqual([])
+  await ui.press({ key: 'band-panel' })
+  expect(opened).toEqual(['pipeline'])
+  // Open already: pressing again brings the pane forward with the keys, and opens no second one.
+  await ui.press({ key: 'band-panel' })
+  expect(opened).toEqual(['pipeline', 'pipeline'])
+  expect(await ui.find({ type: 'Text', text: 'engine' })).toBeDefined()
+  await ui.unmount()
+  // A narrow strip cuts the line with an ellipsis and keeps every text inside the width.
+  ui = await band($ as never, 'desktop', { bodyColumns: 30 })
+  const narrow = String((await ui.find({ type: 'Svg' }))?.props['source'])
+  const W = Number((await ui.find({ type: 'Svg' }))?.props['width'])
+  expect(W).toBe(176)
+  const cut = />(pipeline · idle[^<]*)</.exec(narrow)?.[1]
+  expect(cut?.endsWith('…')).toBe(true)
+  for (const m of narrow.matchAll(/<text x="([\d.]+)"/g)) expect(Number(m[1])).toBeLessThan(W)
+  await ui.unmount()
+  // The terminal: one dim row with a hollow dot, cut to the columns, and the same button.
+  ui = await band($ as never, 'terminal', { bodyColumns: 100 })
+  expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
+  expect((await ui.find({ type: 'Text', text: /^○ pipeline/ }))?.text).toBe('○ pipeline · idle · 28 inbox · next: p1 Grid row and column sizes')
+  expect((await ui.find({ key: 'band-panel' }))?.props['label']).toBe('Open panel')
+  await ui.unmount()
+  ui = await band($ as never, 'terminal', { bodyColumns: 40 })
+  const row = (await ui.find({ type: 'Text', text: /^○ pipeline/ }))?.text ?? ''
+  expect(row.length).toBeLessThanOrEqual(40 - 4 - 'Open panel'.length - 3)
+  expect(row.endsWith('…')).toBe(true)
+  await ui.unmount()
+})
+
+test('idleStrip hide: nothing of its own when idle; the running band stays', { options: { idleStrip: 'hide' } }, async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE })
+  await start($ as never)
+  const ui = await band($ as never, 'desktop')
   expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
   expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
-  expect(await ui.find({ key: 'band-expand' })).toBeUndefined()
+  expect(await ui.find({ key: 'band-panel' })).toBeUndefined()
   await ui.unmount()
 })
 
 test('the band: two lines on the desktop within the width, segment colours, the chevron expands the tasks; the terminal row cut to the columns', async ($, on) => {
-  const { clock } = world(on, { ...SEED, [BACKLOG]: backlogOf([item('p2', 'Show saved password and SSH key state in custom credentials, a long title', 'building'), item('p3', 'Search', 'ready')]) })
+  const worldRef = world(on, { ...SEED, [BACKLOG]: backlogOf([item('p2', 'Show saved password and SSH key state in custom credentials, a long title', 'building'), item('p3', 'Search', 'ready')]) })
+  const { clock } = worldRef
   await start($ as never)
   await spawn($ as never, 'Implement task 2', 1)
   await clock.advance(224_000)
@@ -565,6 +623,17 @@ test('the band: two lines on the desktop within the width, segment colours, the 
   const fills = [...src.matchAll(/height="5" rx="2.5" fill="(#[0-9a-f]{6})"/g)].map(m => m[1])
   expect(fills).toEqual([SEGMENT_COLORS.accepted, BAND_COLORS.running, SEGMENT_COLORS.pending])
   expect(src).toContain(`fill="${BAND_COLORS.running}"`)
+  // The Panel button beside the chevron: the spawn opened the pane, so it reads open; closed, it opens it on a press.
+  const { opened, panes } = worldRef
+  expect((await ui.find({ key: 'band-panel' }))?.props['label']).toBe('Panel ↗')
+  expect((await ui.find({ key: 'band-panel' }))?.props['hotkey']).toBe('p')
+  await run($ as never, 'panel')
+  expect(panes).toEqual([])
+  expect((await ui.find({ key: 'band-panel' }))?.props['label']).toBe('Panel')
+  await ui.press({ key: 'band-panel' })
+  expect(opened).toEqual(['pipeline', 'pipeline'])
+  expect(panes).toEqual(['pipeline'])
+  expect((await ui.find({ key: 'band-panel' }))?.props['label']).toBe('Panel ↗')
   // The chevron reveals the task list with its summary.
   expect(await ui.find({ type: 'Text', text: /^Execution tasks/ })).toBeUndefined()
   await ui.press({ key: 'band-expand' })
@@ -668,9 +737,10 @@ test('the band stays for a blocked item until the next turn starts, then goes', 
   ui = await band($ as never, 'desktop', { isWorking: false })
   expect(await ui.find({ type: 'Svg' })).toBeDefined()
   await ui.unmount()
-  // The next turn: gone.
+  // The next turn: gone, the idle strip in its place.
   ui = await band($ as never, 'desktop', { isWorking: true })
-  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+  expect((await ui.find({ type: 'Svg' }))?.props['alt']).toMatch(/^pipeline · idle · \d inbox · next: p3 Search$/)
+  expect(await ui.find({ key: 'band-expand' })).toBeUndefined()
   expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
   await ui.unmount()
   // A merged item the same way, in green with its count.

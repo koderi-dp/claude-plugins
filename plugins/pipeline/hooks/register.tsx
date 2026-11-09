@@ -12,9 +12,9 @@ import type { LedgerSet } from './ledger'
 import { parseLive, siblingsOf, withEntry, withoutEntry } from './live'
 import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse, specStub } from './migrate'
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
-import { BAND_COMPACT_H, BAND_H, bandSvg, bandText } from './draw'
+import { BAND_COMPACT_H, BAND_H, bandSvg, bandText, idleStripSvg, idleStripText } from './draw'
 import { BLOCKED, renderPanel } from './pane'
-import { SEGMENT_COLORS, bandOf, sessionName, specWhat, statusText, taskCounter } from './status'
+import { SEGMENT_COLORS, bandOf, idleLine, sessionName, specWhat, statusText, taskCounter } from './status'
 import type { Band } from './status'
 import type { StatusInput } from './status'
 import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
@@ -103,14 +103,22 @@ const slashes = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
 // ---------- the panel ----------
 
-/** The `autoOpen` and `band` settings as this load of the module received them. */
+/** The `autoOpen`, `band` and `idleStrip` settings as this load of the module received them. */
 let isAutoOpen = true
 let isCompactBand = false
+let isIdleStrip = true
 
-async function openPane($: EngineInterface): Promise<void> {
+async function openPane($: EngineInterface, focus = false): Promise<void> {
   const at = await $.clock.now()
   await update($, now, () => at)
-  await $.ui.open({ id: PANE, title: 'Pipeline' })
+  await $.ui.open({ id: PANE, title: 'Pipeline', ...(focus ? { focus: true } : {}) })
+}
+
+/** The band's Panel button: opens the pane, or brings it forward with the keys when it is open. */
+async function showPane($: EngineInterface): Promise<void> {
+  try {
+    await openPane($, await isPaneOpen($))
+  } catch {}
 }
 
 async function isPaneOpen($: EngineInterface): Promise<boolean> {
@@ -124,6 +132,9 @@ async function isPaneOpen($: EngineInterface): Promise<boolean> {
 async function togglePane($: EngineInterface): Promise<boolean> {
   if (await isPaneOpen($)) {
     await $.ui.close({ id: PANE })
+    // The band's Panel button reads the pane's state when drawn: the atom write redraws it.
+    const at = await $.clock.now()
+    await update($, now, () => at)
     return false
   }
   await openPane($)
@@ -1301,6 +1312,7 @@ async function scheduleWake($: EngineInterface, at: number): Promise<void> {
 export const register: Register = (on, options) => {
   isAutoOpen = (options as Record<string, unknown> | undefined)?.autoOpen !== 'never'
   isCompactBand = (options as Record<string, unknown> | undefined)?.band === 'compact'
+  isIdleStrip = (options as Record<string, unknown> | undefined)?.idleStrip !== 'hide'
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -1452,13 +1464,14 @@ export const register: Register = (on, options) => {
     try {
       if (!e.props.hasSurvey) band = await bandNow($, e.props.isWorking)
     } catch {}
-    if (!band) return next(e)
+    if (!band) return idleStrip($, e, next)
     // The engine's own placeholder ({ type: 'engine' }) is never nested: the desktop drops a band that nests it.
     const drawn = await Promise.resolve(next(e)).catch(() => null)
     const other = drawn && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
     const cols = e.props.bodyColumns || 100
+    const panelButton = <Button key="band-panel" plain dimColor hotkey="p" label={(await isPaneOpen($)) ? 'Panel ↗' : 'Panel'} onPress={() => void showPane($)} />
     let isOpen = false
     try {
       isOpen = (await read($, panel)).isBandOpen
@@ -1485,6 +1498,7 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row" alignItems="flex-start">
             <Svg source={bandSvg(band, width, isCompactBand)} alt={`${band.id} ${band.state}: ${band.title}, ${band.count}, ${band.activity}`} width={width} height={height} />
             {chevron}
+            {panelButton}
           </Box>
           {details}
           {other}
@@ -1511,6 +1525,7 @@ export const register: Register = (on, options) => {
           ) : null}
           {row.tail ? <Text dimColor>{`· ${row.tail}`}</Text> : null}
           {chevron}
+          {panelButton}
         </Box>
         {details}
         {other}
@@ -1697,6 +1712,49 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
     onStop: (item: string) => void pressTool($, { action: 'stop', item }),
     onLog: (item: string) => void pressTool($, { action: 'log', item }),
   })
+}
+
+type BandEvent = { surface: string; props: { bodyColumns?: number; hasSurvey?: boolean } }
+
+/**
+ * Nothing is active: in a project with a pipeline, one slim line (`pipeline · idle · 28 inbox · next: p2 Brand logos`)
+ * with the Open panel button, so the panel is a press away; nothing of its own without a config or with `idleStrip: hide`.
+ */
+async function idleStrip($: EngineInterface, e: BandEvent, next: (e: BandEvent) => unknown): Promise<unknown> {
+  let text = ''
+  try {
+    if (isIdleStrip && !e.props.hasSurvey && (await read($, config))) text = `pipeline · ${idleLine((await read($, backlog))?.items ?? [])}`
+  } catch {}
+  if (!text) return next(e)
+  const drawn = await Promise.resolve(next(e)).catch(() => null)
+  const other = drawn && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
+  const ui = $.ui.resolve(e as never)
+  const { Box, Text, Button } = ui
+  const cols = e.props.bodyColumns || 100
+  const button = <Button key="band-panel" plain dimColor hotkey="p" label="Open panel" onPress={() => void showPane($)} />
+  if (e.surface !== 'terminal' && 'Svg' in ui) {
+    const { Svg } = ui
+    const width = Math.max(180, Math.min(1600, cols * 8 - 40)) - 24
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" alignItems="flex-start">
+          <Svg source={idleStripSvg(text, width)} alt={text} width={width} height={BAND_COMPACT_H} />
+          {button}
+        </Box>
+        {other}
+      </Box>
+    )
+  }
+  // The row, the gap and the button's `[ Open panel ]` share the columns.
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="row" gap={1}>
+        <Text dimColor>{idleStripText(text, Math.max(10, cols - 4 - 'Open panel'.length - 5))}</Text>
+        {button}
+      </Box>
+      {other}
+    </Box>
+  )
 }
 
 // The item the band keeps showing after it left the active statuses (blocked, or just merged), until the next turn starts.

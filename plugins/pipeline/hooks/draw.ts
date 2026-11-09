@@ -428,6 +428,20 @@ export const bandSvg = (b: Band, W: number, isCompact = false): string => {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${BAND_CSS}${parts.join('')}</svg>`
 }
 
+/** The idle strip: one line in the band's frame, a hollow dot in the muted colour and the idle line cut to the width. */
+export const idleStripSvg = (text: string, W: number): string => {
+  const H = BAND_COMPACT_H
+  const pad = 13
+  const textX = pad + 16
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${BAND_CSS}<rect class="bg" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="9"/><circle cx="${pad + 3.5}" cy="14" r="3" fill="none" stroke="${MUTED}" stroke-width="1.5"/><text class="s" ${startText(textX, 18)} font-size="11">${xml(fitText(text, 11, W - textX - pad))}</text></svg>`
+}
+
+/** The terminal's idle row: `○ pipeline · idle · 28 inbox · next: p2 …`, cut to `cols` columns with an ellipsis. */
+export const idleStripText = (text: string, cols: number): string => {
+  const row = `○ ${text}`
+  return row.length <= cols ? row : row.slice(0, Math.max(0, cols - 1)).trimEnd() + '…'
+}
+
 /** The terminal's row: `● p1 · Task 1 / 3 · ▰▱▱ · Implementer · 3:44`, as pieces, cut to `cols` columns from the activity first. */
 export const bandText = (b: Band, cols: number): { head: string; segments: string; tail: string } => {
   const head = `● ${[b.id, b.count].filter(Boolean).join(' · ')}`

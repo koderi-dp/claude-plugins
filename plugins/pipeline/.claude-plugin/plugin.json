@@ -26,6 +26,16 @@
         "two-line",
         "compact"
       ]
+    },
+    "idleStrip": {
+      "type": "string",
+      "title": "The idle strip above the prompt",
+      "description": "show: one line with the idle status and an Open panel button when nothing is active in a project with a pipeline; hide: nothing when idle",
+      "default": "show",
+      "options": [
+        "show",
+        "hide"
+      ]
     }
   },
   "license": "MIT"
