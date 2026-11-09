@@ -3,6 +3,7 @@
 // and nothing more; `get { full: true }` and `status` remain the ways to read everything.
 import type { Backlog, ChildSession, Config, Item, Ledger, Sibling, Signal } from '../types'
 import type { Readiness } from './backlog'
+import { fmtTokens } from './draw'
 
 export type SlimInput = {
   config: Config | null
@@ -68,4 +69,31 @@ export function slimGet(input: SlimInput): Record<string, unknown> {
 /** A signal without its bookkeeping: what happened to which agent, and when. */
 export function compactSignal(s: Signal): Record<string, unknown> {
   return { kind: s.kind, agent: s.agent, ...(s.agentId ? { agentId: s.agentId } : {}), detail: s.detail, at: s.at }
+}
+
+/** An item's status for a one-line answer: the status, and for an inbox item the reason it is not ready. */
+export function itemState(item: Item, r: Record<string, Readiness>): string {
+  const judged = r[item.id]
+  return item.status === 'inbox' && judged && !judged.ready ? `inbox · ${judged.reason}` : item.status
+}
+
+/**
+ * A `ledger` write's answer: `ledger p1 · task 3/6 running · 2 rulings · 674k tokens`, or `final <verdict>` once
+ * recorded; the counts are left out at zero. `status <id>` answers the whole ledger.
+ */
+export function ledgerLine(ledger: Ledger): string {
+  const tasks = ledger.tasks ?? []
+  const parts = [`ledger ${ledger.item}`]
+  if (ledger.final?.verdict) parts.push(`final ${ledger.final.verdict}`)
+  else if (ledger.resume) {
+    const n = ledger.resume.task
+    const own = tasks.find(t => t.n === n)
+    parts.push(own ? `task ${n}/${tasks.length} ${own.status}` : `task ${n}/${tasks.length} · ${ledger.resume.state}`)
+  } else parts.push(tasks.length ? `${tasks.length} task${tasks.length === 1 ? '' : 's'}` : 'no tasks')
+  const rulings = (ledger.rulings ?? []).length
+  if (rulings) parts.push(`${rulings} ruling${rulings === 1 ? '' : 's'}`)
+  const blockers = (ledger.blockers ?? []).length
+  if (blockers) parts.push(`${blockers} blocker${blockers === 1 ? '' : 's'}`)
+  if (ledger.tokens) parts.push(`${fmtTokens(ledger.tokens)} tokens`)
+  return parts.join(' · ')
 }

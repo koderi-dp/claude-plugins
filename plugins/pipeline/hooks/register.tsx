@@ -4,7 +4,7 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 import type { AgentRun, Backlog, ChildSession, Config, Item, Ledger, Live, LiveEntry, Panel, QueueFilter, Sibling, Signal, View } from '../types'
 import { addItem, emptyBacklog, moveItem, readiness, removeItem, renderBacklogMd, updateItem } from './backlog'
 import type { Readiness } from './backlog'
-import { slimGet } from './answers'
+import { itemState, ledgerLine, slimGet } from './answers'
 import { cleanList, planOf } from './clean'
 import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, serialize } from './files'
@@ -45,12 +45,12 @@ const TOOL_DESCRIPTION =
   'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
   '`get` { id?, titles?, full? } → compact JSON { active: { id, title, status, note, spec, plan, branch, worktree } | null, resume, signals, children, siblings, counts, next, config }: the active item (planning, building or review), its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (no log), the other sessions on the repository in short, the count per status (planning counts as building), the first three ready (else inbox) items with the reason, and the config keys a run reads (runner, merge, mergeMethod, checks, limits, riskyPaths, protectedPaths, models, taskReview); with `id` also `item`, that item\'s full record and readiness; with `titles` also `titles`, every item as `<id> <status> <title>`; `full: true` answers the whole { config, backlog, readiness, active, resume, signals, children, siblings } instead, large on a long backlog, never needed during a run; ' +
   '`status` { id? } → the status block, or one item\'s ledger as text; ' +
-  '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers `added <id>` and the status; ' +
-  '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title); ' +
-  '`move` { id, to: "top" | { after: "<id>" } } → reorders; ' +
-  '`remove` { id }; `park` { id }; `unpark` { id }; ' +
+  '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers one line, `added p29 · inbox · no spec` (the status after settling, with the reason an inbox item is not ready); ' +
+  '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title) and answers `p1 · building` (with `set <fields>` for the others); ' +
+  '`move` { id, to: "top" | { after: "<id>" } } → reorders and answers `p3 · moved to the top · ready`; ' +
+  '`remove` { id } → `removed p2 · 70 items left`; `park` { id } → `p2 · parked`; `unpark` { id } → `p2 · ready`; ' +
   '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
-  '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers the ledger as text; ' +
+  '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers one line, `ledger p1 · task 3/6 running · 2 rulings · 674k tokens` (`final approved` once recorded); `status { id }` answers the whole ledger; ' +
   '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists; ' +
   '`start` { item: "<id>" } (runner session only) → makes the item\'s worktree (.claude/worktrees/<id>, branch from config.branch off mainBranch, reused when there), marks the item building with the note `session runner`, records branch and worktree in its ledger and starts a headless Claude Code child in the worktree in this session\'s permission mode (acceptEdits, auto, dontAsk or bypassPermissions; otherwise refused with what to switch to; refused too past limits.parallel, for an item that is not ready, blocked or building with the note `session runner` and no child, for a building item run in-session, while a child runs it, and from a child session, which starts no children), answering one line with the session id and the log path; the child runs the item with the run skill and leaves the item as it ends it, a non-zero exit blocks it with the code and the log tail; ' +
   '`stop` { item } → kills the item\'s child session and sets the item blocked with `stopped by the user` unless it had merged; ' +
@@ -58,7 +58,7 @@ const TOOL_DESCRIPTION =
   '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/), for one merged item or for every merged item; it deletes nothing, the caller removes them with git rm -r and commits; ' +
   '`migrate` { refresh? } → JSON { sources, config, sourcesOfConfig, items, rules, active, bulk: { files, count }, unsure, report }: reads the project\'s queue, workflow prose, ledgers, scripts and CI and drafts the config, the items, the rules (the queue\'s open decisions among them, as before-dispatch stops) and the active item, writing nothing; refused when config.json exists unless refresh; ' +
   '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger, a spec stub from the title and note for every inbox or building item without one, so the needs-free ones settle to ready), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of spec stubs, the count of files given the line and the bulk files to git rm; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
-  'Every write re-reads backlog.json, merges, regenerates BACKLOG.md and answers the status text; a file that does not parse is refused with its line and left alone.'
+  'Every write re-reads backlog.json, merges, regenerates BACKLOG.md and answers one line; `status` is the way to read the status block; a file that does not parse is refused with its line and left alone.'
 
 const TOOL_SCHEMA = {
   type: 'object',
@@ -189,7 +189,7 @@ const CLEAN_PROMPT =
   `Pipeline clean, under the pipeline-rules skill. First tool call: ${call({ action: 'clean' })}. It lists, one per line, the paths config.retain says may go for every merged item, the superpowers folders of merged plans and the worktrees of merged items, and deletes nothing. ` +
   'From the main checkout on mainBranch: remove each listed path with `git rm -r -q` (plain `rm -r` for an untracked one; `git worktree remove` for a worktree), commit the removals on mainBranch with the attribution lines this session was given and no model identifier, and answer one line with the counts, as `cleaned: 3 folders, 1 plan, 1 worktree`. An answer of `nothing to clean` is the one line, and nothing is committed.'
 
-const QUEUE_PROMPT = (input: Record<string, unknown>) => `Under the pipeline-rules skill, make this one tool call: ${call(input)}. It answers the status text; answer its first line and nothing else.`
+const QUEUE_PROMPT = (input: Record<string, unknown>) => `Under the pipeline-rules skill, make this one tool call: ${call(input)}. It answers one line; answer that line and nothing else.`
 
 // What this module instance knows between hooks: the live file's whereabouts,
 // this session's entry, the heartbeat throttle, the pending wake-up and the ticker.
@@ -420,15 +420,24 @@ async function cleanInput($: EngineInterface, found: string, b: Backlog | null):
   return { listing, planPaths, worktrees }
 }
 
-/** Writes the backlog and its generated view, refreshes the atom and answers the status. */
-async function writeBacklog($: EngineInterface, found: string, c: Config | null, next: Backlog): Promise<string> {
+/** Writes the backlog and its generated view, refreshes the atom and answers what was written, settled, with its readiness. */
+async function writeBacklog($: EngineInterface, found: string, next: Backlog): Promise<{ backlog: Backlog; readiness: Record<string, Readiness> }> {
   const p = paths(found)
-  const settled = settle(next, await judgeAll($, found, next), await nowIso($))
+  // Settling moves items between inbox and ready only, so the judgement holds for the settled backlog too.
+  const judged = await judgeAll($, found, next)
+  const settled = settle(next, judged, await nowIso($))
   await $.fs.write(p.backlog, serialize(settled))
   await $.fs.write(p.backlogMd, renderBacklogMd(settled))
   await update($, backlog, () => settled)
   await update($, fileError, () => null)
-  return statusNow($, found, c, settled, null)
+  return { backlog: settled, readiness: judged }
+}
+
+/** A backlog write's one-line answer: the item's id, what changed and its status after the write. */
+async function writeLine($: EngineInterface, found: string, next: Backlog, id: string, what: (state: string) => string): Promise<string> {
+  const written = await writeBacklog($, found, next)
+  const item = written.backlog.items.find(i => i.id === id)
+  return what(item ? itemState(item, written.readiness) : 'gone')
 }
 
 /** Marks every open signal delivered: an answer carried them. */
@@ -554,22 +563,23 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       const mirror: Partial<Item> = {}
       if (item.ledger !== ledgerFile(id)) mirror.ledger = ledgerFile(id)
       for (const k of ['branch', 'pr', 'plan'] as const) if (typeof set[k] === 'string' && item[k] !== set[k]) mirror[k] = set[k] as string
-      if (Object.keys(mirror).length) await writeBacklog($, found, c, updateItem(current, id, mirror, now))
-      return ledgerText(merged, { ...item, ...mirror })
+      if (Object.keys(mirror).length) await writeBacklog($, found, updateItem(current, id, mirror, now))
+      return ledgerLine(merged)
     }
     case 'add': {
       const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
       if (!title) throw new Refused('add needs item.title')
       const next = addItem(current, { ...(e.item as Partial<Item>), title }, now)
       const id = next.items[next.items.length - 1]!.id
-      return `added ${id}\n${await writeBacklog($, found, c, next)}`
+      return writeLine($, found, next, id, state => `added ${id} · ${state}`)
     }
     case 'update': {
       const id = need(e.id)
       if (!e.set || typeof e.set !== 'object') throw new Refused('update needs set')
       const before = current.items.find(i => i.id === id)
       const next = updateItem(current, id, e.set as Partial<Item>, now)
-      const out = await writeBacklog($, found, c, next)
+      const others = Object.keys(e.set).filter(k => k !== 'status')
+      const out = await writeLine($, found, next, id, state => [id, state, ...(others.length ? [`set ${others.join(', ')}`] : [])].join(' · '))
       const after = next.items.find(i => i.id === id)
       if (before && after && startsRun(before.status, after.status)) await queueRename($, c, after)
       return out
@@ -579,18 +589,25 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       const to = e.to
       if (to !== 'top' && !(to && typeof to === 'object' && typeof to.after === 'string')) throw new Refused('move needs to: "top" or { after: "<id>" }')
       if (to !== 'top') need(to.after)
-      return writeBacklog($, found, c, moveItem(current, id, to))
+      return writeLine($, found, moveItem(current, id, to), id, state => `${id} · moved ${to === 'top' ? 'to the top' : `after ${to.after}`} · ${state}`)
     }
     case 'start':
       return startChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
     case 'stop':
       return stopChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
-    case 'remove':
-      return writeBacklog($, found, c, removeItem(current, need(e.id)))
-    case 'park':
-      return writeBacklog($, found, c, updateItem(current, need(e.id), { status: 'parked' }, now))
-    case 'unpark':
-      return writeBacklog($, found, c, updateItem(current, need(e.id), { status: 'inbox' }, now))
+    case 'remove': {
+      const id = need(e.id)
+      const left = (await writeBacklog($, found, removeItem(current, id))).backlog.items.length
+      return `removed ${id} · ${left} item${left === 1 ? '' : 's'} left`
+    }
+    case 'park': {
+      const id = need(e.id)
+      return writeLine($, found, updateItem(current, id, { status: 'parked' }, now), id, state => `${id} · ${state}`)
+    }
+    case 'unpark': {
+      const id = need(e.id)
+      return writeLine($, found, updateItem(current, id, { status: 'inbox' }, now), id, state => `${id} · ${state}`)
+    }
     default:
       throw new Refused(`unknown action "${String(e.action)}"`)
   }
@@ -692,7 +709,7 @@ async function startChild($: EngineInterface, found: string, c: Config | null, c
   const sessionId = crypto.randomUUID()
   const isResume = item.status !== 'ready'
   const note = item.status === 'blocked' && item.note ? `session runner · was blocked: ${item.note}` : 'session runner'
-  await writeBacklog($, found, c, updateItem(current, id, { status: 'building', note }, new Date(at).toISOString()))
+  await writeBacklog($, found, updateItem(current, id, { status: 'building', note }, new Date(at).toISOString()))
   try {
     await runTool($, { action: 'ledger', item: id, set: { branch, worktree: `.claude/worktrees/${id}` } })
   } catch {}
@@ -765,7 +782,7 @@ async function finishChild($: EngineInterface, found: string, id: string, end: {
     const { backlog: fresh, error } = await loadAll($, found)
     const item = fresh?.items.find(i => i.id === after.item)
     if (!error && fresh && item && item.status !== 'merged' && item.status !== 'review') {
-      await writeBacklog($, found, c, updateItem(fresh, item.id, { status: 'blocked', note: exitNote(after, end) }, new Date(at).toISOString()))
+      await writeBacklog($, found, updateItem(fresh, item.id, { status: 'blocked', note: exitNote(after, end) }, new Date(at).toISOString()))
       try {
         await runTool($, { action: 'ledger', item: item.id, set: { blockers: [exitNote(after, end)] } })
       } catch {}
@@ -788,7 +805,7 @@ async function stopChild($: EngineInterface, found: string, c: Config | null, cu
   const reason = 'stopped by the user'
   let outcome = ''
   if (item && item.status !== 'merged' && item.status !== 'review') {
-    await writeBacklog($, found, c, updateItem(current, id, { status: 'blocked', note: reason }, new Date(at).toISOString()))
+    await writeBacklog($, found, updateItem(current, id, { status: 'blocked', note: reason }, new Date(at).toISOString()))
     try {
       await runTool($, { action: 'ledger', item: id, set: { blockers: [reason] } })
     } catch {}
@@ -1025,7 +1042,8 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
     }
     next = updateItem(next, item.id, { spec: file }, now)
   }
-  const status = await writeBacklog($, found, normalizeConfig(nextConfig).config, next)
+  const written = await writeBacklog($, found, next)
+  const status = await statusNow($, found, normalizeConfig(nextConfig).config, written.backlog, null)
 
   // The Historical line, once, on the old queue and ledger files.
   const { listing, increments } = await scanProject($, found)
@@ -1298,7 +1316,7 @@ async function orphanChildren($: EngineInterface, at: number): Promise<void> {
       next = updateItem(next, item.id, { status: 'blocked', note: RESTARTED }, new Date(at).toISOString())
       blocked.push(item.id)
     }
-    if (blocked.length) await writeBacklog($, found, c, next)
+    if (blocked.length) await writeBacklog($, found, next)
     for (const id of blocked) {
       try {
         await runTool($, { action: 'ledger', item: id, set: { blockers: [RESTARTED] } })
