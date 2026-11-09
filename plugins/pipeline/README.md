@@ -29,12 +29,13 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 | `/pipeline init` | Config and an empty backlog for a new project; offers `migrate` when the project has a queue |
 | `/pipeline migrate` | Move an existing project onto the pipeline (below) |
 | `/pipeline add <text>` | Intake: an item and its spec, in one line back; never starts the build |
-| `/pipeline next` | Run the first ready item |
+| `/pipeline next` | Run the first ready item (under `runner: session`, start its child session) |
 | `/pipeline run <id>` / `run all` | Run one item, or until nothing is ready or a stop condition fires |
 | `/pipeline status [id]` | The status block, or one item's ledger as text; works on a phone over Remote Control |
 | `/pipeline move <id> top` / `after <id>` | Reorder |
 | `/pipeline park <id>` / `unpark <id>` | Take out of, back into, the queue |
-| `/pipeline stop` | Finish the running task, leave the branch pushed and the ledger current, stop |
+| `/pipeline stop [id]` | Finish the running task, leave the branch pushed and the ledger current, stop; with an id, kill that item's child session and block the item |
+| `/pipeline log <id>` | The last 60 lines of an item's child session log |
 | `/pipeline clean` | List and remove what `retain` says may go for every merged item |
 | `/pipeline panel` | Toggle the panel |
 | `/pipeline config [key=value]` | Show or change the project config |
@@ -51,7 +52,8 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 | `riskyPaths` | `[]` | Globs; a task whose diff touches one gets an independent reviewer who probes |
 | `protectedPaths` | `[".github/workflows/**"]` | Globs; a subagent's Edit or Write there is denied by the mod |
 | `models` | sonnet medium, opus high, opus xhigh, opus high | `implementer`, `reviewer`, `final`, `escalate`, each `{ model, effort }` |
-| `limits` | `fixRounds` 3, `silentMinutes` 10, `taskMinutes` 45, `itemTokens` 4000000 | What the watchdog and the run skill enforce |
+| `limits` | `fixRounds` 3, `silentMinutes` 10, `taskMinutes` 45, `itemTokens` 4000000, `parallel` 1 | What the watchdog and the run skill enforce; `parallel` is how many child sessions `run all` keeps going under `runner: session` |
+| `runner` | `subagent` | `subagent` runs an item in your session with subagents; `session` runs each item in a headless child session of its own (below) |
 | `merge` | `pr` | `auto` merges on green CI with no open Critical or Important finding; `pr` stops at an open PR |
 | `mergeMethod` | `merge` | `merge` (a merge commit) or `squash` |
 | `stop` | six conditions | Free text the run skill reads: when it blocks the item and asks instead of deciding |
@@ -59,14 +61,20 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 | `retain` | `plans` true, `briefs` false, `superpowers` false | What stays after an item merges; the spec and the ledger always stay |
 | `notify` | `milestones` | `off`, `milestones` (started, PR open, merged, blocked, a watchdog signal) or `all` |
 
+## Runners
+
+`runner: subagent` (the default) runs the item in the session you are in: the lead you talk to dispatches the subagents, and you can answer a question it has along the way. `runner: session` runs each item in a headless child session of its own: `/pipeline next` (or `run <id>`) makes the item's worktree, marks the item building with the note `session runner` and starts `claude -p` in that worktree with the installed plugins and your session's permission mode; the child is a normal session of the project, plans, builds, reviews and opens the PR, writes the ledger and heartbeats into the live file, and your panel shows it with its task counter, Stop and Log. The trade-off: a child cannot ask you anything (anything that would prompt is denied), so it runs only while your session is in `acceptEdits`, `auto`, `dontAsk` or `bypassPermissions` mode (`start` refuses otherwise and names the modes; Shift+Tab switches), and a stop condition ends the child with the item blocked and the reason in its note, as in-session. The gain: `run all` keeps up to `limits.parallel` items going at once, each in its own worktree, and starts the next ready one when a child finishes. Stop kills the child and blocks the item with `stopped by the user`; a child that exits non-zero blocks it with the exit code and the log tail; `/pipeline run <id>` starts it again from the ledger in the same worktree. The log is `.git/pipeline/<id>.log`, never committed.
+
+Other sessions on the same repository (a second terminal, a desktop window, a child) write the same live file, and the panel lists them under Other sessions with their item and running agents; one that has not heartbeat for three minutes shows dim, and its entry goes once the watchdog has reported its agents dead.
+
 ## The watchdog
 
 The mod follows every subagent of the session and keeps a live file (`.git/pipeline-live.json`, never committed). It cannot stop an agent itself: a signal reaches the lead through the tool's `get` on its next turn, and as a push notification per `notify`. Between items under `run all` it schedules a wake-up every `silentMinutes` where the host offers one.
 
 | Signal | Detection | Action |
 | --- | --- | --- |
-| Silent | no step from the agent for `limits.silentMinutes` | once: the lead asks the agent to report, then stops and re-dispatches it |
-| Dead | the session restarted while the live file lists running agents | the lead re-dispatches from the surviving working tree |
+| Silent | no step from the agent for `limits.silentMinutes`; or no heartbeat from a child session for three minutes while its process runs | once: the lead asks the agent to report, then stops and re-dispatches it; for a child, `/pipeline log <id>`, then Stop and `run <id>` |
+| Dead | the session restarted while the live file lists running agents; or a child session's process exited with its item still building | the lead re-dispatches from the surviving working tree; `/pipeline run <id>` resumes a child's item |
 | Looping | the same failing shell command three times in a row, or more failed commands than `fixRounds` | the lead stops the agent and re-dispatches once at `models.escalate` with the failures in the brief |
 | Over budget | the task passes `limits.taskMinutes` or the item passes `limits.itemTokens` | the lead finishes the running task, then blocks the item |
 
@@ -120,7 +128,8 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 - The branch is pushed at every accepted task, so a lost worktree costs at most the running task.
 - The live file is per machine: agents on another machine are not watched from this one; the backlog travels with git.
 - A `backlog.json`, config or ledger that does not parse is never overwritten: the tool refuses with the line, and the status block shows it.
-- One item at a time. The worktree-per-item layout leaves room for parallel items later.
+- Under `runner: subagent`, one item at a time. Parallel items need `runner: session`, whose children cannot ask you anything and run only in a permission mode that does not prompt.
+- A child session is started on this machine from the installed `claude`; the parent sees its live entry and its log, not its conversation. The permission mode a child runs in is the one the engine last reported to the mod (on a prompt or a subagent spawn), else the settings' `permissions.defaultMode`.
 - No GitHub issues or external tracker.
 
 ## What it contains
@@ -130,7 +139,7 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 | Skills | `pipeline-init`, `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
 | Templates | `templates/spec.md`, `implementer.md`, `reviewer.md`, `fix.md`, `final.md` |
 | Tool | `mcp__pipeline__pipeline` |
-| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the panel, the bar, the live file; with `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `migrate.ts`, `clean.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |
+| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |
 | Tests | `claude plugin test plugins/pipeline` |
 
 License: MIT.
