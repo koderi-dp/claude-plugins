@@ -106,7 +106,7 @@ export function statusText(input: StatusInput): string {
   }
   const parked = items.filter(i => i.status === 'parked')
   if (parked.length) lines.push(`Parked: ${parked.map(i => i.id).join(', ')}`)
-  const merged = items.filter(i => i.status === 'merged' && i.updatedAt && now - Date.parse(i.updatedAt) <= WEEK_MS)
+  const merged = mergedThisWeek(items, now)
   if (merged.length) {
     lines.push('Merged this week')
     for (const i of merged) lines.push(itemRow(i, i.pr ?? undefined))
@@ -157,11 +157,24 @@ export function queueItems(items: Item[], filter: QueueFilter, search: string): 
   return filter === 'ready' ? [...list.filter(isActive), ...list.filter(i => !isActive(i))] : list
 }
 
-/** The merged items newest first; `withinMs` keeps those updated in that window. */
+/**
+ * The merged items newest first; `withinMs` keeps those updated in that window. Equal dates (a migration stamps
+ * every imported item with its own date) keep the file's order reversed, the file listing oldest first.
+ */
 export function mergedItems(items: Item[], now: number, withinMs = Infinity): Item[] {
   return items
-    .filter(i => i.status === 'merged' && (withinMs === Infinity || (!!i.updatedAt && now - Date.parse(i.updatedAt) <= withinMs)))
-    .sort((a, b) => (Date.parse(b.updatedAt ?? '') || 0) - (Date.parse(a.updatedAt ?? '') || 0))
+    .map((item, index) => ({ item, index }))
+    .filter(({ item: i }) => i.status === 'merged' && (withinMs === Infinity || (!!i.updatedAt && now - Date.parse(i.updatedAt) <= withinMs)))
+    .sort((a, b) => (Date.parse(b.item.updatedAt ?? '') || 0) - (Date.parse(a.item.updatedAt ?? '') || 0) || b.index - a.index)
+    .map(({ item }) => item)
+}
+
+/**
+ * The items the pipeline merged in the last seven days, newest first: an imported item (its note starts with
+ * `imported`) carries the migration's date, not a merge date, so it never counts.
+ */
+export function mergedThisWeek(items: Item[], now: number): Item[] {
+  return mergedItems(items, now, WEEK_MS).filter(i => !/^imported\b/i.test(i.note ?? ''))
 }
 
 /** The idle hero's sentence: how many wait, how many are ready, and what moves work. */

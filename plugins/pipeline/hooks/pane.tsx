@@ -8,7 +8,7 @@ import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilt
 import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, METRICS_H, MUTED, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, metricsSvg, modelName, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
-import { WEEK, currentTask, displayTitle, groupCounts, heroSentence, mergedItems, prLabel, queueItems, roleOf, stepsOf, tagOf, taskCounter } from './status'
+import { currentTask, displayTitle, groupCounts, heroSentence, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, stepsOf, tagOf, taskCounter } from './status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
 type Element = RenderElement
@@ -184,7 +184,7 @@ function queueRows(ui: { Text: Comp; Link?: Comp }, d: PanelInput, section: (tit
   if (parked.length) rows.push(<Text dimColor>{`Parked: ${parked.map(i => i.id).join(', ')}`}</Text>)
   section(
     'Merged this week',
-    mergedItems(items, d.now, WEEK).map(i => {
+    mergedThisWeek(items, d.now).map(i => {
       const pr = prLabel(i.pr)
       return (
         <Text color={DONE}>
@@ -317,7 +317,8 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
   const items = d.backlog?.items ?? []
   const inbox = items.filter(i => i.status === 'inbox')
   const ready = items.filter(i => i.status === 'ready')
-  const merged = mergedItems(items, d.now, WEEK)
+  const merged = mergedThisWeek(items, d.now)
+  const recent = mergedItems(items, d.now)
   const hero: Hero = {
     kind: 'idle',
     state: 'PIPELINE IDLE',
@@ -343,7 +344,7 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
     const reason = r && !r.ready ? r.reason : undefined
     return itemRow(u, i, line([i.size, i.status === 'ready' ? 'Ready' : reason ? 'Needs specification' : 'Inbox']), tagOf(i, reason), toQueue(i.id))
   })
-  const mergedRows = merged.slice(0, OVERVIEW_MERGED).map(i => {
+  const mergedRows = recent.slice(0, OVERVIEW_MERGED).map(i => {
     const pr = prLabel(i.pr)
     return (
       <Box key={`merged-${i.id}`} flexDirection="row" justifyContent="space-between" gap={1}>
@@ -365,7 +366,7 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
       {heading(u, ready.length ? 'Up next' : 'Needs specification', undefined, { key: 'goto-queue', label: 'View queue →', onPress: toQueue(null) })}
       {rows.length ? card(u, [...rows, ...(list.length > OVERVIEW_ROWS ? [<Text key="more-items" dimColor>{`and ${list.length - OVERVIEW_ROWS} more in the queue`}</Text>] : [])]) : <Text dimColor>Nothing waiting. Add work with /pipeline add.</Text>}
       {heading(u, 'Recently merged', undefined, { key: 'goto-history', label: 'View history →', onPress: () => d.onView('history') })}
-      {mergedRows.length ? card(u, mergedRows) : <Text dimColor>Nothing merged this week.</Text>}
+      {mergedRows.length ? card(u, mergedRows) : <Text dimColor>Nothing merged yet.</Text>}
       {siblingRows(u, d)}
     </Box>
   )
@@ -541,8 +542,9 @@ function renderHistory(u: Desk, d: PanelInput, W: number): Element {
   const { Box, Svg, Text, Button, Link } = u
   const items = d.backlog?.items ?? []
   const all = mergedItems(items, d.now)
-  const week = mergedItems(items, d.now, WEEK)
-  const hero: Hero = { kind: 'history', state: 'HISTORY', headline: `${plural(week.length, 'item')} merged`, line: 'Completed this week · last 7 days' }
+  const week = mergedThisWeek(items, d.now)
+  // Everything ever merged is the count; the week counts only what the pipeline merged (an import carries no merge date).
+  const hero: Hero = { kind: 'history', state: 'HISTORY', headline: `${plural(all.length, 'item')} merged`, line: `all time · ${week.length} this week` }
   const drawn = heroSvg(W, hero)
   const shown = d.panel.isMoreShown ? all : all.slice(0, HISTORY_SHOWN)
   const rows = shown.map(i => {

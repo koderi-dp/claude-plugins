@@ -132,7 +132,7 @@ test('idleLine counts the inbox and names the first ready item, else the first i
 
 // ---------- the dashboard's derivations ----------
 
-import { currentTask, groupCounts, heroSentence, mergedItems, queueItems, roleOf, stepsOf, tagOf } from './status'
+import { currentTask, groupCounts, heroSentence, mergedItems, mergedThisWeek, queueItems, roleOf, stepsOf, tagOf } from './status'
 
 const MIXED: Item[] = [
   item('p1', 'inbox', { title: 'Grid row and column sizes' }),
@@ -160,9 +160,23 @@ test('queueItems: the filter picks the group, in flight first under ready, and t
   expect(queueItems([item('q1', 'inbox', { title: 'grid-track — Grid sizes' })], 'inbox', 'grid sizes')).toHaveLength(1)
 })
 
-test('mergedItems: newest first, the week when asked', () => {
+test('mergedItems: newest first, the week when asked; equal dates in array order reversed, so a migrated list reads newest first', () => {
   expect(mergedItems(MIXED, NOW).map(i => i.id)).toEqual(['p9', 'p7', 'p8'])
   expect(mergedItems(MIXED, NOW, 7 * 24 * 60 * 60_000).map(i => i.id)).toEqual(['p9', 'p7'])
+  const migrated = ['m1', 'm2', 'm3'].map(id => item(id, 'merged', { updatedAt: '2026-11-05T00:00:00Z', note: 'imported from docs/backlog.md' }))
+  expect(mergedItems(migrated, NOW).map(i => i.id)).toEqual(['m3', 'm2', 'm1'])
+  expect(mergedItems([...migrated, item('m4', 'merged')], NOW).map(i => i.id)).toEqual(['m3', 'm2', 'm1', 'm4'])
+})
+
+test('mergedThisWeek: merged by the pipeline within seven days; an imported item never counts, whatever its date', () => {
+  const week = 7 * 24 * 60 * 60_000
+  expect(mergedThisWeek(MIXED, NOW).map(i => i.id)).toEqual(['p9', 'p7'])
+  const imported = [item('m1', 'merged', { updatedAt: new Date(NOW - 1000).toISOString(), note: 'imported from docs/backlog.md' }), item('m2', 'merged', { updatedAt: new Date(NOW - 1000).toISOString(), note: 'imported from docs/backlog.md; no PR link' })]
+  expect(mergedThisWeek(imported, NOW)).toEqual([])
+  expect(mergedThisWeek([...imported, item('p1', 'merged', { updatedAt: new Date(NOW - week).toISOString(), note: 'PR merged' })], NOW).map(i => i.id)).toEqual(['p1'])
+  expect(mergedThisWeek([item('p2', 'merged', { updatedAt: new Date(NOW - week - 1).toISOString() })], NOW)).toEqual([])
+  expect(mergedThisWeek([item('p3', 'merged')], NOW)).toEqual([])
+  expect(mergedThisWeek([item('p4', 'ready', { updatedAt: new Date(NOW).toISOString() })], NOW)).toEqual([])
 })
 
 test('heroSentence says how many wait, how many are ready and what moves work', () => {
