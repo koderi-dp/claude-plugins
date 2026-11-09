@@ -36,6 +36,16 @@
         "show",
         "hide"
       ]
+    },
+    "tasks": {
+      "type": "string",
+      "title": "The task list of the running Overview",
+      "description": "expanded: every task with its sub-line, the legend, the current task's agent block with its metrics and the Recent activity list; compact: the titles and badges only, with the current task's activity strip",
+      "default": "expanded",
+      "options": [
+        "expanded",
+        "compact"
+      ]
     }
   },
   "license": "MIT"

@@ -104,7 +104,7 @@ const signals = atom({ plugin: 'pipeline', key: 'signals' } as const, [] as Sign
 // The session runner's children and the other sessions on this repository, as the panel draws them; the runner keeps them.
 const children = atom({ plugin: 'pipeline', key: 'children' } as const, [] as ChildSession[])
 const siblings = atom({ plugin: 'pipeline', key: 'siblings' } as const, [] as Sibling[])
-const panel = atom({ plugin: 'pipeline', key: 'panel' } as const, { view: 'overview', filter: 'inbox', search: '', expanded: null, isMoreShown: false, autoOpenedFor: '', isBandOpen: false } as Panel)
+const panel = atom({ plugin: 'pipeline', key: 'panel' } as const, { view: 'overview', filter: 'inbox', search: '', expanded: null, isMoreShown: false, autoOpenedFor: '', isBandOpen: false, isActivityOpen: false } as Panel)
 // The clock the panel draws against: the ticker moves it, so minutes and the merged week stay current.
 const now = atom({ plugin: 'pipeline', key: 'now' } as const, 0)
 
@@ -112,10 +112,11 @@ const slashes = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
 // ---------- the panel ----------
 
-/** The `autoOpen`, `band` and `idleStrip` settings as this load of the module received them. */
+/** The `autoOpen`, `band`, `idleStrip` and `tasks` settings as this load of the module received them. */
 let isAutoOpen = true
 let isCompactBand = false
 let isIdleStrip = true
+let isCompactTasks = false
 
 async function openPane($: EngineInterface, focus = false): Promise<void> {
   const at = await $.clock.now()
@@ -1421,6 +1422,7 @@ export const register: Register = (on, options) => {
   isAutoOpen = (options as Record<string, unknown> | undefined)?.autoOpen !== 'never'
   isCompactBand = (options as Record<string, unknown> | undefined)?.band === 'compact'
   isIdleStrip = (options as Record<string, unknown> | undefined)?.idleStrip !== 'hide'
+  isCompactTasks = (options as Record<string, unknown> | undefined)?.tasks === 'compact'
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -1848,7 +1850,9 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
     limitMs: limitsOf(c).taskMinutes * 60_000,
     fixRounds: limitsOf(c).fixRounds,
     taskReview: c ? normalizeConfig(c).config.taskReview : DEFAULTS.taskReview,
+    tasksMode: isCompactTasks ? 'compact' : 'expanded',
     onView: (view: View) => set({ view }),
+    onActivity: () => void update($, panel, prev => ({ ...prev, isActivityOpen: !prev.isActivityOpen })),
     onFilter: (filter: QueueFilter) => set({ filter, expanded: null }),
     onSearch: (search: string) => set({ search, expanded: null }),
     onExpand: (expanded: string | null) => set({ expanded }),

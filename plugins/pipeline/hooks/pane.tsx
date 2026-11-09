@@ -4,11 +4,11 @@
 // PRs). Every other surface gets the text block of spec §9, with the view's name. Nothing is only in the panel.
 import type { EngineInterface, RenderElement } from 'claude-code'
 
-import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, TaskReview, View } from '../types'
-import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, MERGED_ROW_H, METRICS_H, ROW_H, SESSION_ROW_H, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, totals } from './draw'
+import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, TaskReview, TasksMode, View } from '../types'
+import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TASK_BAR_H, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, taskBarSvg, taskRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
-import { attemptText, attemptsOf, currentLine, reviewNote, currentTask, displayTitle, finishedOfTask, groupCounts, heroSentence, leadLine, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, siblingLabel, stepsOf, tagOf, taskCounter } from './status'
+import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from './status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
 type Element = RenderElement
@@ -58,7 +58,11 @@ export type PanelInput = StatusInput & {
   fixRounds: number
   /** The config's taskReview, for the line under a task the lead read itself. */
   taskReview?: TaskReview
+  /** The `tasks` setting: compact drops the sub-lines, the legend, the agent block's details and Recent activity. */
+  tasksMode?: TasksMode
   onView: (view: View) => void
+  /** Toggles the Recent activity list. */
+  onActivity?: () => void
   onFilter: (filter: QueueFilter) => void
   onSearch: (search: string) => void
   onExpand: (id: string | null) => void
@@ -391,7 +395,7 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
 }
 
 function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element {
-  const { Box, Svg, Text } = u
+  const { Box, Svg, Text, Button } = u
   const items = d.backlog?.items ?? []
   const ledger = d.ledger && d.ledger.item === active.id ? d.ledger : null
   const tasks = ledger?.tasks ?? []
@@ -400,8 +404,7 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
   const running = d.agents.filter(a => a.status === 'running').reverse()
   const t = totals(d.agents, at)
   const current = currentTask(ledger)
-  // The last few finished agents of the current task, shown while its ledger has no dispatch to draw the trail from.
-  const finished = finishedOfTask(d.agents, current, ledger).slice(-FINISHED_SHOWN).reverse()
+  const isCompact = d.tasksMode === 'compact'
   const hero: Hero = {
     kind: 'running',
     state: `${active.status.toUpperCase()} · ${active.id.toUpperCase()}`,
@@ -411,30 +414,27 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
     steps: stepsOf(active, ledger),
   }
   const drawn = heroSvg(W, hero)
-  const cards = running.map(a => {
-    const { role, effort } = roleOf(a, ledger)
-    const c: AgentCard = { role: cap(role), model: a.model, ...(effort ? { effort } : {}), status: a.status, activity: a.activity, progress: d.limitMs ? Math.min(1, (at - a.startedAt) / d.limitMs) : 0, calls: a.calls, tokens: a.tokens, elapsedMs: at - a.startedAt }
-    return <Svg key={a.id} source={agentCardSvg(W, c)} alt={`${c.role}: ${modelName(a.model)}${effort ? ` · ${effort}` : ''}, running, ${a.activity}`} width={W} height={AGENT_CARD_H} />
+  // The task bar and its legend: one segment per task.
+  const segments = tasks.map(task => taskSegment(task, current))
+  const legend = segmentLegend(segments)
+  const legendColor = (kind: (typeof legend)[number]['kind']) => (kind === 'accepted' ? DONE : kind === 'current' ? ACCENT : kind === 'blocked' ? BLOCKED : undefined)
+  // One drawn row per task; without a ledger, the running agents' cards as before.
+  const rows = taskRowsOf({ tasks, agents: d.agents, ledger, fixRounds: d.fixRounds, taskReview: d.taskReview, now: at })
+  const taskRows = rows.map((r, i) => {
+    const row = taskRowSvg(W, r, { isFirst: i === 0, isLast: i === rows.length - 1, isCompact })
+    const agent = r.agent ? line([r.agent.role, r.agent.model, r.agent.activity, `${r.agent.calls} tool calls`, `${fmtTokens(r.agent.tokens)} tokens`, `${fmtDuration(r.agent.elapsedMs)} elapsed`]) : undefined
+    const alt = line([`Task ${r.n}`, r.title, r.badge, isCompact ? undefined : r.sub, agent, isCompact ? undefined : r.lead, ...(isCompact ? [] : r.history.map(h => h.text))])
+    return <Svg key={`task-${r.n}`} source={row.source} alt={alt} width={W} height={row.height} />
   })
-  // The current task's attempts from the ledger: Build, Review with its verdict, Fix n of max; the agents atom only before the ledger has any.
-  const attempts = attemptsOf(current, d.fixRounds, d.taskReview)
-  const timeline = tasks.map(task => {
-    const isCurrent = task.status === 'running' || task.status === 'fix' || (task.status === 'pending' && current?.n === task.n)
-    const agent = isCurrent ? running[0] : undefined
-    const mark = task.status === 'accepted' ? '✓' : task.status === 'blocked' ? '✕' : isCurrent ? '●' : '○'
-    const word = task.status === 'accepted' ? 'Accepted' : task.status === 'blocked' ? 'Blocked' : task.status === 'fix' ? 'Fix round' : isCurrent ? 'In progress' : 'Pending'
-    const color = task.status === 'accepted' ? DONE : task.status === 'blocked' ? BLOCKED : isCurrent ? ACCENT : undefined
-    const sub = isCurrent ? currentLine(task, agent, ledger, d.fixRounds, at) : (reviewNote(task, d.taskReview) ?? '')
-    return (
-      <Box key={`task-${task.n}`} flexDirection="column">
-        <Text color={color} dimColor={!color}>
-          {`${mark} ${task.title}`}
-          <Text dimColor>{`  ${word}`}</Text>
-        </Text>
-        {sub ? <Text dimColor>{`   ${sub}`}</Text> : null}
-      </Box>
-    )
-  })
+  const cards = tasks.length
+    ? []
+    : running.map(a => {
+        const { role, effort } = roleOf(a, ledger)
+        const c: AgentCard = { role: cap(role), model: a.model, ...(effort ? { effort } : {}), status: a.status, activity: a.activity, progress: d.limitMs ? Math.min(1, (at - a.startedAt) / d.limitMs) : 0, calls: a.calls, tokens: a.tokens, elapsedMs: at - a.startedAt }
+        return <Svg key={a.id} source={agentCardSvg(W, c)} alt={`${c.role}: ${modelName(a.model)}${effort ? ` · ${effort}` : ''}, running, ${a.activity}`} width={W} height={AGENT_CARD_H} />
+      })
+  const activity = activityLines(tasks, d.taskReview)
+  const isActivityOpen = !!d.panel.isActivityOpen
   const ready = items.filter(i => i.status === 'ready')
   const inbox = items.filter(i => i.status === 'inbox')
   const next = ready[0] ?? inbox[0]
@@ -445,24 +445,43 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
       <Text dimColor tabular>
         {`${fmtTime(t.time)} elapsed · ${fmtTokens(t.tokens)} tokens · ≈${fmtCost(t.cost)} cost`}
       </Text>
-      {heading(u, running.length ? 'Active agent' : 'Lead', running.length ? `${running.length} running` : undefined, undefined)}
-      {current ? <Text dimColor>{`Task ${current.n} / ${tasks.length}`}</Text> : null}
-      {cards.length ? cards : <Text color={ACCENT}>{leadLine(ledger, at)}</Text>}
-      {attempts.length
-        ? attempts.map((a, i) => (
-            <Text key={`attempt-${i}`} color={a.isNote ? undefined : a.verdict === 'FIX REQUIRED' ? BLOCKED : DONE} dimColor={a.verdict !== 'FIX REQUIRED'}>
-              {attemptText(a)}
-            </Text>
-          ))
-        : finished.map(a => (
-            <Text key={`finished-${a.id}`} color={a.status === 'failed' ? BLOCKED : DONE} dimColor={a.status !== 'failed'}>
-              {line([a.name, modelName(a.model), fmtTime((a.endedAt ?? at) - a.startedAt), a.status])}
+      <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
+        <Text dimColor>Task progress</Text>
+        <Text weight="semibold">{`${done} of ${tasks.length} accepted`}</Text>
+      </Box>
+      <Svg source={taskBarSvg(W, segments)} alt={`Task progress: ${legend.map(l => `${l.n} ${l.word}`).join(', ')}`} width={W} height={TASK_BAR_H} />
+      {!isCompact && tasks.length ? (
+        <Text dimColor>
+          {legend.map((l, i) => (
+            <Text key={`legend-${l.kind}`}>
+              {i ? ' · ' : ''}
+              <Text color={legendColor(l.kind)} weight="semibold">
+                {String(l.n)}
+              </Text>
+              {` ${l.word}`}
             </Text>
           ))}
+        </Text>
+      ) : null}
+      {heading(u, 'Tasks', 'Ordered execution')}
+      {taskRows.length ? (
+        <Box flexDirection="column">{taskRows}</Box>
+      ) : (
+        <Box flexDirection="column">
+          {cards}
+          <Text dimColor>No ledger yet.</Text>
+        </Box>
+      )}
       {childRows(u, d)}
-      {heading(u, 'Task progress', undefined, { key: 'goto-queue', label: 'All work →', onPress: () => d.onView('queue') })}
-      {timeline.length ? <Box flexDirection="column">{timeline}</Box> : <Text dimColor>No ledger yet.</Text>}
-      {heading(u, 'Up next', `${ready.length} ready · ${inbox.length} inbox`)}
+      {!isCompact && activity.length ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Box flexDirection="row">
+            <Button key="activity-toggle" plain dimColor label={isActivityOpen ? 'Recent activity ⌃' : 'Recent activity ⌄'} onPress={() => d.onActivity?.()} />
+          </Box>
+          {isActivityOpen ? activity.map((a, i) => <Text key={`activity-${i}`} color={MUTED}>{a}</Text>) : null}
+        </Box>
+      ) : null}
+      {heading(u, 'Up next', `${ready.length} ready · ${inbox.length} inbox`, { key: 'goto-queue', label: 'View queue →', onPress: () => d.onView('queue') })}
       {next
         ? card(u, [
             itemRow(

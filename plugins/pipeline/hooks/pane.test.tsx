@@ -335,7 +335,7 @@ test('desktop idle Overview with ready items: Up next lists them and the hero na
   await ui.unmount()
 })
 
-test('desktop running Overview: the hero with the item, progress and steps, the usage line, the agent card, the task timeline and Up next', async ($, on) => {
+test('desktop running Overview: the hero with the item, progress and steps, the usage line, the task bar and its legend, one drawn row per task with the agent in the current one, and Up next', async ($, on) => {
   const { clock } = world(on, SEED)
   await start($ as never)
   await spawn($ as never, 'Implement task 2', 1)
@@ -357,30 +357,50 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   expect(a.some(t => t === 'dotted grid')).toBe(false)
   // The usage line.
   expect((await ui.find({ type: 'Text', text: /elapsed · / }))?.text).toMatch(/^5:00 elapsed · 0 tokens · ≈\$0\.00 cost$/)
-  // One card for the running agent: its role, model and effort; the failed one as a line.
-  expect(a[1]).toBe('Implementer: Sonnet 5.5 · medium, running, starting')
-  const card = await svgOf(ui, /^Implementer/)
-  expect(card).toContain('Sonnet 5.5 · medium')
-  expect(card).toContain('5:00')
-  expect(a).toHaveLength(3)
-  expect(await ui.find({ type: 'Text', text: /^Active agent/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Task 2 / 3' })).toBeDefined()
-  // The current task's trail comes from the ledger's dispatches; an agent of an earlier task (the failed review of task 1) is not listed here.
-  expect((await ui.find({ type: 'Text', text: /^Build · / }))?.text).toBe('Build · Sonnet 5.5 · 0:00 ✓')
-  expect(await ui.find({ type: 'Text', text: /Review task 1/ })).toBeUndefined()
-  // The timeline from the ledger.
-  const parser = await ui.find({ type: 'Text', text: /^✓ The parser/ })
-  expect(parser?.props['color']).toBe(DONE)
-  expect(parser?.text).toContain('Accepted')
-  const writer = await ui.find({ type: 'Text', text: /^● The writer/ })
-  expect(writer?.props['color']).toBe(RUNNING)
-  expect(writer?.text).toContain('In progress')
-  expect(await ui.find({ type: 'Text', text: '   Implementer · Sonnet 5.5 · 5:00' })).toBeDefined()
-  const command = await ui.find({ type: 'Text', text: /^○ The command/ })
-  expect(command?.props['dimColor']).toBe(true)
-  // Up next: the first ready item.
-  expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeDefined()
-  expect(a[2]).toBe('p3: Search · M · Ready')
+  // The task bar: the labels, one segment per task, the legend with coloured counts.
+  expect(await ui.find({ type: 'Text', text: 'Task progress' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1 of 3 accepted' })).toBeDefined()
+  expect(a[1]).toBe('Task progress: 1 accepted, 1 in progress, 1 pending')
+  const bar = await svgOf(ui, /^Task progress:/)
+  expect(bar).toContain(`fill="${DONE}"`)
+  expect(bar).toContain('url(#task-stripe)')
+  expect(bar).toContain('fill="#3b3b46"')
+  expect((await ui.find({ type: 'Text', text: '1 accepted · 1 in progress · 1 pending' }))?.props['dimColor']).toBe(true)
+  expect(await ui.find({ type: 'Text', text: /^Tasks/ })).toBeDefined()
+  // One drawn row per task: the accepted one, the current one with its running agent, the next one; the old agent card and timeline are gone.
+  expect(a[2]).toBe('Task 1 · The parser · Accepted')
+  expect(a[3]).toBe('Task 2 · The writer · ● Running · Implementation · in progress · Implementer · Sonnet 5.5 · medium · starting · 0 tool calls · 0 tokens · 5m 00s elapsed')
+  expect(a[4]).toBe('Task 3 · The command · Pending')
+  const parser = await svgOf(ui, /^Task 1 · /)
+  expect(parser).toContain('01 · COMPLETED')
+  expect(parser).toContain('>Accepted<')
+  expect(parser).toContain(`fill="${DONE}"`)
+  const writer = await svgOf(ui, /^Task 2 · /)
+  expect(writer).toContain('02 · CURRENT TASK')
+  expect(writer).toContain('>● Running<')
+  expect(writer).toContain('>Implementer<')
+  expect(writer).toContain('>Sonnet 5.5 · medium<')
+  expect(writer).toContain('>starting<')
+  expect(writer).toContain('5m 00s elapsed')
+  expect(writer).toContain('class="live"')
+  const command = await svgOf(ui, /^Task 3 · /)
+  expect(command).toContain('03 · NEXT TASK')
+  expect(command).toContain('>Pending<')
+  // An agent of an earlier task (the failed review of task 1) is not in the current task's row.
+  expect(a.some(t => /Review task 1/.test(t))).toBe(false)
+  expect(await ui.find({ type: 'Text', text: /^Active agent/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^✓ The parser/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Task 2 / 3' })).toBeUndefined()
+  // Recent activity: closed, with one line per accepted task once opened.
+  expect((await ui.find({ key: 'activity-toggle' }))?.props['label']).toBe('Recent activity ⌄')
+  expect(await ui.find({ type: 'Text', text: /^✓ Task 1 accepted/ })).toBeUndefined()
+  await ui.press({ key: 'activity-toggle' })
+  expect((await ui.find({ key: 'activity-toggle' }))?.props['label']).toBe('Recent activity ⌃')
+  expect((await ui.find({ type: 'Text', text: /^✓ Task 1 accepted/ }))?.text).toBe('✓ Task 1 accepted')
+  // Up next: the counts and the first ready item, with the way to the queue.
+  expect((await ui.find({ type: 'Text', text: /^Up next/ }))?.text).toBe('Up next · 1 ready · 1 inbox')
+  expect((await ui.find({ key: 'goto-queue' }))?.props['label']).toBe('View queue →')
+  expect(a[5]).toBe('p3: Search · M · Ready')
   expect(await ui.find({ key: 'row-p3' })).toBeDefined()
   expect(await ui.find({ key: 'row-p5' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '1 agent working · no signals' })).toBeDefined()
@@ -391,7 +411,28 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   await ui.unmount()
 })
 
-test('desktop running Overview in a fix round: a Lead line instead of an empty agent section, the current task\'s attempt trail from the ledger, and the timeline\'s fix round line', async ($, on) => {
+test('tasks compact: no legend, no sub-lines, no Recent activity, the current task keeps its badge and activity strip', { options: { tasks: 'compact' } }, async ($, on) => {
+  const { clock } = world(on, SEED)
+  await start($ as never)
+  await spawn($ as never, 'Implement task 2', 1)
+  await clock.advance(MIN)
+  const ui = await mount($ as never, 'desktop')
+  const a = await alts(ui)
+  expect(await ui.find({ type: 'Text', text: 'Task progress' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1 accepted · 1 in progress · 1 pending' })).toBeUndefined()
+  expect(a[2]).toBe('Task 1 · The parser · Accepted')
+  expect(a[3]).toBe('Task 2 · The writer · ● Running · Implementer · Sonnet 5.5 · medium · starting · 0 tool calls · 0 tokens · 1m 00s elapsed')
+  const writer = await svgOf(ui, /^Task 2 · /)
+  expect(writer).toContain('>● Running<')
+  expect(writer).toContain('>starting<')
+  expect(writer).not.toContain('>Implementer<')
+  expect(writer).not.toContain('elapsed')
+  expect(await svgOf(ui, /^Task 1 · /)).not.toContain('lead read the diff')
+  expect(await ui.find({ key: 'activity-toggle' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('desktop running Overview in a fix round: the current task reads Fix round n of m, with the lead line and the attempt trail in its card and no agent block', async ($, on) => {
   const ledger = JSON.parse(LEDGER) as { tasks: Record<string, unknown>[]; resume: Record<string, unknown> }
   ledger.tasks[1] = {
     n: 2,
@@ -407,27 +448,22 @@ test('desktop running Overview in a fix round: a Lead line instead of an empty a
   world(on, { ...SEED, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
   await start($ as never)
   const ui = await mount($ as never, 'desktop')
-  // No agent runs: the Lead line, with what it does and since when; no "Active agent · 0 running", no "No subagent running."
+  // No agent runs: no "Active agent", no "No subagent running."; the card carries the lead line and the trail.
   expect(await ui.find({ type: 'Text', text: /^Active agent/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'No subagent running.' })).toBeUndefined()
-  expect((await ui.find({ type: 'Text', text: /^Lead$|^Lead · / }))?.text).toBe('Lead')
-  const lead = await ui.find({ type: 'Text', text: /^Lead · / })
-  expect(lead?.text).toBe('Lead · fix round 1 dispatched · 2:10')
-  expect(lead?.props['color']).toBe(RUNNING)
-  expect(await ui.find({ type: 'Text', text: 'Task 2 / 3' })).toBeDefined()
-  // The attempt trail of task 2 from its dispatches, in order; the review that required fixes in amber.
-  const trail = (await ui.findAll({ type: 'Text', text: /^(Build|Review|Fix \d) / })).map(t => [t.text, t.props['color']])
-  expect(trail).toEqual([
-    ['Build · Sonnet 5.5 · 3:20 ✓', DONE],
-    ['Review · Opus 5.5 · 0:58 · FIX REQUIRED', BLOCKED],
-    ['Fix 1 of 3 · Sonnet 5.5 · 0:37 ✓', DONE],
-  ])
+  const a = await alts(ui)
+  expect(a[3]).toBe('Task 2 · The writer · Fix round 1 of 3 · Fix round 1 of 3 · after review: FIX REQUIRED · Lead · fix round 1 dispatched · 2:10 · Build · Sonnet 5.5 · 3:20 ✓ · Review · Opus 5.5 · 0:58 · FIX REQUIRED · Fix 1 of 3 · Sonnet 5.5 · 0:37 ✓')
+  const writer = await svgOf(ui, /^Task 2 · /)
+  expect(writer).toContain('>Fix round 1 of 3<')
+  expect(writer).toContain(`fill="${RUNNING}">Lead · fix round 1 dispatched · 2:10<`)
+  expect(writer).toContain(`fill="${BLOCKED}">Review · Opus 5.5 · 0:58 · FIX REQUIRED<`)
+  expect(writer).toContain('>Build · Sonnet 5.5 · 3:20 ✓<')
+  expect(writer).toContain('>Fix 1 of 3 · Sonnet 5.5 · 0:37 ✓<')
+  expect(writer).not.toContain('>Implementer<')
+  expect(writer).not.toContain('tool calls')
   expect(await ui.find({ type: 'Text', text: /fix round 1 · / })).toBeUndefined()
-  // The timeline: the current task reads Fix round, with the round, the limit and the verdict on its second line.
-  const writer = await ui.find({ type: 'Text', text: /^● The writer/ })
-  expect(writer?.text).toBe('● The writer  Fix round')
-  expect(await ui.find({ type: 'Text', text: '   Fix round 1 of 3 · after review: FIX REQUIRED' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^   opus$/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^Task progress/ }))?.text).toBe('Task progress')
+  expect(await ui.find({ type: 'Text', text: 'No subagents running' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -438,9 +474,10 @@ test('taskReview: an accepted task the lead read itself shows a dim line under i
   world(on, { ...SEED, [CONFIG]: off, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
   await start($ as never)
   const ui = await mount($ as never, 'desktop')
-  const note = await ui.find({ type: 'Text', text: '   review skipped (taskReview off)' })
-  expect(note).toBeDefined()
-  expect(note?.props['dimColor']).toBe(true)
+  expect((await alts(ui))[2]).toBe('Task 1 · The parser · Accepted · review skipped (taskReview off)')
+  expect(await svgOf(ui, /^Task 1 · /)).toContain('fill="#898696">review skipped (taskReview off)<')
+  await ui.press({ key: 'activity-toggle' })
+  expect((await ui.find({ type: 'Text', text: /^✓ Task 1 accepted/ }))?.text).toBe('✓ Task 1 accepted · review skipped')
   await ui.unmount()
 })
 
@@ -450,7 +487,7 @@ test('taskReview: with the default setting the same task reads lead read the dif
   world(on, { ...SEED, [`${DIR}/ledgers/p2.json`]: JSON.stringify(ledger) + '\n' })
   await start($ as never)
   const ui = await mount($ as never, 'desktop')
-  expect(await ui.find({ type: 'Text', text: '   lead read the diff' })).toBeDefined()
+  expect((await alts(ui))[2]).toBe('Task 1 · The parser · Accepted · lead read the diff')
   await ui.unmount()
 })
 
@@ -614,11 +651,12 @@ test('desktop running Overview: with no dispatch recorded for the current task, 
   await clock.advance(MIN)
   await complete($ as never, { agentId: 'agent-t4' })
   const ui = await mount($ as never, 'desktop')
-  expect(await ui.find({ type: 'Text', text: /^Lead$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^Review task 1/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /^Implement task 1/ })).toBeUndefined()
-  expect((await ui.find({ type: 'Text', text: /^Implement task 2/ }))?.text).toBe('Implement task 2 · Sonnet 5.5 · 1:00 · done')
-  expect(await ui.find({ type: 'Text', text: /^Explore the writer/ })).toBeDefined()
+  const writer = (await alts(ui))[3] ?? ''
+  expect(writer.startsWith('Task 2 · The writer · ● Running · Implementation · in progress · Lead · task 2 dispatched · ')).toBe(true)
+  expect(writer).not.toContain('Review task 1')
+  expect(writer).not.toContain('Implement task 1')
+  expect(writer).toContain('Implement task 2 · Sonnet 5.5 · 1:00 · done')
+  expect(writer).toContain('Explore the writer')
   await ui.unmount()
 })
 

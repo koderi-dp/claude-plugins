@@ -11,7 +11,7 @@ const MIN = 60_000
 const iso = (ms: number) => new Date(ms).toISOString()
 
 const noop = () => {}
-const PANEL: Panel = { view: 'overview', filter: 'inbox', search: '', expanded: null, isMoreShown: false, autoOpenedFor: '', isBandOpen: false }
+const PANEL: Panel = { view: 'overview', filter: 'inbox', search: '', expanded: null, isMoreShown: false, autoOpenedFor: '', isBandOpen: false, isActivityOpen: false }
 const CONFIG: Config = { ...DEFAULTS, taskReview: 'off' }
 
 const item = (id: string, title: string, status: Item['status'], extra: Partial<Item> = {}): Item => ({ id, title, status, size: 'M', updatedAt: iso(NOW - 3 * 24 * 60 * MIN), ...extra })
@@ -81,7 +81,9 @@ const base = (items: Item[], over: Partial<PanelInput> = {}): PanelInput => ({
   limitMs: DEFAULTS.limits.taskMinutes * MIN,
   fixRounds: 2,
   taskReview: 'off',
+  tasksMode: 'expanded',
   onView: noop,
+  onActivity: noop,
   onFilter: noop,
   onSearch: noop,
   onExpand: noop,
@@ -150,4 +152,13 @@ export const queue = (): PanelInput => base(catalo(), { panel: { ...PANEL, view:
 
 export const history = (): PanelInput => base(catalo(), { panel: { ...PANEL, view: 'history' } })
 
-export const STATES: Record<string, () => PanelInput> = { idle, running, fixRound, queue, history }
+/** The running state with the Recent activity list open. */
+export const runningOpen = (): PanelInput => {
+  const d = running()
+  return { ...d, panel: { ...d.panel, isActivityOpen: true } }
+}
+
+/** The running state under `tasks: compact`. */
+export const runningCompact = (): PanelInput => ({ ...running(), tasksMode: 'compact' })
+
+export const STATES: Record<string, () => PanelInput> = { idle, running, fixRound, queue, history, runningOpen, runningCompact }

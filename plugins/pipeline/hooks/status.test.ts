@@ -357,3 +357,113 @@ test('siblingLabel: a session with an item or agents by its title, item and agen
   expect(siblingLabel(sib({ isStale: true }))).toEqual({ title: 'idle session · catalo', meta: 'stale', isIdle: true })
   expect(siblingLabel(sib({ title: '', cwd: 'C:\\work\\openhuddle\\' }))).toEqual({ title: 'idle session · openhuddle', meta: '', isIdle: true })
 })
+
+import type { TaskRecord } from '../types'
+import { activityLines, fmtDuration, segmentLegend, taskRowsOf, taskSegment } from './status'
+
+const dispatch = (role: TaskRecord['dispatches'][number]['role'], model: string, minutes: number, result = 'done') => ({ role, model, effort: 'medium', tokens: 1000, minutes, result })
+
+test('fmtDuration: seconds, minutes and seconds, hours and minutes', () => {
+  expect(fmtDuration(45_000)).toBe('45s')
+  expect(fmtDuration(274_000)).toBe('4m 34s')
+  expect(fmtDuration(156_000)).toBe('2m 36s')
+  expect(fmtDuration(3_720_000)).toBe('1h 02m')
+  expect(fmtDuration(-5)).toBe('0s')
+})
+
+test('taskSegment and segmentLegend: the bar\'s segments and the counts under it, blocked only when any is', () => {
+  const current = { n: 3 }
+  const tasks: TaskRecord[] = [
+    { n: 1, title: 'a', status: 'accepted', dispatches: [] },
+    { n: 2, title: 'b', status: 'blocked', dispatches: [] },
+    { n: 3, title: 'c', status: 'pending', dispatches: [] },
+    { n: 4, title: 'd', status: 'pending', dispatches: [] },
+  ]
+  const segments = tasks.map(t => taskSegment(t, current))
+  expect(segments).toEqual(['accepted', 'blocked', 'current', 'pending'])
+  expect(segmentLegend(segments)).toEqual([
+    { n: 1, word: 'accepted', kind: 'accepted' },
+    { n: 1, word: 'in progress', kind: 'current' },
+    { n: 1, word: 'pending', kind: 'pending' },
+    { n: 1, word: 'blocked', kind: 'blocked' },
+  ])
+  expect(segmentLegend(['accepted', 'current', 'pending']).map(l => `${l.n} ${l.word}`)).toEqual(['1 accepted', '1 in progress', '1 pending'])
+})
+
+const TASKS: TaskRecord[] = [
+  { n: 1, title: 'Grid line model and track-resize gesture', status: 'accepted', dispatches: [dispatch('implementer', 'claude-opus-5-5', 4.57)], review: { kind: 'lead-diff', verdict: 'accepted' } },
+  { n: 2, title: 'Canvas: drawn grid, draggable boundaries', status: 'running', dispatches: [dispatch('implementer', 'claude-opus-5-5', 0, '')] },
+  { n: 3, title: 'The Page tab follows the drag live', status: 'pending', dispatches: [] },
+  { n: 4, title: 'Docs', status: 'pending', dispatches: [] },
+]
+const taskLedger = (tasks: TaskRecord[], resume: Ledger['resume']): Ledger => ({ item: 'p72', tasks, rulings: [], blockers: [], tokens: 0, resume })
+const running = (name: string, model: string, startedAt: number): AgentRun => ({ id: name, name, model, status: 'running', startedAt, lastStepAt: NOW, calls: 18, tokens: 1_400_000, activity: 'running npx prettier', lastCommands: [], failures: 0 })
+
+test('taskRowsOf: an accepted task reads completed with who implemented it and how it was reviewed; the current task carries its agent; the first pending task is next, the rest pending', () => {
+  const ledger = taskLedger(TASKS, { task: 2, state: 'task 2 dispatched', at: new Date(NOW - 156_000).toISOString() })
+  const rows = taskRowsOf({ tasks: TASKS, agents: [running('Implement task 2', 'claude-opus-5-5', NOW - 156_000)], ledger, fixRounds: 2, taskReview: 'off', now: NOW })
+  expect(rows.map(r => [r.kind, r.eyebrow, r.badge, r.badgeKind])).toEqual([
+    ['done', '01 · COMPLETED', 'Accepted', 'done'],
+    ['current', '02 · CURRENT TASK', '● Running', 'running'],
+    ['pending', '03 · NEXT TASK', 'Pending', 'pending'],
+    ['pending', '04 · PENDING', 'Pending', 'pending'],
+  ])
+  expect(rows[0]!.sub).toBe('Implemented by Opus 5.5 · 4m 34s · review skipped (taskReview off)')
+  expect(rows[1]!.sub).toBe('Implementation · in progress')
+  expect(rows[1]!.agent).toEqual({ role: 'Implementer', model: 'Opus 5.5 · medium', activity: 'running npx prettier', calls: 18, tokens: 1_400_000, elapsedMs: 156_000 })
+  expect(rows[1]!.lead).toBeUndefined()
+  expect(rows[1]!.history).toEqual([])
+  expect(rows[2]!.sub).toBeUndefined()
+  // A reviewer running: In review, Review · in progress. An independent review on an accepted task names its verdict.
+  const reviewed: TaskRecord[] = [{ ...TASKS[0]!, review: { kind: 'independent', verdict: 'APPROVED' } }, { ...TASKS[1]!, dispatches: [dispatch('implementer', 'claude-opus-5-5', 3), { ...dispatch('reviewer', 'claude-opus-5-5', 0, ''), effort: 'high' }] }]
+  const review = taskRowsOf({ tasks: reviewed, agents: [running('Review task 2', 'claude-opus-5-5', NOW - 30_000)], ledger: taskLedger(reviewed, ledger.resume), fixRounds: 2, taskReview: 'risky', now: NOW })
+  expect(review[0]!.sub).toBe('Implemented by Opus 5.5 · 4m 34s · review APPROVED')
+  expect(review[1]!.badge).toBe('In review')
+  expect(review[1]!.sub).toBe('Review · in progress')
+  expect(review[1]!.agent?.model).toBe('Opus 5.5 · high')
+})
+
+test('taskRowsOf: in a fix round with no agent, the current task reads Fix round n of m with the lead line and the attempt trail; a blocked task reads blocked', () => {
+  const fix: TaskRecord[] = [
+    TASKS[0]!,
+    { ...TASKS[1]!, status: 'fix', dispatches: [dispatch('implementer', 'claude-sonnet-5-5', 3.3333), dispatch('reviewer', 'claude-opus-5-5', 0.97, 'FIX REQUIRED: no test'), dispatch('implementer', 'claude-sonnet-5-5', 0, '')] },
+    { ...TASKS[2]!, status: 'blocked', review: { kind: 'independent', verdict: 'blocked: the schema is undecided' } },
+  ]
+  const ledger = taskLedger(fix, { task: 2, state: 'fix round 1 dispatched', at: new Date(NOW - 40_000).toISOString() })
+  const rows = taskRowsOf({ tasks: fix, agents: [], ledger, fixRounds: 2, taskReview: 'off', now: NOW })
+  expect(rows[1]!.badge).toBe('Fix round 1 of 2')
+  expect(rows[1]!.sub).toBe('Fix round 1 of 2 · after review: FIX REQUIRED')
+  expect(rows[1]!.agent).toBeUndefined()
+  expect(rows[1]!.lead).toBe('Lead · fix round 1 dispatched · 0:40')
+  expect(rows[1]!.history).toEqual([
+    { text: 'Build · Sonnet 5.5 · 3:20 ✓', kind: 'done' },
+    { text: 'Review · Opus 5.5 · 0:58 · FIX REQUIRED', kind: 'blocked' },
+    { text: 'Fix 1 of 2 · Sonnet 5.5 · 0:00 ✓', kind: 'done' },
+  ])
+  expect(rows[2]).toEqual({ n: 3, kind: 'blocked', eyebrow: '03 · BLOCKED', badge: 'Blocked', badgeKind: 'blocked', title: 'The Page tab follows the drag live', sub: 'blocked: the schema is undecided', history: [] })
+})
+
+test('taskRowsOf: a current task with no dispatch and no agent lists its own finished agents under the lead line, not an earlier task\'s', () => {
+  const tasks: TaskRecord[] = [TASKS[0]!, { ...TASKS[1]!, dispatches: [] }, TASKS[2]!]
+  const at = NOW - 5 * 60_000
+  const ledger = taskLedger(tasks, { task: 2, state: 'task 2 dispatched', at: new Date(at).toISOString() })
+  const agents: AgentRun[] = [
+    { ...running('Implement task 1', 'claude-opus-5-5', at - 60 * 60_000), status: 'done', endedAt: at - 50 * 60_000 },
+    { ...running('Review task 1', 'claude-opus-5-5', at - 10 * 60_000), status: 'failed', endedAt: at - 9 * 60_000 },
+    { ...running('Implement task 2', 'claude-sonnet-5-5', at), status: 'done', endedAt: at + 60_000 },
+  ]
+  const rows = taskRowsOf({ tasks, agents, ledger, fixRounds: 2, taskReview: 'off', now: NOW })
+  expect(rows[1]!.lead).toBe('Lead · task 2 dispatched · 5:00')
+  expect(rows[1]!.history).toEqual([{ text: 'Implement task 2 · Sonnet 5.5 · 1:00 · done', kind: 'muted' }])
+})
+
+test('activityLines: one line per accepted task with the implementer, the model, the task\'s minutes and how it was reviewed', () => {
+  const tasks: TaskRecord[] = [
+    TASKS[0]!,
+    { n: 2, title: 'b', status: 'accepted', dispatches: [dispatch('implementer', 'claude-sonnet-5-5', 3), dispatch('reviewer', 'claude-opus-5-5', 1, 'APPROVED')], review: { kind: 'independent', verdict: 'APPROVED' } },
+    { n: 3, title: 'c', status: 'accepted', dispatches: [], review: { kind: 'lead-diff', verdict: 'ok' } },
+    TASKS[2]!,
+  ]
+  expect(activityLines(tasks, 'off')).toEqual(['✓ Task 1 accepted · Implementer (Opus 5.5) · 4:34 · review skipped', '✓ Task 2 accepted · Implementer (Sonnet 5.5) · 4:00 · review APPROVED', '✓ Task 3 accepted · review skipped'])
+  expect(activityLines(tasks, 'risky')[0]).toBe('✓ Task 1 accepted · Implementer (Opus 5.5) · 4:34 · lead read the diff')
+})
