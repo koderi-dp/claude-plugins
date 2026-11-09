@@ -20,7 +20,7 @@ Only the plugin's tool writes `backlog.json` and the ledgers; a subagent's call 
 
 ## The loop
 
-A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording that asks for something to be built). It is `ready` once the spec has no open question and its `needs` are merged. `/pipeline next` picks the first ready item: a worktree and branch, a plan with `superpowers:writing-plans`, then task by task an implementer from the brief templates, fix rounds up to the limit, an independent reviewer only when the diff touches a risky path, a final review over the whole branch, the gate, the PR, the merge, the ledger, the clean-up, and one line to you. Statuses: `inbox`, `ready`, `planning`, `building`, `review`, `merged`, `blocked`, `parked`.
+A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording that asks for something to be built). It is `ready` once the spec has no open question and its `needs` are merged. `/pipeline next` picks the first ready item (an item that has only a note gets its spec written from it on pick, and stops only for an open question or an unmerged need): a worktree and branch, a plan with `superpowers:writing-plans`, then task by task an implementer from the brief templates, fix rounds up to the limit, an independent reviewer only when the diff touches a risky path, a final review over the whole branch, the gate, the PR, the merge, the ledger, the clean-up, and one line to you. Statuses: `inbox`, `ready`, `planning`, `building`, `review`, `merged`, `blocked`, `parked`.
 
 ## Commands
 
