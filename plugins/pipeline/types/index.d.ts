@@ -21,7 +21,7 @@ export type ChildSession = { id: string; item: string; worktree: string; branch:
 export type Sibling = { sessionId: string; title: string; cwd: string; branch?: string; item?: string; seenAt: string; agents: AgentRun[]; signals: Signal[]; isStale: boolean }
 export type View = 'overview' | 'queue' | 'history'
 export type QueueFilter = 'inbox' | 'ready' | 'blocked' | 'parked' | 'all'
-export type Panel = { view: View; filter: QueueFilter; search: string; expanded: string | null; isMoreShown: boolean; isCompact: boolean; isDoneCollapsed: boolean; autoOpenedFor: string }
+export type Panel = { view: View; filter: QueueFilter; search: string; expanded: string | null; isMoreShown: boolean; isCompact: boolean; isDoneCollapsed: boolean; autoOpenedFor: string; isBandOpen: boolean }
 declare module 'claude-code' {
   interface PluginState {
     pipeline: { root: string; config: Config | null; backlog: Backlog | null; fileError: string | null; agents: AgentRun[]; signals: Signal[]; children: ChildSession[]; siblings: Sibling[]; panel: Panel; now: number }

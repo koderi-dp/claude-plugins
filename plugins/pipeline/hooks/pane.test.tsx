@@ -1,16 +1,19 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { BLOCKED, DONE, QUEUE_SHOWN, ROWS_SHOWN, RUNNING } from './pane'
+import { BLOCKED, DONE, OVERVIEW_ROWS, ROWS_SHOWN, RUNNING } from './pane'
+import { BAND_COLORS, SEGMENT_COLORS } from './status'
 
 const MAIN = '/p/main'
 const DIR = `${MAIN}/docs/pipeline`
 const CONFIG = `${DIR}/config.json`
 const BACKLOG = `${DIR}/backlog.json`
+const HEAD = `${MAIN}/.git/HEAD`
 const NOW = Date.parse('2026-11-05T10:00:00Z')
 const MIN = 60_000
+const TOOL = 'mcp__pipeline__pipeline'
 const PANE = { title: 'Pipeline', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
-const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 } as const
+const BAND: { hasSurvey: boolean; isWorking: boolean; maxRows: number; bodyColumns: number } = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 }
 
 const VALID_CONFIG = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: {}, merge: 'pr', notify: 'off' }, null, 2) + '\n'
 
@@ -20,16 +23,24 @@ type Engine = {
   turn: { complete: unknown }
   ui: { mount: (e: never) => Promise<Mounted> }
   command: { run: (e: never) => Promise<unknown> }
+  tool: { call: (e: never) => Promise<unknown> }
 }
 type Found = { type: string; key?: string; props: Record<string, unknown>; text: string } | undefined
-type Mounted = { find: (q: Record<string, unknown>) => Promise<Found>; findAll: (q: Record<string, unknown>) => Promise<NonNullable<Found>[]>; press: (t: Record<string, unknown>) => Promise<unknown>; unmount: () => Promise<void> }
+type Mounted = {
+  find: (q: Record<string, unknown>) => Promise<Found>
+  findAll: (q: Record<string, unknown>) => Promise<NonNullable<Found>[]>
+  press: (t: Record<string, unknown>) => Promise<unknown>
+  input: (t: Record<string, unknown>) => Promise<unknown>
+  unmount: () => Promise<void>
+}
 
-/** A main checkout at /p/main, files in memory, a surface that records which panes are open, an engine that draws "engine" beneath. */
+/** A main checkout at /p/main on branch main, files in memory, a surface that records which panes are open, an engine that draws "engine" beneath. */
 function world(on: On, seed: Record<string, string> = {}) {
   const clock = mock.clock(on, { now: NOW })
-  const files = new Map<string, string>(Object.entries(seed))
+  const files = new Map<string, string>([[HEAD, 'ref: refs/heads/main\n'], ...Object.entries(seed)])
   const panes: string[] = []
   const opened: string[] = []
+  const toasts: string[] = []
   const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
@@ -49,6 +60,10 @@ function world(on: On, seed: Record<string, string> = {}) {
     panes.splice(panes.indexOf(e.id), 1)
     return { value: undefined }
   })
+  on('ui.toast', (_$, e) => {
+    toasts.push(String((e as { text?: string }).text ?? (e as { message?: string }).message ?? ''))
+    return { value: undefined } as never
+  })
   on('ui.panes', () => ({ value: panes.map(id => ({ id, title: 'Pipeline', isPlaced: true })) }) as never)
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -65,23 +80,24 @@ function world(on: On, seed: Record<string, string> = {}) {
   on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
   on('agent.spawn', (_$, e) => ({ model: 'claude-sonnet-5-5', agentId: `agent-${e.tool_use_id}` }))
   on('turn.complete', () => ({ text: '' }) as never)
-  return { clock, files, panes, opened }
+  return { clock, files, panes, opened, toasts }
 }
 
 const start = ($: Engine) => $.session.start({ cwd: MAIN, surface: 'terminal', isInteractive: true } as never)
 const spawn = ($: Engine, description: string, n = 1) =>
   $.agent.spawn({ tool_use_id: `t${n}`, prompt: 'p', description, subagentType: 'general-purpose', provider: 'engine', parentModel: 'claude-x', background: false, fork: false } as never)
 const complete = ($: Engine, e: Record<string, unknown>) => ($.turn.complete as (e: unknown) => Promise<unknown>)({ reason: 'answer', answer: 'ok', ...e })
-const mount = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal') => $.ui.mount({ plugin: 'pipeline', surface, component: 'Pane', requestId: 'pipeline', props: PANE } as never)
-const band = ($: Engine, surface: 'terminal' | 'desktop') => $.ui.mount({ plugin: 'pipeline', surface, component: 'AbovePrompt', props: BAND } as never)
+const mount = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal', bodyColumns = 60) => $.ui.mount({ plugin: 'pipeline', surface, component: 'Pane', requestId: 'pipeline', props: { ...PANE, bodyColumns } } as never)
+const band = ($: Engine, surface: 'terminal' | 'desktop', props: Partial<typeof BAND> = {}) => $.ui.mount({ plugin: 'pipeline', surface, component: 'AbovePrompt', props: { ...BAND, ...props } } as never)
 const run = async ($: Engine, args: string) => ((await $.command.run({ command: 'pipeline', args, origin: { kind: 'composer' } } as never)) as { text?: string }).text ?? ''
+const call = ($: Engine, input: Record<string, unknown>) => $.tool.call({ tool: TOOL, tool_use_id: 'tc', ...input } as never)
 
 const item = (id: string, title: string, status: string, extra: Record<string, unknown> = {}) => ({ id, title, status, size: 'M', updatedAt: '2026-11-05T09:00:00Z', ...extra })
 const backlogOf = (items: Record<string, unknown>[]) => JSON.stringify({ version: 1, items }, null, 2) + '\n'
 
 const QUEUE = backlogOf([
   item('p1', 'Login', 'merged', { pr: '#3' }),
-  item('p2', 'Export', 'building'),
+  item('p2', 'Export', 'building', { spec: 'docs/pipeline/specs/p2.md' }),
   item('p3', 'Search', 'ready'),
   item('p4', 'Import', 'blocked', { note: 'CI red after one fix' }),
   item('p5', 'Billing', 'inbox'),
@@ -94,7 +110,7 @@ const LEDGER =
       item: 'p2',
       tasks: [
         { n: 1, title: 'The parser', status: 'accepted', dispatches: [] },
-        { n: 2, title: 'The writer', status: 'running', dispatches: [] },
+        { n: 2, title: 'The writer', status: 'running', dispatches: [{ role: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', tokens: 0, minutes: 0, result: '' }] },
         { n: 3, title: 'The command', status: 'pending', dispatches: [] },
       ],
       rulings: [],
@@ -105,9 +121,22 @@ const LEDGER =
     null,
     2,
   ) + '\n'
-const SEED = { [CONFIG]: VALID_CONFIG, [BACKLOG]: QUEUE, [`${DIR}/ledgers/p2.json`]: LEDGER }
+const SPEC = '# p2 Export\n\nStatus: draft\n\n## What\n\nA CSV export of every catalog, streamed to the browser.\n\n## Why\n\nAsked.\n'
+const SEED = { [CONFIG]: VALID_CONFIG, [BACKLOG]: QUEUE, [`${DIR}/ledgers/p2.json`]: LEDGER, [`${DIR}/specs/p2.md`]: SPEC }
 
-test('terminal: every section with its colour, the active item with its task counter, agents and signals, no Svg', async ($, on) => {
+/** 28 inbox items without specs, nothing ready, five merged this week with PR URLs and two older ones. */
+const IDLE = backlogOf([
+  ...Array.from({ length: 28 }, (_, i) => item(`p${i + 1}`, i === 0 ? 'grid-track-sizes — Grid row and column sizes' : `Inbox item ${i + 1}`, 'inbox')),
+  ...Array.from({ length: 5 }, (_, i) => item(`m${i + 1}`, `Merged item ${i + 1}`, 'merged', { pr: `https://x/pull/${30 + i}`, updatedAt: `2026-11-0${4 - (i % 3)}T0${i}:00:00Z` })),
+  ...Array.from({ length: 2 }, (_, i) => item(`o${i + 1}`, `Older ${i + 1}`, 'merged', { pr: `https://x/pull/${10 + i}`, updatedAt: '2026-10-01T00:00:00Z' })),
+])
+
+const alts = async (ui: Mounted) => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props['alt']))
+const svgOf = async (ui: Mounted, alt: RegExp) => String((await ui.findAll({ type: 'Svg' })).find(s => alt.test(String(s.props['alt'])))?.props['source'])
+
+// ---------- the text block ----------
+
+test('terminal: the view name, every section with its colour, the active item with its task counter, agents and signals, no Svg', async ($, on) => {
   const { clock } = world(on, SEED)
   await start($ as never)
   await spawn($ as never, 'Implement task 2', 1)
@@ -116,6 +145,8 @@ test('terminal: every section with its colour, the active item with its task cou
   await complete($ as never, { agentId: 'agent-t2', reason: 'error' })
   const ui = await mount($ as never, 'terminal')
   expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
+  expect(await ui.findAll({ type: 'Input' })).toHaveLength(0)
+  expect((await ui.find({ type: 'Text', text: /^Pipeline · / }))?.text).toBe('Pipeline · Overview')
   expect((await ui.find({ type: 'Text', text: /7 items · 1 ready/ }))?.text).toBe('pipeline: 7 items · 1 ready')
   const active = await ui.find({ type: 'Text', text: /p2 · Export/ })
   expect(active?.text).toBe('p2 · Export · M · building · task 2/3 · task 1 accepted')
@@ -145,67 +176,6 @@ test('terminal: every section with its colour, the active item with its task cou
   await ui.unmount()
 })
 
-test('desktop: the grid, the header with the item and its counter, one card per agent, plan rows, the queue, the signal row', async ($, on) => {
-  const { clock } = world(on, SEED)
-  await start($ as never)
-  await spawn($ as never, 'Implement task 2', 1)
-  await spawn($ as never, 'Review task 1', 2)
-  await clock.advance(5 * MIN)
-  await complete($ as never, { agentId: 'agent-t2', reason: 'error' })
-  const ui = await mount($ as never, 'desktop')
-  const svgs = await ui.findAll({ type: 'Svg' })
-  const alts = svgs.map(s => String(s.props['alt']))
-  expect(alts[0]).toBe('dotted grid')
-  expect(alts[1]).toMatch(/^p2 · Export · task 2\/3: ≈\$\d/)
-  expect(String(svgs[1]!.props['source'])).toContain('p2 · Export · task 2/3')
-  expect(alts).toContain('Implement task 2: Sonnet 5.5, running')
-  expect(alts).toContain('Review task 1: Sonnet 5.5, failed')
-  expect(alts).toContain('3. The command: pending')
-  expect(svgs.every(s => String(s.props['source']).startsWith('<svg'))).toBe(true)
-  const card = svgs.find(s => s.props['alt'] === 'Implement task 2: Sonnet 5.5, running')
-  expect(String(card?.props['source'])).toContain('5:00')
-  expect(await ui.find({ type: 'Text', text: 'Running · 1' })).toBeDefined()
-  expect((await ui.find({ key: 'done' }))?.props['label']).toBe('▾ Finished · 1')
-  expect(await ui.find({ type: 'Text', text: 'Planned · 1' })).toBeDefined()
-  expect((await ui.find({ key: 'compact' }))?.props['label']).toBe('Collapse')
-  // The queue below, as text.
-  expect((await ui.find({ type: 'Text', text: /p4 · Import/ }))?.props['color']).toBe(BLOCKED)
-  expect((await ui.find({ type: 'Text', text: /p1 · Login/ }))?.props['color']).toBe(DONE)
-  expect(await ui.find({ type: 'Text', text: /p3 · Search/ })).toBeDefined()
-  // Collapsed: the compact strip and the toggle, nothing else.
-  await ui.press({ key: 'compact' })
-  expect((await ui.findAll({ type: 'Svg' })).map(s => String(s.props['alt']))).toEqual(['2 agents, ≈$0.00 · 0 tokens · 5:00'])
-  expect((await ui.find({ key: 'compact' }))?.props['label']).toBe('Expand')
-  await ui.press({ key: 'compact' })
-  // Finished folds.
-  await ui.press({ key: 'done' })
-  expect((await ui.find({ key: 'done' }))?.props['label']).toBe('▸ Finished · 1')
-  expect((await ui.findAll({ type: 'Svg' })).map(s => String(s.props['alt']))).not.toContain('Review task 1: Sonnet 5.5, failed')
-  // A silent agent: the highlighted row above Running.
-  await clock.advance(11 * MIN)
-  const signal = await ui.find({ type: 'Text', text: /^silent:/ })
-  expect(signal?.props['color']).toBe(BLOCKED)
-  await ui.unmount()
-})
-
-test('desktop: finished rows fold at eight and Show more opens up to twenty-four', async ($, on) => {
-  world(on, SEED)
-  await start($ as never)
-  for (let i = 1; i <= 30; i++) {
-    await spawn($ as never, `Task ${i}`, i)
-    await complete($ as never, { agentId: `agent-t${i}`, reason: 'answer' })
-  }
-  const ui = await mount($ as never, 'desktop')
-  const cards = async () => (await ui.findAll({ type: 'Svg' })).filter(s => String(s.props['alt']).startsWith('Task ')).length
-  expect(await cards()).toBe(8)
-  expect((await ui.find({ key: 'more' }))?.props['label']).toBe('Show more · 22')
-  await ui.press({ key: 'more' })
-  expect(await cards()).toBe(24)
-  expect(await ui.find({ key: 'fewer' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '+6 · /pipeline status' })).toBeDefined()
-  await ui.unmount()
-})
-
 test('terminal: a queue section folds past eight rows and Show more unfolds every section', async ($, on) => {
   const many = Array.from({ length: 12 }, (_, i) => item(`p${i + 1}`, `Ready ${i + 1}`, 'ready'))
   const inbox = Array.from({ length: 10 }, (_, i) => item(`i${i + 1}`, `Inbox ${i + 1}`, 'inbox'))
@@ -222,6 +192,17 @@ test('terminal: a queue section folds past eight rows and Show more unfolds ever
   expect((await ui.find({ key: 'more' }))?.props['label']).toBe('Show fewer')
   await ui.press({ key: 'more' })
   expect(await ui.find({ type: 'Text', text: /Ready 9 · M/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('terminal: the text block keeps every reason and the parked ids, with the slug dropped and the PR as its number', async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE })
+  await start($ as never)
+  const ui = await mount($ as never, 'terminal')
+  expect((await ui.find({ type: 'Text', text: /^p1 · / }))?.text).toBe('p1 · Grid row and column sizes · M · no spec')
+  expect((await ui.find({ type: 'Text', text: /^p2 · / }))?.text).toBe('p2 · Inbox item 2 · M · no spec')
+  expect((await ui.find({ type: 'Link' }))?.props['href']).toBe('https://x/pull/30')
+  expect(await ui.find({ type: 'Text', text: /^o1 · / })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -260,124 +241,346 @@ test('/pipeline panel toggles the pane; the first agent opens it once', async ($
   expect(opened).toEqual(['pipeline', 'pipeline'])
 })
 
-test('the band above the prompt draws nothing of its own without a building item', async ($, on) => {
+// ---------- Overview ----------
+
+test('desktop idle Overview: the hero says nothing runs and why, three metrics, three rows to specify, two merged, no grid, no cost tiles', async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  // The header and the tabs.
+  expect(await ui.find({ type: 'Text', text: 'Pipeline' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'main · main' })).toBeDefined()
+  expect((await ui.find({ key: 'tab-overview' }))?.props['dimColor']).toBe(false)
+  expect((await ui.find({ key: 'tab-queue' }))?.props['label']).toBe('Queue · 28')
+  expect((await ui.find({ key: 'tab-history' }))?.props['label']).toBe('History')
+  // The hero.
+  const a = await alts(ui)
+  expect(a.some(t => t === 'dotted grid')).toBe(false)
+  expect(a.some(t => t.includes('≈$'))).toBe(false)
+  expect(a[0]).toBe('PIPELINE IDLE: Nothing running right now. There are 28 items in your inbox, but none are ready to build. Add specifications to move work into the queue.')
+  const hero = await svgOf(ui, /^PIPELINE IDLE/)
+  expect(hero).toContain('Nothing running right now')
+  expect(hero).toContain('Awaiting ready work')
+  expect(hero).toContain('0 active agents')
+  // Three metrics in one drawing.
+  expect(a[1]).toBe('28 Inbox, 0 Ready, 5 Merged this week')
+  expect(a).toHaveLength(2)
+  // Needs specification: three rows, the slug dropped, the amber tag, then the count of the rest.
+  expect(await ui.find({ type: 'Text', text: /^Needs specification/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeUndefined()
+  const rows = await ui.findAll({ type: 'Button', text: /Inbox item|Grid row/ })
+  expect(rows.map(r => r.key)).toEqual(['row-p1', 'row-p2', 'row-p3'])
+  expect(rows).toHaveLength(OVERVIEW_ROWS)
+  expect(rows[0]!.text).toContain('Grid row and column sizes')
+  expect(rows[0]!.text).not.toContain('grid-track-sizes')
+  expect(rows[0]!.text).toContain('No spec')
+  expect(rows[0]!.text).toContain('Needs specification')
+  const tag = (await ui.findAll({ type: 'Text', text: 'No spec' }))[0]
+  expect(tag?.props['color']).toBe(BLOCKED)
+  expect(await ui.find({ type: 'Text', text: 'and 25 more in the queue' })).toBeDefined()
+  // Recently merged: two rows, newest first, with PR links.
+  expect(await ui.find({ type: 'Text', text: /^Recently merged/ })).toBeDefined()
+  const links = await ui.findAll({ type: 'Link' })
+  expect(links.map(l => l.props['href'])).toEqual(['https://x/pull/30', 'https://x/pull/33'])
+  expect(links[0]!.text).toBe('PR #30 ↗')
+  expect(await ui.find({ type: 'Text', text: /Merged item 1/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Merged item 2/ })).toBeUndefined()
+  // The footer.
+  expect(await ui.find({ type: 'Text', text: 'No subagents running' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '/pipeline status' })).toBeDefined()
+  // The section buttons switch the tab.
+  expect((await ui.find({ key: 'goto-queue' }))?.props['label']).toBe('View queue →')
+  await ui.press({ key: 'goto-history' })
+  expect((await ui.find({ key: 'tab-history' }))?.props['dimColor']).toBe(false)
+  expect((await alts(ui))[0]).toBe('5 items merged: Completed this week · last 7 days')
+  await ui.press({ key: 'tab-overview' })
+  expect((await alts(ui))[0]).toMatch(/^PIPELINE IDLE/)
+  await ui.unmount()
+})
+
+test('desktop idle Overview with ready items: Up next lists them and the hero names /pipeline next', async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([item('p1', 'Search', 'ready'), item('p2', 'Billing', 'inbox')]) })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  expect((await alts(ui))[0]).toContain('There are 1 item in your inbox and 1 is ready to build. Run /pipeline next to start the first.')
+  expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeDefined()
+  const row = await ui.find({ key: 'row-p1' })
+  expect(row?.text).toContain('Search')
+  expect(row?.text).toContain('Ready')
+  expect(await ui.find({ key: 'row-p2' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Nothing merged this week.' })).toBeDefined()
+  // Pressing a row opens the Queue on that item.
+  await ui.press({ key: 'row-p1' })
+  expect((await ui.find({ key: 'tab-queue' }))?.props['dimColor']).toBe(false)
+  expect((await ui.find({ key: 'filter-ready' }))?.props['dimColor']).toBe(false)
+  expect(await ui.find({ type: 'Text', text: '/pipeline status p1' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('desktop running Overview: the hero with the item, progress and steps, the usage line, the agent card, the task timeline and Up next', async ($, on) => {
+  const { clock } = world(on, SEED)
+  await start($ as never)
+  await spawn($ as never, 'Implement task 2', 1)
+  await spawn($ as never, 'Review task 1', 2)
+  await clock.advance(5 * MIN)
+  await complete($ as never, { agentId: 'agent-t2', reason: 'error' })
+  const ui = await mount($ as never, 'desktop')
+  const a = await alts(ui)
+  expect(a[0]).toBe('BUILDING · P2: Export, 1 of 3 tasks accepted')
+  const hero = await svgOf(ui, /^BUILDING · P2/)
+  expect(hero).toContain('A CSV export of every catalog, streamed to the browser.')
+  expect(hero).toContain('1 of 3 tasks accepted')
+  expect(hero).toContain('>33%<')
+  expect(hero).toContain('✓ Plan')
+  expect(hero).toContain('● Build')
+  expect(hero).toContain('○ Review')
+  expect(hero).toContain('○ Merge')
+  expect(hero).toContain('class="live"')
+  expect(a.some(t => t === 'dotted grid')).toBe(false)
+  // The usage line.
+  expect((await ui.find({ type: 'Text', text: /elapsed · / }))?.text).toMatch(/^5:00 elapsed · 0 tokens · ≈\$0\.00 cost$/)
+  // One card for the running agent: its role, model and effort; the failed one as a line.
+  expect(a[1]).toBe('Implementer: Sonnet 5.5 · medium, running, ')
+  const card = await svgOf(ui, /^Implementer/)
+  expect(card).toContain('Sonnet 5.5 · medium')
+  expect(card).toContain('5:00')
+  expect(a).toHaveLength(2)
+  expect(await ui.find({ type: 'Text', text: /^Active agent/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Task 2 / 3' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /Review task 1/ }))?.props['color']).toBe(BLOCKED)
+  // The timeline from the ledger.
+  const parser = await ui.find({ type: 'Text', text: /^✓ The parser/ })
+  expect(parser?.props['color']).toBe(DONE)
+  expect(parser?.text).toContain('Accepted')
+  const writer = await ui.find({ type: 'Text', text: /^● The writer/ })
+  expect(writer?.props['color']).toBe(RUNNING)
+  expect(writer?.text).toContain('In progress')
+  expect(await ui.find({ type: 'Text', text: /Sonnet 5\.5 · 5:00 elapsed/ })).toBeDefined()
+  const command = await ui.find({ type: 'Text', text: /^○ The command/ })
+  expect(command?.props['dimColor']).toBe(true)
+  // Up next: the first ready item.
+  expect(await ui.find({ type: 'Text', text: /^Up next/ })).toBeDefined()
+  expect((await ui.find({ key: 'row-p3' }))?.text).toContain('Search')
+  expect(await ui.find({ key: 'row-p5' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '1 agent working · no signals' })).toBeDefined()
+  // A silent agent: the signal row above the view, and the footer counts it.
+  await clock.advance(11 * MIN)
+  expect((await ui.find({ type: 'Text', text: /^silent:/ }))?.props['color']).toBe(BLOCKED)
+  expect(await ui.find({ type: 'Text', text: '1 agent working · 1 open signal' })).toBeDefined()
+  await ui.unmount()
+})
+
+// ---------- Queue ----------
+
+test('desktop Queue: the search narrows rows live, the filters switch groups with counts, a row expands to its note and the status command', async ($, on) => {
+  world(on, SEED)
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  await ui.press({ key: 'tab-queue' })
+  const input = await ui.find({ type: 'Input' })
+  expect(input?.key).toBe('pipeline-search')
+  expect(input?.props['placeholder']).toBe('Find an item by name or id…')
+  // The filters with their counts; Inbox is selected.
+  expect((await ui.find({ key: 'filter-inbox' }))?.props['label']).toBe('Inbox · 1')
+  expect((await ui.find({ key: 'filter-ready' }))?.props['label']).toBe('Ready · 2')
+  expect((await ui.find({ key: 'filter-blocked' }))?.props['label']).toBe('Blocked · 1')
+  expect((await ui.find({ key: 'filter-parked' }))?.props['label']).toBe('Parked · 1')
+  expect((await ui.find({ key: 'filter-all' }))?.props['label']).toBe('All · 6')
+  expect((await ui.find({ key: 'filter-inbox' }))?.props['dimColor']).toBe(false)
+  expect((await ui.find({ key: 'filter-all' }))?.props['dimColor']).toBe(true)
+  expect(await ui.find({ type: 'Text', text: '1 item · inbox' })).toBeDefined()
+  expect((await ui.find({ key: 'row-p5' }))?.text).toContain('Billing')
+  expect((await ui.find({ key: 'row-p5' }))?.text).toContain('no spec')
+  expect(await ui.find({ key: 'row-p3' })).toBeUndefined()
+  // Ready holds the item in flight first.
+  await ui.press({ key: 'filter-ready' })
+  const ready = await ui.findAll({ type: 'Button', text: /Export|Search/ })
+  expect(ready.map(r => r.key)).toEqual(['row-p2', 'row-p3'])
+  expect(ready[0]!.text).toContain('Building')
+  expect(await ui.find({ type: 'Text', text: '2 items · ready' })).toBeDefined()
+  // All, then the search narrows live.
+  await ui.press({ key: 'filter-all' })
+  expect(await ui.findAll({ type: 'Button', text: /^row-|Export|Search|Import|Billing|Later/ })).toHaveLength(5)
+  await ui.input({ key: 'pipeline-search', text: 'bil', kind: 'change' })
+  expect((await ui.find({ type: 'Input' }))?.props['value']).toBe('bil')
+  expect(await ui.find({ key: 'row-p5' })).toBeDefined()
+  expect(await ui.find({ key: 'row-p3' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^1 item · all/ }))?.text).toBe('1 item · all · “bil”')
+  await ui.input({ key: 'pipeline-search', text: 'p4' })
+  expect(await ui.find({ key: 'row-p4' })).toBeDefined()
+  expect(await ui.find({ key: 'row-p5' })).toBeUndefined()
+  await ui.input({ key: 'pipeline-search', text: 'zzz', kind: 'change' })
+  expect(await ui.find({ type: 'Text', text: 'No matching items in this section.' })).toBeDefined()
+  // A row expands under itself: the note and the status command; pressing again folds it.
+  await ui.input({ key: 'pipeline-search', text: '', kind: 'change' })
+  expect(await ui.find({ type: 'Text', text: '/pipeline status p4' })).toBeUndefined()
+  await ui.press({ key: 'row-p4' })
+  expect(await ui.find({ type: 'Text', text: 'CI red after one fix' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: '/pipeline status p4' }))?.props['mono']).toBe(true)
+  expect((await ui.find({ key: 'row-p4' }))?.text).toContain('⌄')
+  await ui.press({ key: 'row-p2' })
+  expect(await ui.find({ type: 'Text', text: '/pipeline status p4' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Spec docs/pipeline/specs/p2.md' })).toBeDefined()
+  await ui.press({ key: 'row-p2' })
+  expect(await ui.find({ type: 'Text', text: /^\/pipeline status p/ })).toBeUndefined()
+  // Switching the filter closes the expansion.
+  await ui.press({ key: 'row-p4' })
+  await ui.press({ key: 'filter-blocked' })
+  expect(await ui.find({ type: 'Text', text: '/pipeline status p4' })).toBeUndefined()
+  expect((await ui.find({ key: 'row-p4' }))?.text).toContain('Blocked')
+  await ui.unmount()
+})
+
+// ---------- History ----------
+
+test('desktop History: the hero counts the week, every merged item newest first with its PR, folded past twenty', async ($, on) => {
+  const many = Array.from({ length: 23 }, (_, i) => item(`m${i + 1}`, `Merged ${i + 1}`, 'merged', { pr: i === 0 ? '#9' : `https://x/pull/${i + 1}`, updatedAt: `2026-${i < 3 ? '11-04' : '10-01'}T${String(i).padStart(2, '0')}:00:00Z` }))
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([...many, item('q1', 'Open', 'inbox')]) })
+  await start($ as never)
+  const ui = await mount($ as never, 'desktop')
+  await ui.press({ key: 'tab-history' })
+  expect((await alts(ui))[0]).toBe('3 items merged: Completed this week · last 7 days')
+  expect(await ui.find({ type: 'Text', text: /^Recent pull requests/ })).toBeDefined()
+  const rows = await ui.findAll({ type: 'Text', text: /^m\d+  Merged \d+  ✓ Merged$/ })
+  expect(rows).toHaveLength(20)
+  expect(rows[0]!.text).toBe('m3  Merged 3  ✓ Merged')
+  expect((await ui.find({ type: 'Text', text: 'm3' }))?.props['color']).toBe(DONE)
+  expect((await ui.find({ type: 'Link', text: '#3 ↗' }))?.props['href']).toBe('https://x/pull/3')
+  expect(await ui.find({ type: 'Text', text: '#9' })).toBeDefined()
+  expect((await ui.find({ key: 'history-more' }))?.props['label']).toBe('Show all 23 →')
+  await ui.press({ key: 'history-more' })
+  expect(await ui.findAll({ type: 'Text', text: /^m\d+  Merged \d+  ✓ Merged$/ })).toHaveLength(23)
+  expect((await ui.find({ key: 'history-more' }))?.props['label']).toBe('Show fewer')
+  expect(await ui.find({ key: 'row-q1' })).toBeUndefined()
+  await ui.unmount()
+})
+
+// ---------- the band above the prompt ----------
+
+test('the band draws nothing of its own when nothing is active', async ($, on) => {
   world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([item('p3', 'Search', 'ready')]) })
   await start($ as never)
   const ui = await band($ as never, 'terminal')
   expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
   expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
+  expect(await ui.find({ key: 'band-expand' })).toBeUndefined()
   await ui.unmount()
 })
 
-test('the band above the prompt: the item line and the bar while an item builds, text on the terminal and one Svg on the desktop', async ($, on) => {
-  const { clock } = world(on, SEED)
+test('the band: two lines on the desktop within the width, segment colours, the chevron expands the tasks; the terminal row cut to the columns', async ($, on) => {
+  const { clock } = world(on, { ...SEED, [BACKLOG]: backlogOf([item('p2', 'Show saved password and SSH key state in custom credentials, a long title', 'building'), item('p3', 'Search', 'ready')]) })
   await start($ as never)
   await spawn($ as never, 'Implement task 2', 1)
-  await clock.advance(14 * MIN)
-  let ui = await band($ as never, 'terminal')
-  expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
-  expect((await ui.find({ type: 'Text', text: /p2 · Export/ }))?.text).toBe('p2 · Export · task 2/3 · Implement task 2 · Sonnet 5.5 · 14 min')
-  const bar = await ui.find({ type: 'Text', text: /^[█░]+$/ })
-  expect(bar?.props['color']).toBe(RUNNING)
-  expect(bar?.text.indexOf('░')).toBeGreaterThan(0)
+  await clock.advance(224_000)
+  // A narrow band: 30 columns, 200 px, so the title must be cut.
+  let ui = await band($ as never, 'desktop', { bodyColumns: 30 })
+  const svgs = await ui.findAll({ type: 'Svg' })
+  expect(svgs).toHaveLength(1)
+  const W = Number(svgs[0]!.props['width'])
+  expect(W).toBe(176)
+  expect(svgs[0]!.props['height']).toBe(54)
+  const src = String(svgs[0]!.props['source'])
+  expect(svgs[0]!.props['alt']).toBe('p2 BUILDING: Show saved password and SSH key state in custom credentials, a long title, Task 2 / 3, Implementer · Sonnet 5.5')
+  expect(src).toContain('>Task 2 / 3<')
+  expect(src).toContain('>BUILDING<')
+  expect(src).toContain('>3:44<')
+  // Every text starts inside the band, and the title is cut with an ellipsis instead of running over.
+  for (const m of src.matchAll(/<text x="([\d.]+)"/g)) expect(Number(m[1])).toBeLessThan(W)
+  const title = /<text class="t" x="[\d.]+" y="20" font-size="12" font-weight="650">([^<]*)</.exec(src)?.[1]
+  expect(title === undefined || title.endsWith('…')).toBe(true)
+  // The segments: one accepted (green), the running one (the state's purple), one pending (grey), in order.
+  const fills = [...src.matchAll(/height="5" rx="2.5" fill="(#[0-9a-f]{6})"/g)].map(m => m[1])
+  expect(fills).toEqual([SEGMENT_COLORS.accepted, BAND_COLORS.running, SEGMENT_COLORS.pending])
+  expect(src).toContain(`fill="${BAND_COLORS.running}"`)
+  // The chevron reveals the task list with its summary.
+  expect(await ui.find({ type: 'Text', text: /^Execution tasks/ })).toBeUndefined()
+  await ui.press({ key: 'band-expand' })
+  expect((await ui.find({ type: 'Text', text: /^Execution tasks/ }))?.text).toBe('Execution tasks · 1 accepted · 1 running')
+  expect((await ui.find({ type: 'Text', text: '✓ The parser' }))?.props['color']).toBe(SEGMENT_COLORS.accepted)
+  expect((await ui.find({ type: 'Text', text: '• The writer' }))?.props['color']).toBe(BAND_COLORS.running)
+  expect((await ui.find({ type: 'Text', text: '○ The command' }))?.props['dimColor']).toBe(true)
+  expect((await ui.find({ key: 'band-expand' }))?.props['label']).toBe('⌃')
+  await ui.press({ key: 'band-expand' })
+  expect(await ui.find({ type: 'Text', text: /^Execution tasks/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'engine' })).toBeDefined()
   await ui.unmount()
 
-  ui = await band($ as never, 'desktop')
-  const svgs = await ui.findAll({ type: 'Svg' })
-  expect(svgs).toHaveLength(1)
-  expect(svgs[0]!.props['alt']).toBe('p2: p2 · Export · task 2/3 · Implement task 2 · Sonnet 5.5 · 14 min')
-  expect(String(svgs[0]!.props['source'])).toContain('33%')
+  // A wide band keeps the whole title.
+  ui = await band($ as never, 'desktop', { bodyColumns: 120 })
+  expect(String((await ui.find({ type: 'Svg' }))?.props['source'])).toContain('>Show saved password and SSH key state in custom credentials, a long title<')
+  await ui.unmount()
+
+  // The terminal: one row, the head in the state colour, the segments, the tail; cut to the columns.
+  ui = await band($ as never, 'terminal', { bodyColumns: 60 })
+  expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
+  const head = await ui.find({ type: 'Text', text: /^● p2/ })
+  expect(head?.text).toBe('● p2 · Task 2 / 3')
+  expect(head?.props['color']).toBe(BAND_COLORS.running)
+  const tail = await ui.find({ type: 'Text', text: /3:44$/ })
+  expect(tail?.text).toBe('· Implementer · Sonnet 5.5 · 3:44')
+  expect(await ui.find({ type: 'Text', text: '▰' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▱' })).toBeDefined()
+  await ui.unmount()
+  ui = await band($ as never, 'terminal', { bodyColumns: 40 })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  const row = texts.find(t => t.startsWith('● p2'))! + ' ' + texts.find(t => t.endsWith('3:44'))!
+  expect(row.length).toBeLessThanOrEqual(40)
+  expect(row).toContain('Task 2 / 3')
+  expect(row).toContain('…')
   await ui.unmount()
 })
 
-/** A migrated project idle: 6 ready with slugged titles, 7 inbox without specs, 10 parked, 7 merged this week with PR URLs, nothing running. */
-const MIGRATED = backlogOf([
-  ...Array.from({ length: 6 }, (_, i) => item(`p${i + 1}`, i === 1 ? 'Plain title' : `ready-item-${i + 1} — Ready item ${i + 1}`, 'ready')),
-  ...Array.from({ length: 7 }, (_, i) => item(`q${i + 1}`, `inbox-item-${i + 1} - Inbox item ${i + 1}`, 'inbox')),
-  ...Array.from({ length: 10 }, (_, i) => item(`k${i + 1}`, `Parked ${i + 1}`, 'parked')),
-  ...Array.from({ length: 7 }, (_, i) => item(`m${i + 1}`, `merged-item-${i + 1} — Merged item ${i + 1}`, 'merged', { pr: i === 0 ? '#9' : `https://x/pull/${30 + i}` })),
-])
-
-test('desktop idle: the idle line, titles without their slug, five rows a section with one dim line for the rest, the PR number as a link, one reason, parked as a count', async ($, on) => {
-  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: MIGRATED })
+test('the band in compact mode: one line with the id, title, count and clock, no state tag, no activity', { options: { band: 'compact' } }, async ($, on) => {
+  world(on, SEED)
   await start($ as never)
-  const ui = await mount($ as never, 'desktop')
-  const texts = async () => (await ui.findAll({ type: 'Text' })).map(t => t.text)
-  // The idle line in place of "No subagents yet.", the cost tiles still in the header.
-  expect(await ui.find({ type: 'Text', text: 'No subagents yet.' })).toBeUndefined()
-  const idle = await ui.find({ type: 'Text', text: /^idle/ })
-  expect(idle?.text).toBe('idle · 7 inbox · next: p1 Ready item 1')
-  expect(idle?.props['dimColor']).toBe(true)
-  expect((await ui.findAll({ type: 'Svg' })).some(s => String(s.props['alt']).includes('≈$'))).toBe(true)
-  // Titles: the slug gone, a title without a dash whole.
-  expect((await ui.find({ type: 'Text', text: /^p1 · / }))?.text).toBe('p1 · Ready item 1 · M')
-  expect((await ui.find({ type: 'Text', text: /^p2 · / }))?.text).toBe('p2 · Plain title · M')
-  expect((await texts()).some(t => t.includes('ready-item-'))).toBe(false)
-  // Five rows a section, then the dim line.
-  expect(await ui.find({ type: 'Text', text: /^p5 · / })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^p6 · / })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /^q5 · / })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^q6 · / })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /^m5 · / })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^m6 · / })).toBeUndefined()
-  const more = (await ui.findAll({ type: 'Text', text: /^and \d+ more · \/pipeline status$/ })).map(t => t.text)
-  expect(more).toEqual(['and 1 more · /pipeline status', 'and 2 more · /pipeline status', 'and 2 more · /pipeline status'])
-  expect((await ui.find({ type: 'Text', text: /^and 1 more/ }))?.props['dimColor']).toBe(true)
-  // The readiness reason on the first inbox row only, dim.
-  const q1 = await ui.find({ type: 'Text', text: /^q1 · / })
-  expect(q1?.text).toBe('q1 · Inbox item 1 · M · no spec')
-  expect((await ui.findAll({ type: 'Text', text: /^ · no spec$/ }))).toHaveLength(1)
-  expect((await ui.find({ type: 'Text', text: /^q2 · / }))?.text).toBe('q2 · Inbox item 2 · M')
-  // Parked as a count, no ids.
-  expect(await ui.find({ type: 'Text', text: 'Parked: 10' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /k1/ })).toBeUndefined()
-  // The PR as its number: a link for a URL, text for a #NN record.
-  const link = await ui.find({ type: 'Link' })
-  expect(link?.props['href']).toBe('https://x/pull/31')
-  expect(link?.text).toContain('#31')
-  expect((await ui.find({ type: 'Text', text: /^m1 · / }))?.text).toBe('m1 · Merged item 1 · M · #9')
-  const m2 = await ui.find({ type: 'Text', text: /^m2 · / })
-  expect(m2?.text).toMatch(/^m2 · Merged item 2 · M · /)
-  expect(m2?.props['color']).toBe(DONE)
-  // Show more opens every section; Show fewer folds them again.
-  expect((await ui.find({ key: 'queue-more' }))?.props['label']).toBe('Show more · 5')
-  await ui.press({ key: 'queue-more' })
-  expect(await ui.find({ type: 'Text', text: /^p6 · / })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^q7 · / })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^m7 · / })).toBeDefined()
-  expect(await ui.findAll({ type: 'Link' })).toHaveLength(6)
-  expect(await ui.find({ type: 'Text', text: /^and \d+ more/ })).toBeUndefined()
-  expect(await ui.find({ key: 'queue-more' })).toBeUndefined()
-  await ui.press({ key: 'queue-fewer' })
-  expect(await ui.find({ type: 'Text', text: /^p6 · / })).toBeUndefined()
-  expect((await ui.find({ key: 'queue-more' }))?.props['label']).toBe(`Show more · ${6 - QUEUE_SHOWN + 7 - QUEUE_SHOWN + 7 - QUEUE_SHOWN}`)
+  await spawn($ as never, 'Implement task 2', 1)
+  const ui = await band($ as never, 'desktop')
+  const svg = await ui.find({ type: 'Svg' })
+  expect(svg?.props['height']).toBe(28)
+  const src = String(svg?.props['source'])
+  expect(src).toContain('>p2<')
+  expect(src).toContain('>Export<')
+  expect(src).toContain('>Task 2 / 3<')
+  expect(src).toContain('>0:00<')
+  expect(src).not.toContain('>BUILDING<')
+  expect(src).not.toContain('Implementer')
+  expect(src).not.toContain('height="5"')
   await ui.unmount()
 })
 
-test('desktop idle: next is the first inbox item when nothing is ready, and a small queue has no fold', async ($, on) => {
-  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([item('p1', 'Login', 'merged', { pr: '#3' }), item('q1', 'grid-track-sizes — Grid row and column sizes', 'inbox'), item('q2', 'Billing', 'inbox')]) })
+test('the band stays for a blocked item until the next turn starts, then goes', async ($, on) => {
+  world(on, SEED)
   await start($ as never)
-  const ui = await mount($ as never, 'desktop')
-  expect((await ui.find({ type: 'Text', text: /^idle/ }))?.text).toBe('idle · 2 inbox · next: q1 Grid row and column sizes')
-  expect(await ui.find({ key: 'queue-more' })).toBeUndefined()
-  expect(await ui.find({ key: 'queue-fewer' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /^and \d+ more/ })).toBeUndefined()
+  let ui = await band($ as never, 'desktop', { isWorking: true })
+  expect((await ui.find({ type: 'Svg' }))?.props['alt']).toMatch(/^p2 BUILDING/)
   await ui.unmount()
-})
-
-test('terminal: the text block keeps eight rows, every reason and the parked ids, with the slug dropped and the PR as its number', async ($, on) => {
-  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: MIGRATED })
-  await start($ as never)
-  const ui = await mount($ as never, 'terminal')
-  expect(await ui.find({ type: 'Text', text: /^idle/ })).toBeUndefined()
-  expect((await ui.find({ type: 'Text', text: /^p1 · / }))?.text).toBe('p1 · Ready item 1 · M')
-  expect(await ui.find({ type: 'Text', text: /^p6 · / })).toBeDefined()
-  expect((await ui.find({ type: 'Text', text: /^q2 · / }))?.text).toBe('q2 · Inbox item 2 · M · no spec')
-  expect(await ui.find({ type: 'Text', text: /^Parked: k1, k2/ })).toBeDefined()
-  expect((await ui.find({ type: 'Text', text: /^m1 · / }))?.text).toBe('m1 · Merged item 1 · M · #9')
-  expect((await ui.find({ type: 'Link' }))?.props['href']).toBe('https://x/pull/31')
-  expect(await ui.find({ type: 'Text', text: /^and \d+ more/ })).toBeUndefined()
-  expect(await ui.find({ key: 'queue-more' })).toBeUndefined()
+  await call($ as never, { action: 'update', id: 'p2', set: { status: 'blocked', note: 'CI red twice' } })
+  // Still the turn that blocked it: shown in amber, with the note.
+  ui = await band($ as never, 'desktop', { isWorking: true })
+  let src = String((await ui.find({ type: 'Svg' }))?.props['source'])
+  expect(src).toContain('>BLOCKED<')
+  expect(src).toContain('CI red twice')
+  expect(src).toContain(`fill="${BAND_COLORS.blocked}"`)
+  await ui.unmount()
+  // Idle between turns: still shown.
+  ui = await band($ as never, 'desktop', { isWorking: false })
+  expect(await ui.find({ type: 'Svg' })).toBeDefined()
+  await ui.unmount()
+  // The next turn: gone.
+  ui = await band($ as never, 'desktop', { isWorking: true })
+  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
+  await ui.unmount()
+  // A merged item the same way, in green with its count.
+  await call($ as never, { action: 'update', id: 'p2', set: { status: 'building' } })
+  ui = await band($ as never, 'desktop', { isWorking: true })
+  await ui.unmount()
+  await call($ as never, { action: 'update', id: 'p2', set: { status: 'merged', pr: 'https://x/pull/7' } })
+  ui = await band($ as never, 'desktop', { isWorking: true })
+  src = String((await ui.find({ type: 'Svg' }))?.props['source'])
+  expect(src).toContain('>MERGED<')
+  expect(src).toContain('>1 / 3 accepted<')
+  expect(src).toContain('Merged · #7')
+  expect(src).toContain(`fill="${BAND_COLORS.merged}"`)
   await ui.unmount()
 })

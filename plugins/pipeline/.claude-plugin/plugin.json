@@ -16,6 +16,16 @@
         "always",
         "never"
       ]
+    },
+    "band": {
+      "type": "string",
+      "title": "The band above the prompt",
+      "description": "two-line: the item, its state tag and task count, then the segmented bar, the activity and the clock; compact: one line of item, title, count and clock",
+      "default": "two-line",
+      "options": [
+        "two-line",
+        "compact"
+      ]
     }
   },
   "license": "MIT"

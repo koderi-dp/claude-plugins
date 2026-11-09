@@ -129,3 +129,115 @@ test('idleLine counts the inbox and names the first ready item, else the first i
   expect(idleLine([item('p1', 'merged'), ...inbox])).toBe('idle · 2 inbox · next: p3 Grid row and column sizes')
   expect(idleLine([item('p1', 'merged')])).toBe('idle · 0 inbox')
 })
+
+// ---------- the dashboard's derivations ----------
+
+import { currentTask, groupCounts, heroSentence, mergedItems, queueItems, roleOf, stepsOf, tagOf } from './status'
+
+const MIXED: Item[] = [
+  item('p1', 'inbox', { title: 'Grid row and column sizes' }),
+  item('p2', 'inbox', { title: 'Brand logos' }),
+  item('p3', 'ready', { title: 'Search' }),
+  item('p4', 'building', { title: 'Export' }),
+  item('p5', 'blocked', { title: 'Import' }),
+  item('p6', 'parked', { title: 'Later' }),
+  item('p7', 'merged', { title: 'Login', updatedAt: '2026-11-04T00:00:00Z' }),
+  item('p8', 'merged', { title: 'Old', updatedAt: '2026-10-01T00:00:00Z' }),
+  item('p9', 'merged', { title: 'Newest', updatedAt: '2026-11-05T00:00:00Z' }),
+]
+
+test('groupCounts: ready holds the items in flight, all everything but the merged', () => {
+  expect(groupCounts(MIXED)).toEqual({ inbox: 2, ready: 2, blocked: 1, parked: 1, all: 6 })
+})
+
+test('queueItems: the filter picks the group, in flight first under ready, and the search narrows by id or title', () => {
+  expect(queueItems(MIXED, 'inbox', '').map(i => i.id)).toEqual(['p1', 'p2'])
+  expect(queueItems(MIXED, 'ready', '').map(i => i.id)).toEqual(['p4', 'p3'])
+  expect(queueItems(MIXED, 'all', '').map(i => i.id)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5', 'p6'])
+  expect(queueItems(MIXED, 'inbox', 'logo').map(i => i.id)).toEqual(['p2'])
+  expect(queueItems(MIXED, 'all', 'P5').map(i => i.id)).toEqual(['p5'])
+  expect(queueItems(MIXED, 'inbox', 'nothing')).toEqual([])
+  expect(queueItems([item('q1', 'inbox', { title: 'grid-track — Grid sizes' })], 'inbox', 'grid sizes')).toHaveLength(1)
+})
+
+test('mergedItems: newest first, the week when asked', () => {
+  expect(mergedItems(MIXED, NOW).map(i => i.id)).toEqual(['p9', 'p7', 'p8'])
+  expect(mergedItems(MIXED, NOW, 7 * 24 * 60 * 60_000).map(i => i.id)).toEqual(['p9', 'p7'])
+})
+
+test('heroSentence says how many wait, how many are ready and what moves work', () => {
+  expect(heroSentence(MIXED)).toBe('There are 2 items in your inbox and 1 is ready to build. Run /pipeline next to start the first.')
+  expect(heroSentence([item('p1', 'inbox'), item('p2', 'inbox')])).toBe('There are 2 items in your inbox, but none are ready to build. Add specifications to move work into the queue.')
+  expect(heroSentence([item('p1', 'inbox')])).toBe('There is 1 item in your inbox, but none are ready to build. Add specifications to move work into the queue.')
+  expect(heroSentence([item('p3', 'ready'), item('p4', 'ready')])).toBe('2 items are ready to build. Run /pipeline next to start the first.')
+  expect(heroSentence([item('p7', 'merged')])).toBe('The inbox is empty and nothing is ready to build. Add work with /pipeline add.')
+})
+
+test('stepsOf marks Plan, Build, Review and Merge from the status and the ledger', () => {
+  const states = (steps: ReturnType<typeof stepsOf>) => steps.map(s => s.state)
+  expect(states(stepsOf(item('p1', 'planning'), null))).toEqual(['current', 'pending', 'pending', 'pending'])
+  expect(states(stepsOf(item('p1', 'building'), null))).toEqual(['done', 'current', 'pending', 'pending'])
+  expect(states(stepsOf(item('p1', 'building'), { ...LEDGER, resume: { task: 6, state: 'final review dispatched', at: '' } }))).toEqual(['done', 'done', 'current', 'pending'])
+  expect(states(stepsOf(item('p1', 'building'), { ...LEDGER, final: { verdict: 'approved' } }))).toEqual(['done', 'done', 'current', 'pending'])
+  expect(states(stepsOf(item('p1', 'review'), null))).toEqual(['done', 'done', 'current', 'pending'])
+  expect(states(stepsOf(item('p1', 'merged'), null))).toEqual(['done', 'done', 'done', 'done'])
+  expect(states(stepsOf(item('p1', 'ready'), null))).toEqual(['pending', 'pending', 'pending', 'pending'])
+  expect(stepsOf(null, null).map(s => s.name)).toEqual(['Plan', 'Build', 'Review', 'Merge'])
+})
+
+test('currentTask is the running or fix task, else the resume block\'s', () => {
+  expect(currentTask(LEDGER)?.n).toBe(3)
+  expect(currentTask({ ...LEDGER, tasks: LEDGER.tasks.map(t => (t.n === 3 ? { ...t, status: 'pending' as const } : t)) })?.n).toBe(3)
+  expect(currentTask({ ...LEDGER, resume: undefined, tasks: LEDGER.tasks.filter(t => t.n !== 3) })).toBe(undefined)
+  expect(currentTask(null)).toBe(undefined)
+})
+
+test('roleOf: the current task\'s last dispatch, else the name\'s role word, else the name', () => {
+  const dispatched = { ...LEDGER, tasks: LEDGER.tasks.map(t => (t.n === 3 ? { ...t, dispatches: [{ role: 'reviewer' as const, model: 'x', effort: 'high', tokens: 1, minutes: 1, result: '' }] } : t)) }
+  expect(roleOf({ name: 'Implement task 3' }, dispatched)).toEqual({ role: 'reviewer', effort: 'high' })
+  expect(roleOf({ name: 'Implement task 3' }, LEDGER)).toEqual({ role: 'implementer' })
+  expect(roleOf({ name: 'Review task 2' }, null)).toEqual({ role: 'reviewer' })
+  expect(roleOf({ name: 'Final review of p12' }, null)).toEqual({ role: 'final' })
+  expect(roleOf({ name: 'Explore the repo' }, null)).toEqual({ role: 'Explore the repo' })
+  const plain = { ...dispatched, tasks: dispatched.tasks.map(t => (t.n === 3 ? { ...t, dispatches: [{ ...t.dispatches[0]!, effort: 'default' }] } : t)) }
+  expect(roleOf({ name: 'x' }, plain)).toEqual({ role: 'reviewer' })
+})
+
+test('tagOf: the word and the colour kind of a row', () => {
+  expect(tagOf(item('p1', 'inbox'), 'no spec')).toEqual({ text: 'No spec', kind: 'blocked' })
+  expect(tagOf(item('p1', 'inbox'))).toEqual({ text: 'Inbox', kind: 'muted' })
+  expect(tagOf(item('p1', 'ready'))).toEqual({ text: 'Ready', kind: 'ready' })
+  expect(tagOf(item('p1', 'building'))).toEqual({ text: 'Building', kind: 'running' })
+  expect(tagOf(item('p1', 'blocked'))).toEqual({ text: 'Blocked', kind: 'blocked' })
+  expect(tagOf(item('p1', 'parked'))).toEqual({ text: 'Parked', kind: 'muted' })
+  expect(tagOf(item('p1', 'merged'))).toEqual({ text: 'Merged', kind: 'done' })
+})
+
+import { specWhat } from './status'
+
+test('specWhat reads the first paragraph under What, else the first paragraph, cut to 160 characters', () => {
+  expect(specWhat('# p14 Second image per card\n\nStatus: draft\n\n## What\n\nImplementing a second image slot for article cards.\nMore.\n\n## Why\n')).toBe('Implementing a second image slot for article cards.')
+  expect(specWhat('# Title\n\n- a list\n\nThe first paragraph.\n')).toBe('The first paragraph.')
+  expect(specWhat(`## What\n\n${'x'.repeat(200)}\n`)).toHaveLength(160)
+  expect(specWhat('')).toBe('')
+})
+
+import { BAND_COLORS, bandOf } from './status'
+
+test('bandOf: the state tag and colour per status, the count, the segments and the activity', () => {
+  const agent = { id: 'a1', name: 'Implement task 3', model: 'claude-sonnet-5-5', status: 'running' as const, startedAt: NOW - 224_000, lastStepAt: NOW, calls: 3, tokens: 1, activity: 'running npm run lint', lastCommands: [], failures: 0 }
+  const building = bandOf(item('p12', 'building', { title: 'x — Export' }), LEDGER, agent, NOW)
+  expect(building).toMatchObject({ id: 'p12', title: 'Export', state: 'BUILDING', color: BAND_COLORS.running, count: 'Task 3 / 6', clock: '3:44', activity: 'Implementer · Sonnet 5.5 · running npm run lint' })
+  expect(building.segments).toEqual(['accepted', 'accepted', 'current', 'pending', 'pending', 'pending'])
+  expect(building.summary).toBe('2 accepted · 1 running')
+  expect(building.tasks[2]).toEqual({ title: 'The route', segment: 'current' })
+  expect(bandOf(item('p12', 'review'), LEDGER, undefined, NOW)).toMatchObject({ state: 'REVIEW', color: BAND_COLORS.running, clock: '—', activity: 'fix round 2 dispatched', summary: '2 accepted · 1 in review' })
+  expect(bandOf(item('p12', 'planning'), null, undefined, NOW)).toMatchObject({ state: 'PLANNING', count: '', segments: [], activity: 'Waiting for the next dispatch', summary: '0 accepted · 0 pending' })
+  const blocked = bandOf(item('p12', 'blocked', { note: 'Lint check failed' }), { ...LEDGER, tasks: LEDGER.tasks.map(t => (t.n === 3 ? { ...t, status: 'blocked' as const } : t)) }, undefined, NOW)
+  expect(blocked).toMatchObject({ state: 'BLOCKED', color: BAND_COLORS.blocked, count: 'Task 3 / 6', activity: 'Lint check failed', summary: '2 accepted · 1 blocked' })
+  expect(blocked.segments[2]).toBe('blocked')
+  const merged = bandOf(item('p12', 'merged', { pr: 'https://x/pull/35' }), { ...LEDGER, resume: undefined, tasks: LEDGER.tasks.map(t => ({ ...t, status: 'accepted' as const })) }, undefined, NOW)
+  expect(merged).toMatchObject({ state: 'MERGED', color: BAND_COLORS.merged, count: '6 / 6 accepted', activity: 'Merged · #35', summary: '6 accepted · merged' })
+  expect(merged.segments.every(s => s === 'accepted')).toBe(true)
+  expect(bandOf(item('p12', 'ready'), { ...LEDGER, resume: undefined, tasks: LEDGER.tasks.map(t => ({ ...t, status: 'pending' as const })) }, undefined, NOW)).toMatchObject({ state: 'READY', color: BAND_COLORS.idle, count: '6 tasks', activity: 'Next in queue · waiting to start', summary: '0 accepted · 6 pending' })
+})
