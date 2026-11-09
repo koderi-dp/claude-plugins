@@ -229,7 +229,7 @@ test('migrate-apply writes the four files, the ledger of the building item, maps
   expect(r).toContain('\nspec stubs written for 4 items\n')
   expect(r).toContain('\nhistorical line added to 6 files\n')
   expect(r).toContain('bulk: 2 files of merged increments to remove')
-  expect(r.endsWith('\n.superpowers/sdd/2026-11-01-search/task-1-brief.md\n.superpowers/sdd/2026-11-01-search/logs/task-1.log')).toBe(true)
+  expect(r.endsWith('\n.superpowers/sdd/2026-11-01-search/task-1-brief.md\n.superpowers/sdd/2026-11-01-search/logs/task-1.log\ncommit docs/pipeline/ on main now: git add docs/pipeline && git commit')).toBe(true)
 
   expect(writes.slice(0, 2)).toEqual([`${DIR}/config.json`, `${DIR}/rules.md`])
   expect(writes).toContain(`${DIR}/backlog.json`)
@@ -350,6 +350,7 @@ test('a second apply is refused without refresh; with refresh it changes no stat
   const edited = again.items.map((i, k) => (k === 0 ? { ...i, title: 'Export jobs and downloads', source: 'docs/backlog.md: Remaining (refreshed)', status: 'inbox' } : i))
   const r = text(await call($, { action: 'migrate-apply', refresh: true, config: again.config, items: [...edited, ...again.active], rules: again.rules }))
   expect(r).toContain('\nhistorical line added to 0 files')
+  expect(r.endsWith('\ncommit docs/pipeline/ on main now: git add docs/pipeline && git commit')).toBe(true)
   expect(first.startsWith('pipeline: 4 items')).toBe(true)
   expect(r.startsWith('pipeline: 4 items')).toBe(true)
 

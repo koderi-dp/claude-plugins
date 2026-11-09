@@ -36,6 +36,9 @@ const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const TICK_MS = 30_000
 const HEARTBEAT_MS = 2000
+/** The last line of init and migrate-apply: the tool's files are versioned, never gitignored, and the record is not on main until this commit. */
+const commitLine = (mainBranch: string) => `commit docs/pipeline/ on ${mainBranch} now: git add docs/pipeline && git commit`
+
 const WAKE_PROMPT = `pipeline: check the watchdog signals with the pipeline tool: ${TOOL} {"action":"signals"}`
 /** The log file of a child, under the main checkout's .git (shared by every worktree, never committed). */
 const childLog = (found: string, id: string) => `${found}/.git/pipeline/${id}.log`
@@ -54,13 +57,13 @@ const TOOL_DESCRIPTION =
   '`remove` { id } → `removed p2 · 70 items left`; `park` { id } → `p2 · parked`; `unpark` { id } → `p2 · ready`; ' +
   '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
   '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers one line, `ledger p1 · task 3/6 running · 2 rulings · 674k tokens` (`final approved` once recorded); `status { id }` answers the whole ledger; ' +
-  '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists; ' +
+  '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists, and ends with the line to commit docs/pipeline/ on mainBranch now (the tool\'s files are versioned, never gitignored); ' +
   '`start` { item: "<id>" } (runner session only) → makes the item\'s worktree (.claude/worktrees/<id>, branch from config.branch off mainBranch, reused when there), marks the item building with the note `session runner`, records branch and worktree in its ledger and starts a headless Claude Code child in the worktree in this session\'s permission mode (acceptEdits, auto, dontAsk or bypassPermissions; otherwise refused with what to switch to; refused too past limits.parallel, for an item that is not ready, blocked or building with the note `session runner` and no child, for a building item run in-session, while a child runs it, and from a child session, which starts no children), answering one line with the session id and the log path; the child runs the item with the run skill and leaves the item as it ends it, a non-zero exit blocks it with the code and the log tail; ' +
   '`stop` { item } → kills the item\'s child session and sets the item blocked with `stopped by the user` unless it had merged; ' +
   '`log` { item } → the last 60 lines of the child\'s log; ' +
   '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/), for one merged item or for every merged item; it deletes nothing, the caller removes them with git rm -r and commits; ' +
   '`migrate` { refresh? } → JSON { sources, config, sourcesOfConfig, items, rules, active, bulk: { files, count }, unsure, report }: reads the project\'s queue, workflow prose, ledgers, scripts and CI and drafts the config, the items, the rules (the queue\'s open decisions among them, as before-dispatch stops) and the active item, writing nothing; refused when config.json exists unless refresh; ' +
-  '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger, a spec stub from the title and note for every inbox or building item without one, so the needs-free ones settle to ready), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of spec stubs, the count of files given the line and the bulk files to git rm; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
+  '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger, a spec stub from the title and note for every inbox or building item without one, so the needs-free ones settle to ready), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of spec stubs, the count of files given the line, the bulk files to git rm and the line to commit docs/pipeline/ on mainBranch; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
   'Every write re-reads backlog.json, merges, regenerates BACKLOG.md and answers one line; `status` is the way to read the status block; a file that does not parse is refused with its line and left alone.'
 
 const TOOL_SCHEMA = {
@@ -512,7 +515,7 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       wrote.push(BACKLOG_FILE, BACKLOG_MD_FILE)
     }
     await update($, fileError, () => null)
-    return `wrote ${wrote.join(', ')}`
+    return `wrote ${wrote.join(', ')}\n${commitLine(c?.mainBranch ?? DEFAULTS.mainBranch)}`
   }
   if (e.action === 'status') {
     if (e.id === undefined) return statusNow($, found, c, loaded, error)
@@ -1113,6 +1116,7 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
   const bulk = bulkToRemove(listing, incrementsOf(increments, next.items).merged)
   const lines = [status, `spec stubs written for ${stubs} item${stubs === 1 ? '' : 's'}`, `historical line added to ${added} file${added === 1 ? '' : 's'}`]
   if (bulk.count) lines.push(`bulk: ${bulk.count} files of merged increments to remove with git rm once the user confirms (kept with retain.superpowers):`, ...bulk.files)
+  lines.push(commitLine(normalizeConfig(nextConfig).config.mainBranch))
   return lines.join('\n')
 }
 

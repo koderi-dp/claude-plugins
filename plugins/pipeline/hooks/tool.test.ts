@@ -253,7 +253,7 @@ test('status renders the sections and status <id> renders the ledger', async ($,
 test('init writes the defaults and an empty backlog, and a second init changes nothing', async ($, on) => {
   const { files, writes } = world(on)
   const r = text(await call($, { action: 'init' }))
-  expect(r).toBe('wrote docs/pipeline/config.json, docs/pipeline/backlog.json, docs/pipeline/BACKLOG.md')
+  expect(r).toBe('wrote docs/pipeline/config.json, docs/pipeline/backlog.json, docs/pipeline/BACKLOG.md\ncommit docs/pipeline/ on main now: git add docs/pipeline && git commit')
   expect(writes).toEqual([CONFIG, BACKLOG, BACKLOG_MD])
   expect(JSON.parse(files.get(CONFIG)!)).toMatchObject({ version: 1, merge: 'pr', protectedPaths: ['.github/workflows/**'] })
   expect(JSON.parse(files.get(BACKLOG)!)).toEqual({ version: 1, items: [] })
