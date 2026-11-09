@@ -7,7 +7,8 @@ test('DEFAULTS carries every key of the config', () => {
   expect(DEFAULTS.mainBranch).toBe('main')
   expect(DEFAULTS.branch).toBe('feat/<id>')
   expect(DEFAULTS.merge).toBe('pr')
-  expect(DEFAULTS.limits).toEqual({ fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000 })
+  expect(DEFAULTS.limits).toEqual({ fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000, parallel: 1 })
+  expect(DEFAULTS.runner).toBe('subagent')
   expect(Object.keys(DEFAULTS.models).sort()).toEqual(['escalate', 'final', 'implementer', 'reviewer'])
   expect(DEFAULTS.notify).toBe('milestones')
   expect(DEFAULTS.stop.length).toBeGreaterThan(0)
@@ -21,6 +22,14 @@ test('normalizeConfig fills missing keys from the defaults without problems', ()
   expect(config.limits).toEqual(DEFAULTS.limits)
   expect(config.models.reviewer).toEqual(DEFAULTS.models.reviewer)
   expect(config.stop).toEqual(DEFAULTS.stop)
+})
+
+test('normalizeConfig: runner is subagent or session, limits.parallel a number', () => {
+  expect(normalizeConfig({ runner: 'session', limits: { parallel: 3 } })).toMatchObject({ config: { runner: 'session', limits: { ...DEFAULTS.limits, parallel: 3 } }, problems: [] })
+  const { config, problems } = normalizeConfig({ runner: 'thread', limits: { parallel: 'two' } })
+  expect(problems).toEqual(['limits.parallel: expected a number, got string', 'runner: expected "subagent" or "session", got "thread"'])
+  expect(config.runner).toBe('subagent')
+  expect(config.limits.parallel).toBe(1)
 })
 
 test('normalizeConfig names a wrong merge value and falls back to the default', () => {

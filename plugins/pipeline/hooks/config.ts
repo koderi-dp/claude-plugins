@@ -1,6 +1,6 @@
 // The config: defaults, validation and the draft made from what a project shows. Pure.
 
-import type { Config, ModelSpec, Role } from '../types'
+import type { Config, ModelSpec, Role, Runner } from '../types'
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'default'] as const
 const ROLES: Role[] = ['implementer', 'reviewer', 'final', 'escalate']
@@ -18,7 +18,8 @@ export const DEFAULTS: Config = {
     final: { model: 'opus', effort: 'xhigh' },
     escalate: { model: 'opus', effort: 'high' },
   },
-  limits: { fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000 },
+  limits: { fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4000000, parallel: 1 },
+  runner: 'subagent',
   merge: 'pr',
   mergeMethod: 'merge',
   retain: { plans: true, briefs: false, superpowers: false },
@@ -115,7 +116,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
       }
   }
 
-  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify'])
+  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify'])
   const extra = Object.fromEntries(Object.entries(raw).filter(([k]) => !known.has(k)))
   const config: Config = {
     ...extra,
@@ -127,6 +128,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
     protectedPaths: strings('protectedPaths', DEFAULTS.protectedPaths),
     models,
     limits,
+    runner: oneOf<Runner>('runner', ['subagent', 'session'] as const, DEFAULTS.runner),
     merge: oneOf('merge', ['auto', 'pr'] as const, DEFAULTS.merge),
     mergeMethod: oneOf('mergeMethod', ['merge', 'squash'] as const, DEFAULTS.mergeMethod),
     stop: strings('stop', DEFAULTS.stop),
@@ -210,7 +212,7 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
   const make = found.makeTargets
   const npm = (name: string) => `npm run ${name}`
 
-  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'afterMerge', 'retain', 'notify']) sources[key] = 'default'
+  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'limits.parallel', 'runner', 'afterMerge', 'retain', 'notify']) sources[key] = 'default'
 
   const fast = ['check:fast', 'lint:fast'].find(n => n in scripts)
   if (fast) {
