@@ -1083,10 +1083,20 @@ async function heartbeat($: EngineInterface, isForced = false): Promise<void> {
   } catch {}
 }
 
-/** The other sessions of the live file into the atom, the children this session runs left out. */
+/**
+ * The other sessions of the live file into the atom: the children this session runs are left out, and so is an
+ * entry in this session's own cwd or root, which is this session's under an earlier id (after a /clear or a resume
+ * the process goes on under a new id without a session.start).
+ */
 async function refreshSiblings($: EngineInterface, current: Live, id: string, at: number): Promise<void> {
   const own = (await read($, children)).map(ch => ch.id)
-  await update($, siblings, () => siblingsOf(current, id, at, own))
+  const cwds: string[] = []
+  for (const get of [() => $.session.cwd(), () => $.session.root()]) {
+    try {
+      cwds.push(slashes(await get()))
+    } catch {}
+  }
+  await update($, siblings, () => siblingsOf(current, id, at, own, cwds))
 }
 
 /** A signal to the person, per `config.notify`: a push notification, or a toast when the push is refused. */
@@ -1283,7 +1293,10 @@ export const register: Register = (on, options) => {
     try {
       const path = await liveFile($)
       const current = parseLive((await readText($, path)) ?? '')
-      await $.fs.write(path, serialize(withoutEntry(current, await $.session.id())))
+      // The ending session's id is the event's: after a /clear or a resume `$.session.id()` may already answer
+      // the id the process goes on under, and the entry under the old one would stay in the file for a day.
+      const ending = typeof e.sessionId === 'string' && e.sessionId ? e.sessionId : await $.session.id()
+      await $.fs.write(path, serialize(withoutEntry(current, ending)))
     } catch {}
     return next(e)
   })

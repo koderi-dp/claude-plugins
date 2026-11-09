@@ -25,8 +25,8 @@ function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: b
   const toasts: string[] = []
   const wakeups: Record<string, unknown>[] = []
   const passed: string[] = []
-  // `w.root` is what session.root answers (EnterWorktree moves it).
-  const w = { root: WORKTREE }
+  // `w.root` is what session.root answers (EnterWorktree moves it); `w.id` what session.id answers (a /clear changes it).
+  const w = { root: WORKTREE, id: options.sessionId ?? 'self' }
   const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
@@ -40,7 +40,7 @@ function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: b
   on('session.repo', () => ({ value: options.hasRepo === false ? null : { root: MAIN, remote: null, internal: false, name: null } }) as never)
   on('session.root', () => ({ value: w.root }))
   on('session.cwd', () => ({ value: w.root }))
-  on('session.id', () => ({ value: options.sessionId ?? 'self' }))
+  on('session.id', () => ({ value: w.id }))
   on('env.get', (_$, e) => ({ value: (e as { name: string }).name === 'HOME' ? '/home/me' : undefined }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('tool.register', (_$, e) => ({ value: { tool: e.name } }))
@@ -242,6 +242,24 @@ test('session.end removes this session from the live file and keeps the others',
   await $.session.end({ reason: 'other', sessionId: 'self' } as never)
   expect(Object.keys(live(files).sessions)).toEqual(['other'])
   expect(files.get(LIVE)?.endsWith('\n')).toBe(true)
+})
+
+test('review 0.2: this session\'s own entry is never an other session: an entry in this cwd under an earlier id is left out, and a /clear removes the ending id\'s entry, not the new one', async ($, on) => {
+  // The screenshot: the entry of this session's previous id, titled by its item, with no agents (so nothing dropped it).
+  const mine = { title: 'p1 · grid-track-sizes — Grid row and column sizes', cwd: WORKTREE, item: 'p1', startedAt: new Date(NOW - 30 * MIN).toISOString(), seenAt: new Date(NOW - 30_000).toISOString(), agents: [], signals: [] }
+  const other = { title: 'theirs', cwd: '/p/x', item: 'p9', startedAt: new Date(NOW - MIN).toISOString(), seenAt: new Date(NOW - 20_000).toISOString(), agents: [], signals: [] }
+  const { files, state, w, clock } = world(on, { [CONFIG]: config(), [LIVE]: JSON.stringify({ sessions: { 'old-self': mine, other } }) })
+  const siblings = () => ((state.get('siblings') as { sessionId: string }[] | undefined) ?? []).map(s => s.sessionId)
+  await start($)
+  expect(Object.keys(live(files).sessions)).toEqual(['old-self', 'other', 'self'])
+  expect(siblings()).toEqual(['other'])
+  // A /clear: the process goes on under a new id with no session.start; the ending session's entry goes.
+  w.id = 'next'
+  await $.session.end({ reason: 'clear', sessionId: 'self' } as never)
+  expect(Object.keys(live(files).sessions)).toEqual(['old-self', 'other'])
+  await clock.advance(30_000)
+  expect(Object.keys(live(files).sessions)).toEqual(['old-self', 'other', 'next'])
+  expect(siblings()).toEqual(['other'])
 })
 
 test('a fresh other session with a running agent is alive, not dead', async ($, on) => {
