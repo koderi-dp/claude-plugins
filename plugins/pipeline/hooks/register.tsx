@@ -42,7 +42,7 @@ const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', '
 
 const TOOL_DESCRIPTION =
   'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
-  '`get` → JSON { config, backlog, readiness, active, resume, signals, children, siblings }: the active item, its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs and the other sessions on the repository; ' +
+  '`get` → JSON { config, backlog, readiness, active, resume, signals, children, siblings }: the active item, its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs (id, item, status, lastLine, no log) and the other sessions on the repository; ' +
   '`status` { id? } → the status block, or one item\'s ledger as text; ' +
   '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers `added <id>` and the status; ' +
   '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title); ' +
@@ -451,7 +451,9 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     // The active item is the one in planning, building or review; resume is null until its ledger has the block.
     const active = activeItem(loaded)
     const ledger = active ? await loadLedger($, found, active.id) : null
-    const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: await read($, children), siblings: await read($, siblings) }
+    // A child's record without its log (up to 200 KB each): `log { item }` answers the text.
+    const kids = (await read($, children)).map(({ log: _log, ...rest }) => rest)
+    const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings) }
     if (error) out['error'] = error
     const answer = JSON.stringify(out, null, 2)
     // Each signal is delivered once: what this answer carries is marked.

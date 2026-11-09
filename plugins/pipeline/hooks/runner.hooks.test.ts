@@ -22,7 +22,7 @@ const SPECS = { [`${DIR}/specs/p12.md`]: '## What\n\nx\n', [`${DIR}/specs/p13.md
 
 type Chunk = { stream: 'stdout' | 'stderr'; text: string }
 type End = { code: number | null; signal: string | null }
-type Fake = { request: { argv: string[]; cwd?: string }; queue: Chunk[]; end: End | null; wake: (() => void) | null }
+type Fake = { request: { argv: string[]; cwd?: string; env?: Record<string, string> }; queue: Chunk[]; end: End | null; wake: (() => void) | null; returned: boolean }
 
 type Engine = {
   tool: { call: (e: never) => Promise<unknown> }
@@ -109,14 +109,19 @@ function world(on: On, seed: Record<string, string> = {}, options: { worktreeAdd
   })
   // Each spawned child: its chunks arrive as the test emits them, its exit as the test ends it.
   on('process.spawn', async function* (_$, e) {
-    const fake: Fake = { request: e as unknown as Fake['request'], queue: [], end: null, wake: null }
+    const fake: Fake = { request: e as unknown as Fake['request'], queue: [], end: null, wake: null, returned: false }
     spawned.push(fake)
-    for (;;) {
-      while (fake.queue.length) yield fake.queue.shift()!
-      if (fake.end) return { value: fake.end } as never
-      await new Promise<void>(resolve => {
-        fake.wake = resolve
-      })
+    try {
+      for (;;) {
+        while (fake.queue.length) yield fake.queue.shift()!
+        if (fake.end) return { value: fake.end } as never
+        await new Promise<void>(resolve => {
+          fake.wake = resolve
+        })
+      }
+    } finally {
+      // The stream was left (the parent's return(), or the end): the engine would kill the child here.
+      fake.returned = true
     }
   })
   const poke = (f: Fake) => {
@@ -219,6 +224,22 @@ test('Review Focus 4: start makes the worktree, spawns the child there, marks th
   expect(children(state)[0]!.endedAt).toBeGreaterThanOrEqual(NOW)
   expect(itemOf(files, 'p12')).toMatchObject({ status: 'building' })
   expect(await call($, { action: 'log', item: 'p12' })).toContain('warning: something on stderr')
+})
+
+test('review 0.2 I1: get answers each child without its log, so a long run does not fill the answer; log answers the text', async ($, on) => {
+  const { emit } = world(on, { [CONFIG]: config(), [BACKLOG]: READY, ...SPECS })
+  await start($)
+  await mode($, 'acceptEdits')
+  await call($, { action: 'start', item: 'p12' })
+  const line = assistant('x'.repeat(1000)) + '\n'
+  for (let i = 0; i < 150; i++) await emit(line)
+  const answer = await call($, { action: 'get' })
+  expect(answer.length).toBeLessThan(10_000)
+  const parsed = JSON.parse(answer) as { children: Record<string, unknown>[] }
+  expect(parsed.children).toHaveLength(1)
+  expect(parsed.children[0]).toMatchObject({ item: 'p12', status: 'running', lastLine: 'x'.repeat(1000) })
+  expect('log' in parsed.children[0]!).toBe(false)
+  expect((await call($, { action: 'log', item: 'p12' })).length).toBe(60 * 1001 - 1)
 })
 
 test('stop kills the child and blocks the item with the reason; the exit that follows changes nothing more', async ($, on) => {
