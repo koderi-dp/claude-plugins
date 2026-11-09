@@ -270,6 +270,27 @@ test('stop kills the child and blocks the item with the reason; the exit that fo
   expect(children(state)[0]!.status).toBe('starting')
 })
 
+test('review 0.2 I2: stop, then start again before the old process ends: the old loop\'s end leaves the new child\'s process entry, so a second stop still kills it', async ($, on) => {
+  const { exit, spawned, emit, state } = world(on, { [CONFIG]: config(), [BACKLOG]: READY, ...SPECS })
+  await start($)
+  await mode($, 'acceptEdits')
+  await call($, { action: 'start', item: 'p12' })
+  await emit(assistant('p12 · task 1/3') + '\n')
+  expect(await call($, { action: 'stop', item: 'p12' })).toStartWith('stopped p12')
+  // The person starts it again at once; the old process has not yet died.
+  expect(await call($, { action: 'start', item: 'p12' })).toStartWith('started p12')
+  expect(spawned).toHaveLength(2)
+  // Now the engine reports the old child dead.
+  await exit(null, 0, 'SIGTERM')
+  expect(spawned[0]!.returned).toBe(true)
+  expect(children(state)).toMatchObject([{ status: 'starting' }])
+  // The second stop reaches the new process: its stream is returned, which kills it.
+  expect(await call($, { action: 'stop', item: 'p12' })).toStartWith('stopped p12')
+  // One more piece from the engine lets the stream reach the return.
+  await emit('\n', 1)
+  expect(spawned[1]!.returned).toBe(true)
+})
+
 test('a child that exits non-zero fails and blocks the item with the code and the log tail; the person hears of it', async ($, on) => {
   const { files, state, exit, emit, pushes } = world(on, { [CONFIG]: config(), [BACKLOG]: READY, ...SPECS })
   await start($)

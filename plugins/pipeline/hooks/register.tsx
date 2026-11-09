@@ -658,7 +658,8 @@ async function runChild($: EngineInterface, found: string, child: ChildSession, 
     const message = `could not run the child: ${err instanceof Error ? err.message : String(err)}`
     await update($, children, prev => prev.map(ch => (ch.id === child.id ? { ...ch, log: `${ch.log}${message}\n`, lastLine: message } : ch))).catch(() => {})
   } finally {
-    self.procs.delete(child.item)
+    // Only this child's own entry: the item may have been started again while this process was still ending.
+    if (self.procs.get(child.item) === proc) self.procs.delete(child.item)
   }
   try {
     await finishChild($, found, child.id, end, proc.partial, logPath)
