@@ -1038,8 +1038,9 @@ async function entryOf($: EngineInterface, previous: LiveEntry | undefined, at: 
   const nowIso = new Date(at).toISOString()
   if (!self.startedAt) self.startedAt = nowIso
   const active = activeItem(await read($, backlog))
-  // An item a child session runs is the child's: its own entry names it.
-  const owned = new Set(runningOf(await read($, children)).map(ch => ch.item))
+  // An item a child session runs, or ran, is the child's: its own entry names it, and a child that exited with the
+  // item still building leaves it to the dead signal, not to this session's entry.
+  const owned = new Set((await read($, children)).map(ch => ch.item))
   const item = active && !owned.has(active.id) ? active : null
   const running = (await read($, agents)).filter(a => a.status === 'running')
   let cwd = ''

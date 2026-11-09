@@ -364,6 +364,19 @@ test('review 0.2 I2: stop, then start again before the old process ends: the old
   expect(spawned[1]!.returned).toBe(true)
 })
 
+test('review 0.2 M3: a child that exits 0 with the item still building: the parent does not claim the item in its own live entry on the next heartbeat', async ($, on) => {
+  const { exit, files, clock } = world(on, { [CONFIG]: config(), [BACKLOG]: READY, ...SPECS })
+  await start($)
+  await mode($, 'acceptEdits')
+  await call($, { action: 'start', item: 'p12' })
+  await exit(0)
+  await clock.advance(31_000)
+  expect(itemOf(files, 'p12')).toMatchObject({ status: 'building' })
+  const live = JSON.parse(files.get(LIVE)!) as { sessions: Record<string, { item?: string; title: string }> }
+  expect(live.sessions['self']!.item).toBeUndefined()
+  expect(live.sessions['self']!.title).toBe('main')
+})
+
 test('a child that exits non-zero fails and blocks the item with the code and the log tail; the person hears of it', async ($, on) => {
   const { files, state, exit, emit, pushes } = world(on, { [CONFIG]: config(), [BACKLOG]: READY, ...SPECS })
   await start($)
