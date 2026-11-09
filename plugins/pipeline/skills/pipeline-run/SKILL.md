@@ -7,13 +7,25 @@ description: Use on /pipeline next, /pipeline run <id> (on a blocked item: resum
 
 One item at a time, from `ready` to `merged`. You are the lead: you write the plan, dispatch subagents, verify what they did and decide. The tool `mcp__pipeline__pipeline` does everything clerical: the worktree, the ledger, the briefs, the record commits, the pushes, the gate. You never write a brief, never commit a record, never push by hand.
 
-Three files beside this one are read only when needed: `runner.md` when `config.runner` is `session`, `resume.md` when `get` names an active item or the user names a blocked one, `signals.md` when an answer carries a watchdog signal.
+| File beside this one | Read it when |
+|---|---|
+| `runner.md` | `get` answers `config.runner` = `session` |
+| `resume.md` | `get` names an active item, or the user names a blocked one |
+| `signals.md` | an answer carries a watchdog signal, or a wake-up asks for `signals` |
+
+Never open one otherwise.
 
 ## How to work: the lead is the cost
 
 Every turn of yours re-reads this whole conversation, so the number of turns is what an item costs.
 
-- **No text between tool calls.** One line at the end of a turn: `p12 · task 3/6 accepted · next: task 4`. No narration, no summaries, no offers.
+- **Reason silently; text only at the end of the item.** The user watches the panel, not your steps. Between two tool calls you write nothing at all: the next thing you emit after a tool result is the next tool call.
+  - Bad: `Verified. Accepting task 1 now.` then the `accept` call. Good: the `accept` call.
+  - Bad: `The plan is written; registering it, then dispatching.` Good: the `plan` call, then the `brief` call.
+  - Bad: `No GitHub here, so I'm skipping the PR.` Good: the `update` call; the reason goes in its `note`.
+  - Self-check: if you are about to write `Now`, `Next`, `I'm`, `I'll`, `Let me`, `Verified`, `Done` or `Dispatching`, delete it and make the call.
+  - The item's last message is one line, `p12 review · PR #31 · 3 tasks · gate green`; a stop adds the one sentence the user must act on. No summary of what was built: the PR has it.
+- **Never pull more than 20 lines of raw output into the conversation.** A check or a test run goes through `tail -15`; a diff is `--stat` first, then only the hunks of the tests and the core change (`git diff <range> -- <file>`).
 - **Independent calls in one message** (the diff stat and the check; two reads).
 - **Agents in the foreground.** Never `run_in_background` for an Agent, and no background shell command: each completion wakes you for a turn. The one exception is step 8.
 - **One simple command per shell call inside the worktree**: no `&&`, no `;`, no `cd`. A compound command is refused there and costs a retry.
