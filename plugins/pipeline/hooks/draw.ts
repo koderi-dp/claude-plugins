@@ -3,15 +3,18 @@
 // through superpowers-flow. Pure: strings in, strings out, no engine.
 
 import type { AgentRun } from '../types'
-import type { Band, Step, TagKind } from './status'
-import { SEGMENT_COLORS } from './status'
+import type { Band, Segment, Step, TagKind, TaskRow } from './status'
+import { SEGMENT_COLORS, fmtDuration } from './status'
 
 // The mockup's colours: purple for what runs, green for what merged, amber for what is blocked or has no spec.
-export const ACCENT = '#a59aff'
-export const DONE = '#72d1a6'
-export const BLOCKED = '#f1bd7e'
-export const MUTED = '#7f828f'
+export const ACCENT = '#af99ff'
+export const DONE = '#78dbac'
+export const BLOCKED = '#ebba79'
+export const MUTED = '#9796a3'
 export const FAILED = '#f68b91'
+/** The task list's frame: the current task's card border and the hairlines around the area. */
+export const CARD_BORDER = '#665184'
+export const LINE = '#303139'
 
 export const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
 
@@ -336,8 +339,8 @@ ${hairline(W, H, r.isLast)}`,
   )
 }
 
-/** Another session's row: a dot (purple while an agent runs), its title cut, then `p12 · 2 agents · stale` at the right; a stale one is faded. */
-export const sessionRowSvg = (W: number, r: { title: string; meta: string; isLive: boolean; isStale: boolean; isLast?: boolean }): string => {
+/** Another session's row: a dot (purple while an agent runs), its title cut, then `p12 · 2 agents · stale` at the right; a stale one is faded, an idle one's title is in the muted colour. */
+export const sessionRowSvg = (W: number, r: { title: string; meta: string; isLive: boolean; isStale: boolean; isDim?: boolean; isLast?: boolean }): string => {
   const H = SESSION_ROW_H
   const metaW = textWidth(r.meta, 11)
   const titleX = ROW_PAD + 16
@@ -346,10 +349,126 @@ export const sessionRowSvg = (W: number, r: { title: string; meta: string; isLiv
     W,
     H,
     `<g${r.isStale ? ' opacity="0.5"' : ''}>${dot(ROW_PAD + 4, 18, r.isLive && !r.isStale ? ACCENT : MUTED, r.isLive && !r.isStale)}
-<text class="t" ${startText(titleX, 22)} font-size="12" font-weight="590">${xml(fitText(r.title, 12, titleW))}</text>
+<text class="${r.isDim ? 'm' : 't'}" ${startText(titleX, 22)} font-size="12" font-weight="590">${xml(fitText(r.title, 12, titleW))}</text>
 <text class="m" ${endText(W - ROW_PAD, 22)} font-size="11">${xml(r.meta)}</text></g>
 ${hairline(W, H, r.isLast)}`,
   )
+}
+
+// ---------- the task list of the running Overview ----------
+
+export const TASK_BAR_H = 6
+const TASK_BAR_GAP = 5
+
+/** The segmented task bar: one rounded segment per task, green accepted, striped purple current, grey pending, amber blocked. */
+export const taskBarSvg = (W: number, segments: Segment[]): string => {
+  const n = Math.max(1, segments.length)
+  const each = (W - TASK_BAR_GAP * (n - 1)) / n
+  const fill = (s: Segment) => (s === 'accepted' ? DONE : s === 'current' ? 'url(#task-stripe)' : s === 'blocked' ? BLOCKED : '#3b3b46')
+  const defs = `<defs><pattern id="task-stripe" width="12" height="${TASK_BAR_H}" patternUnits="userSpaceOnUse"><rect width="12" height="${TASK_BAR_H}" fill="#584c74"/><rect width="4.2" height="${TASK_BAR_H}" fill="#aa91fb"/></pattern></defs>`
+  const list = segments.length ? segments : (['pending'] as Segment[])
+  const rects = list.map((s, i) => `<rect x="${i * (each + TASK_BAR_GAP)}" y="0" width="${each}" height="${TASK_BAR_H}" rx="3" fill="${fill(s)}"/>`).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${TASK_BAR_H}" viewBox="0 0 ${W} ${TASK_BAR_H}">${defs}${rects}</svg>`
+}
+
+const RAIL_X = 12
+const MARK_R = 11.5
+const TASK_X = 36
+const CARD_X = 28
+const CARD_PAD_T = 13
+const EYEBROW: Record<TaskRow['kind'], string> = { done: '#83d9ac', current: '#b7a5f8', pending: '#9492a1', blocked: BLOCKED }
+const TITLE: Record<TaskRow['kind'], string> = { done: '#d6d6df', current: '#eae9f0', pending: '#a6a5af', blocked: '#eae9f0' }
+const BADGE: Record<TaskRow['badgeKind'], { fill: string; text: string }> = { done: { fill: '#23392f', text: '#86deb0' }, running: { fill: '#332945', text: '#cbb8ff' }, pending: { fill: '#2a2a31', text: '#a5a3ae' }, blocked: { fill: '#3a2f22', text: BLOCKED } }
+const HISTORY: Record<TaskRow['history'][number]['kind'], string> = { done: '#8bdab2', blocked: BLOCKED, muted: '#a3a1b0' }
+
+/** The marker on the rail: a check in a green disc, a purple ring with a dot, the number in a grey ring, or an amber cross. */
+const marker = (r: TaskRow, cy: number): string => {
+  const ring = (fill: string, stroke: string) => `<circle cx="${RAIL_X}" cy="${cy}" r="${MARK_R}" fill="${fill}" stroke="${stroke}"/>`
+  const glyph = (text: string, color: string, size: number) => `<text x="${RAIL_X}" y="${cy + size * 0.36}" text-anchor="middle" font-size="${size}" font-weight="650" fill="${color}">${text}</text>`
+  switch (r.kind) {
+    case 'done':
+      return ring('#203c31', '#3a7355') + glyph('✓', DONE, 12)
+    case 'current':
+      return ring('#30273f', '#a492ec') + `<circle class="live" cx="${RAIL_X}" cy="${cy}" r="4" fill="#ccbaff"/>`
+    case 'blocked':
+      return ring('#3a2f22', BLOCKED) + glyph('✕', BLOCKED, 11)
+    default:
+      return ring('#1b1c22', '#565663') + glyph(String(r.n).padStart(2, '0'), '#aaa8b3', 10)
+  }
+}
+
+/**
+ * One task of the list as the mockup draws it: the rail with its marker, the eyebrow and the badge, the title (two
+ * lines at most) and the sub-line; the current task in a bordered card that holds the agent block (role, model,
+ * Active, the activity strip, the metrics) or the lead line with its history rows. Compact keeps the eyebrow, the
+ * badge, the title and the current task's activity strip.
+ */
+export const taskRowSvg = (W: number, r: TaskRow, o: { isFirst: boolean; isLast: boolean; isCompact: boolean }): Drawing => {
+  const isCard = r.kind === 'current'
+  const pad = isCard ? CARD_PAD_T : 0
+  const x0 = isCard ? CARD_X + pad : TASK_X
+  const right = isCard ? W - 1 - pad : W - 2
+  const contentW = right - x0
+  const parts: string[] = []
+  let y = (isCard ? 2 + pad : 12) + 10
+  const cy = y - 4
+  // The heading: the eyebrow left, the badge right.
+  parts.push(`<text ${startText(x0, y)} font-size="10" font-weight="650" letter-spacing="0.6" fill="${EYEBROW[r.kind]}">${xml(r.eyebrow)}</text>`)
+  const badge = BADGE[r.badgeKind]
+  const badgeW = textWidth(r.badge, 9) + 12 + r.badge.length * 0.3
+  parts.push(`<rect x="${right - badgeW}" y="${y - 12}" width="${badgeW}" height="17" rx="5" fill="${badge.fill}"/>`)
+  parts.push(`<text ${endText(right - 6, y)} font-size="9" font-weight="700" letter-spacing="0.3" fill="${badge.text}">${xml(r.badge)}</text>`)
+  // The title, then the sub-line.
+  const lines = wrapText(r.title, 12, contentW, 2)
+  lines.forEach((l, i) => {
+    y += i === 0 ? 22 : 18
+    parts.push(`<text ${startText(x0, y)} font-size="12" font-weight="620" fill="${TITLE[r.kind]}">${xml(l)}</text>`)
+  })
+  if (!o.isCompact && r.sub) {
+    y += 17
+    parts.push(`<text ${startText(x0, y)} font-size="10.5" fill="#898696">${xml(fitText(r.sub, 10.5, contentW))}</text>`)
+  }
+  const strip = (activity: string) => {
+    parts.push(`<rect x="${x0}" y="${y}" width="${contentW}" height="34" rx="7" fill="#1a1922" stroke="#322c3f"/>`)
+    parts.push(`<text ${startText(x0 + 10, y + 21)} font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="12" fill="#b19cf5">›_</text>`)
+    parts.push(`<text ${startText(x0 + 34, y + 21)} font-size="11" fill="#dad2ec">${xml(fitText(activity, 11, contentW - 44))}</text>`)
+    y += 34
+  }
+  if (isCard && !o.isCompact && (r.agent || r.lead)) {
+    y += 14
+    parts.push(`<rect x="${x0}" y="${y}" width="${contentW}" height="1" fill="#3a3446"/>`)
+    y += 12
+    if (r.agent) {
+      parts.push(`<rect x="${x0}" y="${y}" width="28" height="28" rx="8" fill="#39304d"/>`)
+      parts.push(`<text x="${x0 + 14}" y="${y + 19}" text-anchor="middle" font-size="14" fill="#c4adff">⌘</text>`)
+      parts.push(`<text ${startText(x0 + 36, y + 12)} font-size="11" font-weight="700" fill="#eae9f0">${xml(r.agent.role)}</text>`)
+      parts.push(`<text ${startText(x0 + 36, y + 25)} font-size="10" fill="#9691a6">${xml(r.agent.model)}</text>`)
+      parts.push(`<text ${endText(right, y + 18)} font-size="10" fill="#c5b4fb"><tspan class="live">●</tspan> Active</text>`)
+      y += 38
+      strip(r.agent.activity)
+      y += 11
+      const metrics = `${r.agent.calls} tool calls · ${fmtTokens(r.agent.tokens)} tokens · ${fmtDuration(r.agent.elapsedMs)} elapsed`
+      parts.push(`<text ${startText(x0, y + 8)} font-size="10" fill="#9c99a9">${xml(fitText(metrics, 10, contentW))}</text>`)
+      y += 12
+    } else {
+      parts.push(`<text ${startText(x0, y + 10)} font-size="11" font-weight="600" fill="${ACCENT}">${xml(fitText(r.lead ?? '', 11, contentW))}</text>`)
+      y += 18
+      for (const h of r.history) {
+        y += 6
+        parts.push(`<rect x="${x0}" y="${y}" width="${contentW}" height="28" rx="7" fill="#202126" stroke="#303037"/>`)
+        parts.push(`<text ${startText(x0 + 10, y + 18)} font-size="10.5" fill="${HISTORY[h.kind]}">${xml(fitText(h.text, 10.5, contentW - 20))}</text>`)
+        y += 28
+      }
+    }
+  } else if (isCard && o.isCompact && r.agent) {
+    y += 10
+    strip(r.agent.activity)
+  }
+  y += isCard ? pad + 1 : o.isCompact ? 10 : 15
+  const H = isCard ? y + 6 : y
+  const rail = `<rect x="${RAIL_X - 0.5}" y="${o.isFirst ? cy : 0}" width="1" height="${(o.isLast ? cy : H) - (o.isFirst ? cy : 0)}" fill="#34353f"/>`
+  const card = isCard ? `<rect x="${CARD_X + 0.5}" y="2.5" width="${W - 2 - CARD_X}" height="${H - 9}" rx="10" fill="#221e2d" stroke="${CARD_BORDER}"/>` : ''
+  return { source: svg(W, H, `${rail}${card}${marker(r, cy)}${parts.join('')}`), height: H }
 }
 
 // ---------- the band above the prompt ----------

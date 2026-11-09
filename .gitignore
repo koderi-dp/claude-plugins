@@ -3,3 +3,4 @@
 .claude/worktrees/
 
 plugins/*/evals/results/
+plugins/pipeline/preview/out/

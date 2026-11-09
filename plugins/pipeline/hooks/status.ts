@@ -1,6 +1,6 @@
 // The status block of spec §9. Pure: takes and returns plain data. One item's ledger as text is in ledger.ts.
 
-import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, Role, Signal, TaskRecord, TaskReview } from '../types'
+import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, Role, Sibling, Signal, TaskRecord, TaskReview } from '../types'
 import type { Readiness } from './backlog'
 import type { MergedPending } from './merged'
 import { mergedLine } from './merged'
@@ -231,6 +231,32 @@ export function roleOf(agent: Pick<AgentRun, 'name'>, ledger: Ledger | null): { 
   return { role: agent.name }
 }
 
+/**
+ * The finished agents the running view lists for the current task while its ledger has no dispatch yet: those whose
+ * name says `task N` (as a word, so task 3 is not task 30) and those that started after the task's dispatch, which the
+ * resume block dates when it is this task's. An earlier task's agents, accepted or failed, are not the current task's.
+ * Without a current task every finished agent is listed.
+ */
+export function finishedOfTask(agents: AgentRun[], current: Pick<TaskRecord, 'n'> | undefined, ledger: Ledger | null): AgentRun[] {
+  const finished = agents.filter(a => a.status !== 'running')
+  if (!current) return finished
+  const named = new RegExp(`\\btask ${current.n}\\b`, 'i')
+  const since = ledger?.resume?.task === current.n ? Date.parse(ledger.resume.at ?? '') : NaN
+  return finished.filter(a => named.test(a.name) || (!Number.isNaN(since) && a.startedAt >= since))
+}
+
+/**
+ * Another session's row: its title, then `p12 · 1 agent · stale`. A session with no item and no agents is an idle
+ * session, `idle session · <title>`, the title being the live entry's or the folder's name, with only `stale` beside it.
+ */
+export function siblingLabel(s: Sibling): { title: string; meta: string; isIdle: boolean } {
+  const name = s.title || s.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'session'
+  const isIdle = !s.item && !s.agents.length
+  if (isIdle) return { title: `idle session · ${name}`, meta: s.isStale ? 'stale' : '', isIdle }
+  const running = s.agents.filter(a => a.status === 'running').length
+  return { title: name, meta: line([s.item, `${running} agent${running === 1 ? '' : 's'}`, s.isStale ? 'stale' : undefined]), isIdle }
+}
+
 export type Verdict = 'APPROVED' | 'FIX REQUIRED'
 export type Attempt = {
   /** `Build`, `Review`, `Fix 1 of 3`, `Final review`, `Escalation`. */
@@ -241,6 +267,8 @@ export type Attempt = {
   verdict?: Verdict
   /** A line of its own, dim, with no model or time: how an accepted task was reviewed. */
   isNote?: boolean
+  /** The dispatch has no result yet: it is the one still running. */
+  isOpen?: boolean
 }
 
 const verdictOf = (result: string): Verdict | undefined => (/FIX REQUIRED/i.test(result) ? 'FIX REQUIRED' : /APPROVED/i.test(result) ? 'APPROVED' : undefined)
@@ -259,7 +287,9 @@ export function attemptsOf(task: Pick<TaskRecord, 'dispatches'> & Partial<Pick<T
       label = builds === 1 ? 'Build' : `Fix ${builds - 1} of ${fixRounds}`
     } else label = d.role === 'reviewer' ? 'Review' : d.role === 'final' ? 'Final review' : 'Escalation'
     const verdict = verdictOf(d.result ?? '')
-    return { label, model: shortModel(d.model), time: fmtClock((d.minutes ?? 0) * 60_000), ...(verdict ? { verdict } : {}) }
+    // A dispatch with no result yet is the one still running: no clock, no check.
+    const isOpen = !(d.result ?? '').trim() && !(d.minutes ?? 0)
+    return { label, model: shortModel(d.model), time: fmtClock((d.minutes ?? 0) * 60_000), ...(verdict ? { verdict } : {}), ...(isOpen ? { isOpen: true } : {}) }
   })
   return note ? [...trail, { label: note, model: '', time: '', isNote: true }] : trail
 }
@@ -274,7 +304,8 @@ export function reviewNote(task: Partial<Pick<TaskRecord, 'status' | 'review'>>,
 }
 
 /** An attempt as one line: `Build · Sonnet · 3:20 ✓`, `Review · Opus · 0:58 · FIX REQUIRED`. */
-export const attemptText = (a: Attempt): string => (a.isNote ? a.label : `${line([a.label, a.model, a.time])}${a.verdict ? ` · ${a.verdict}` : ' ✓'}`)
+export const attemptText = (a: Attempt): string =>
+  a.isNote ? a.label : a.isOpen ? `${line([a.label, a.model])} · in progress` : `${line([a.label, a.model, a.time])}${a.verdict ? ` · ${a.verdict}` : ' ✓'}`
 
 /**
  * The current task's second line: in a fix round, `Fix round 1 of 3 · after review: FIX REQUIRED`; with an agent
@@ -302,6 +333,114 @@ export function leadLine(ledger: Ledger | null, now: number): string {
   const state = ledger?.resume?.state || 'between dispatches'
   const at = Date.parse(ledger?.resume?.at ?? '')
   return line(['Lead', state, Number.isNaN(at) ? undefined : fmtClock(Math.max(0, now - at))])
+}
+
+// ---------- the task list of the running Overview ----------
+
+export type TaskRowKind = 'done' | 'current' | 'pending' | 'blocked'
+export type BadgeKind = 'done' | 'running' | 'pending' | 'blocked'
+/** The running agent of the current task, as its card shows it. */
+export type TaskAgent = { role: string; model: string; activity: string; calls: number; tokens: number; elapsedMs: number }
+export type TaskRow = {
+  n: number
+  kind: TaskRowKind
+  /** `01 · COMPLETED`, `02 · CURRENT TASK`, `03 · NEXT TASK`, `04 · PENDING`, `02 · BLOCKED`. */
+  eyebrow: string
+  /** `Accepted`, `● Running`, `Fix round 1 of 2`, `In review`, `Pending`, `Blocked`. */
+  badge: string
+  badgeKind: BadgeKind
+  title: string
+  /** `Implemented by Opus 5.5 · 4m 34s · review skipped (taskReview off)`; `Implementation · in progress`; a fix round's line. */
+  sub?: string
+  /** The current task's running agent. */
+  agent?: TaskAgent
+  /** The current task's lead line while no agent runs: `Lead · fix round 1 dispatched · 0:40`. */
+  lead?: string
+  /** Under the lead line: the attempt trail when the ledger has dispatches, else the task's finished agents. */
+  history: { text: string; kind: 'done' | 'blocked' | 'muted' }[]
+}
+
+/** `4m 34s`, `45s`, `1h 02m`. */
+export const fmtDuration = (ms: number): string => {
+  const s = Math.max(0, Math.round(ms / 1000))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (h) return `${h}h ${String(m).padStart(2, '0')}m`
+  return m ? `${m}m ${String(s % 60).padStart(2, '0')}s` : `${s}s`
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+const roleWord = (role: string): string => (role === 'reviewer' ? 'Review' : role === 'final' ? 'Final review' : role === 'implementer' ? 'Implementation' : role.charAt(0).toUpperCase() + role.slice(1))
+
+/** How an accepted task was reviewed, short: the lead's note, else `review <verdict>` of an independent review. */
+const reviewedAs = (task: TaskRecord, taskReview?: TaskReview): string | undefined => reviewNote(task, taskReview) ?? (task.review?.kind === 'independent' ? `review ${task.review.verdict}` : undefined)
+
+/** `Implemented by Opus 5.5 · 4m 34s` from the task's last implementer dispatch; nothing without one. */
+const implementedBy = (task: TaskRecord): string | undefined => {
+  const d = [...(task.dispatches ?? [])].reverse().find(x => x.role === 'implementer')
+  return d ? `Implemented by ${shortModel(d.model)} · ${fmtDuration((d.minutes ?? 0) * 60_000)}` : undefined
+}
+
+export type TaskRowsInput = { tasks: TaskRecord[]; agents: AgentRun[]; ledger: Ledger | null; fixRounds: number; taskReview?: TaskReview; now: number }
+
+/**
+ * One row per ledger task for the running Overview: the eyebrow, the badge, the sub-line, and for the current task
+ * its running agent, or the lead line with the attempt trail (a fix round) or the task's finished agents under it.
+ */
+export function taskRowsOf(d: TaskRowsInput): TaskRow[] {
+  const current = currentTask(d.ledger)
+  const agent = [...d.agents].reverse().find(a => a.status === 'running')
+  let sawCurrent = false
+  let sawNext = false
+  return d.tasks.map((task): TaskRow => {
+    const title = task.title
+    if (task.status === 'accepted') {
+      return { n: task.n, kind: 'done', eyebrow: `${pad2(task.n)} · COMPLETED`, badge: 'Accepted', badgeKind: 'done', title, sub: line([implementedBy(task), reviewedAs(task, d.taskReview)]) || undefined, history: [] }
+    }
+    if (task.status === 'blocked') {
+      return { n: task.n, kind: 'blocked', eyebrow: `${pad2(task.n)} · BLOCKED`, badge: 'Blocked', badgeKind: 'blocked', title, sub: task.review?.verdict || undefined, history: [] }
+    }
+    const isCurrent = task.status === 'running' || task.status === 'fix' || task.n === current?.n
+    if (!isCurrent) {
+      const eyebrow = sawCurrent && !sawNext ? 'NEXT TASK' : 'PENDING'
+      if (sawCurrent) sawNext = true
+      return { n: task.n, kind: 'pending', eyebrow: `${pad2(task.n)} · ${eyebrow}`, badge: 'Pending', badgeKind: 'pending', title, history: [] }
+    }
+    sawCurrent = true
+    const attempts = attemptsOf(task, d.fixRounds)
+    const role = agent ? roleOf(agent, d.ledger) : undefined
+    const isReview = role?.role === 'reviewer' || role?.role === 'final'
+    const badge = task.status === 'fix' ? `Fix round ${Math.max(1, attempts.filter(a => a.label.startsWith('Fix ')).length)} of ${d.fixRounds}` : isReview ? 'In review' : '● Running'
+    const lastRole = (task.dispatches ?? []).at(-1)?.role
+    const sub = task.status === 'fix' ? currentLine(task, undefined, d.ledger, d.fixRounds, d.now) : `${roleWord(role?.role ?? lastRole ?? 'implementer')} · in progress`
+    const row: TaskRow = { n: task.n, kind: 'current', eyebrow: `${pad2(task.n)} · CURRENT TASK`, badge, badgeKind: 'running', title, sub, history: [] }
+    if (agent && role) {
+      row.agent = { role: role.role.charAt(0).toUpperCase() + role.role.slice(1), model: line([shortModel(agent.model), role.effort]), activity: agent.activity, calls: agent.calls, tokens: agent.tokens, elapsedMs: Math.max(0, d.now - agent.startedAt) }
+      return row
+    }
+    row.lead = leadLine(d.ledger, d.now)
+    row.history = attempts.length
+      ? attempts.map(a => ({ text: attemptText(a), kind: a.isNote || a.isOpen ? ('muted' as const) : a.verdict === 'FIX REQUIRED' ? ('blocked' as const) : ('done' as const) }))
+      : finishedOfTask(d.agents, task, d.ledger)
+          .slice(-3)
+          .reverse()
+          .map(a => ({ text: line([a.name, shortModel(a.model), fmtClock((a.endedAt ?? d.now) - a.startedAt), a.status]), kind: a.status === 'failed' ? ('blocked' as const) : ('muted' as const) }))
+    return row
+  })
+}
+
+/** The Recent activity rows: one per accepted task, `✓ Task 1 accepted · Implementer (Opus 5.5) · 4:34 · review skipped`. */
+export function activityLines(tasks: TaskRecord[], taskReview?: TaskReview): string[] {
+  return tasks
+    .filter(t => t.status === 'accepted')
+    .map(t => {
+      const dispatches = t.dispatches ?? []
+      const impl = dispatches.find(x => x.role === 'implementer')
+      const minutes = dispatches.reduce((sum, x) => sum + (x.minutes ?? 0), 0)
+      const note = reviewNote(t, taskReview)
+      const review = note ? note.replace(/ \(taskReview off\)$/, '') : t.review?.kind === 'independent' ? `review ${t.review.verdict}` : undefined
+      return line([`✓ Task ${t.n} accepted`, impl ? `Implementer (${shortModel(impl.model)})` : undefined, dispatches.length ? fmtClock(minutes * 60_000) : undefined, review])
+    })
 }
 
 export type TagKind = 'running' | 'done' | 'blocked' | 'muted' | 'ready'
@@ -359,6 +498,21 @@ export type Band = {
   tasks: { title: string; segment: Segment }[]
 }
 
+/** A task's segment of the bar: accepted, blocked, current (running, in a fix round, or the resume block's task), else pending. */
+export const taskSegment = (t: TaskRecord, current: Pick<TaskRecord, 'n'> | undefined): Segment => (t.status === 'accepted' ? 'accepted' : t.status === 'blocked' ? 'blocked' : t.status === 'running' || t.status === 'fix' || t.n === current?.n ? 'current' : 'pending')
+
+/** `1 accepted · 1 in progress · 1 pending`, with `n blocked` when any is; the legend under the task bar. */
+export function segmentLegend(segments: Segment[]): { n: number; word: string; kind: Segment }[] {
+  const count = (kind: Segment) => segments.filter(s => s === kind).length
+  const out: { n: number; word: string; kind: Segment }[] = [
+    { n: count('accepted'), word: 'accepted', kind: 'accepted' },
+    { n: count('current'), word: 'in progress', kind: 'current' },
+    { n: count('pending'), word: 'pending', kind: 'pending' },
+  ]
+  if (count('blocked')) out.push({ n: count('blocked'), word: 'blocked', kind: 'blocked' })
+  return out
+}
+
 export const BAND_COLORS = { running: '#b69aff', blocked: '#f0b56f', merged: '#6dd9a1', idle: '#96929f' } as const
 export const SEGMENT_COLORS: Record<Segment, string> = { accepted: '#69c99a', current: '#a990fc', blocked: '#f0b56f', pending: '#404048' }
 
@@ -382,7 +536,7 @@ const shortModel = (id: string): string => {
 export function bandOf(item: Item, ledger: Ledger | null, agent: AgentRun | undefined, now: number): Band {
   const tasks = ledger?.tasks ?? []
   const current = currentTask(ledger)
-  const segmentOf = (t: TaskRecord): Segment => (t.status === 'accepted' ? 'accepted' : t.status === 'blocked' ? 'blocked' : t.status === 'running' || t.status === 'fix' || t.n === current?.n ? 'current' : 'pending')
+  const segmentOf = (t: TaskRecord): Segment => taskSegment(t, current)
   const segments = tasks.map(segmentOf)
   const accepted = segments.filter(s => s === 'accepted').length
   const isRunning = ACTIVE.includes(item.status)
