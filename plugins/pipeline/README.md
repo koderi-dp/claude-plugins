@@ -11,7 +11,7 @@ docs/pipeline/
   backlog.json         the items and their status; array order is priority
   BACKLOG.md           generated view of backlog.json, never edited
   specs/<id>.md        one page per item: what, why, acceptance, out of scope, open
-  plans/<id>.md        the superpowers plan for the item
+  plans/<id>.md        the plan for the item, in the format the run skill gives
   ledgers/<id>.json    the item's record: tasks, dispatches, rulings, resume block
   ledgers/<id>/        briefs and reports, for the record: task-N-brief.md and task-N-report.md,
                        task-N-fix-R-brief.md and -report.md, task-N-review-brief.md and -report.md
@@ -24,7 +24,7 @@ Under `merge: pr` you merge the PR yourself. The next `get` or `signals` sees th
 
 ## The loop
 
-A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording that asks for something to be built). It is `ready` once the spec has no open question and its `needs` are merged. `/pipeline next` picks the first ready item (an item that has only a note gets its spec written from it on pick, and stops only for an open question or an unmerged need): a worktree and branch, a plan with `superpowers:writing-plans`, then task by task an implementer from the brief templates, fix rounds up to the limit, an independent reviewer per `taskReview` (by default only when the diff touches a risky path), a final review over the whole branch, the gate, the PR, the merge, the ledger, the clean-up, and one line to you. Statuses: `inbox`, `ready`, `planning`, `building`, `review`, `merged`, `blocked`, `parked`.
+A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording that asks for something to be built). It is `ready` once the spec has no open question and its `needs` are merged. `/pipeline next` picks the first ready item (an item that has only a note gets its spec written from it on pick, and stops only for an open question or an unmerged need): a worktree and branch, a plan in the plugin's own format that the tool checks (`plan`), then task by task an implementer from a brief the tool renders (`brief`), the lead's own run of the task's check, fix rounds up to the limit, an independent reviewer per `taskReview` (by default only when the diff touches a risky path), a final review over the whole branch, the gate, the PR, the merge, the ledger, the clean-up, and one line to you. Statuses: `inbox`, `ready`, `planning`, `building`, `review`, `merged`, `blocked`, `parked`.
 
 ## Commands
 
@@ -94,14 +94,18 @@ Every tool answer stays in the lead's conversation and is read again on every la
 | `signals` | Only the open watchdog signals, or `no signals`; the wake-up's check |
 | `add`, `update`, `move`, `park`, `unpark`, `remove` | One line: `added p29 · inbox · no spec`, `p12 · building`, `removed p2 · 70 items left` |
 | `ledger` | One line: `ledger p12 · task 3/6 running · 2 rulings · 674k tokens` |
+| `plan` | One line: `p12 · building · 5 tasks · next: brief task 1`, or the problems of the plan |
+| `brief` | One line with the Agent call: `p12 · task 2/5 · Agent model sonnet effort medium · prompt: Read docs/pipeline/ledgers/p12/task-2-brief.md and follow it.` |
 | `status`, `status { id }` | The full status block, or one item's whole ledger: the explicit way to read them |
+
+The tool does the clerical work of a run: it checks the plan and seeds the ledger's tasks, renders every brief from the plan task, the config, `rules.md` and the spec, opens the dispatch in the ledger, and decides from the diff whether a task needs an independent review. The lead writes no brief and no task list. A subagent answers one line (`DONE <hash> · 14/14 tests`, `FIX REQUIRED · 1 critical`) and writes its report to a file the lead opens only when it needs the findings. The lead runs each task's check itself before it accepts.
 
 The run skill calls `get` once per item and after a restart, `signals` for watchdog checks and `status` only when you ask; it passes briefs and reports to subagents by path and reads a result with `git diff --stat` first. With `runner: session` each item runs in a fresh child context, so one item's history never weighs on the next. The lead runs on the session's model while the subagents use `models`: starting the lead session on Opus or Sonnet keeps a Fable budget for the final reviews.
 
 ## The skills
 
 - `pipeline-intake`: a request in any wording becomes an item and a spec; at most one question, never a build.
-- `pipeline-run`: one item from pick to merge, with the brief templates, the ledger and one line per turn; resumes from the ledger's `resume` block after a restart.
+- `pipeline-run`: one item from pick to merge, with the plan format, briefs rendered by the tool, the ledger and one line per turn; resumes from the ledger's `resume` block after a restart.
 - `pipeline-init`: sets a new project up: config fitted to its scripts and layout, an empty backlog, a rules.md; hands over to migrate when a queue exists. Also reachable as the `/pipeline-init` skill when the `/pipeline` command is not listed.
 - `pipeline-rules`: loaded in every session of a project with a pipeline; where the files are, who writes them, the reply shape.
 - `pipeline-migrate`: moves a project that runs its own process onto the pipeline in one session.
@@ -116,7 +120,7 @@ In the desktop app a panel shows the status block live: the active item with its
 
 ## Install
 
-Needs Claude Code v2.1.287 or later, for mods; `claude --version` shows yours and `claude update` updates it. Tested on v2.1.318. The mod API is early access: an engine release may rename an event, and this note names the version it was tested on. The run skill calls [superpowers](https://github.com/obra/superpowers) for plans and the subagent loop; neither board nor superpowers-flow is needed.
+Needs Claude Code v2.1.287 or later, for mods; `claude --version` shows yours and `claude update` updates it. Tested on v2.1.318. The mod API is early access: an engine release may rename an event, and this note names the version it was tested on. No other plugin is needed: the plan format, the briefs and the build loop are the plugin's own. `retain.superpowers` and the migration only concern files an earlier superpowers workflow left in a project.
 
 At the prompt of a terminal session:
 
@@ -157,7 +161,7 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 | Part | Name |
 | --- | --- |
 | Skills | `pipeline-init`, `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
-| Templates | `templates/spec.md`, `implementer.md`, `reviewer.md`, `fix.md`, `final.md` |
+| Templates | `templates/spec.md`; the four briefs (implementer, fix, review, final) are in `hooks/templates.ts` and rendered by the tool's `brief` action; a project file `docs/pipeline/templates/<kind>.md` replaces one |
 | Tool | `mcp__pipeline__pipeline` |
 | Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `merged.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |
 | Tests | `claude plugin test plugins/pipeline` |

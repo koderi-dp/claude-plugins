@@ -9,6 +9,9 @@ import { cleanList, planOf } from './clean'
 import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
+import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
+import { PLAN_FORMAT } from './templates'
+import type { BriefKind } from './templates'
 import type { LedgerSet } from './ledger'
 import { parseLive, siblingsOf, withEntry, withoutEntry } from './live'
 import { candidates as mergeCandidates, fetchArgv, findMerged, isFetchDue, mergedLine } from './merged'
@@ -55,8 +58,10 @@ const TOOL_DESCRIPTION =
   '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title) and answers `p1 · building` (with `set <fields>` for the others); ' +
   '`move` { id, to: "top" | { after: "<id>" } } → reorders and answers `p3 · moved to the top · ready`; ' +
   '`remove` { id } → `removed p2 · 70 items left`; `park` { id } → `p2 · parked`; `unpark` { id } → `p2 · ready`; ' +
-  '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
-  '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers one line, `ledger p1 · task 3/6 running · 2 rulings · 674k tokens` (`final approved` once recorded); `status { id }` answers the whole ledger; ' +
+  '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, close?: { tokens, minutes, result }, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
+  '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended and `close` merged into the dispatch a `brief` call opened, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers one line, `ledger p1 · task 3/6 running · 2 rulings · 674k tokens` (`final approved` once recorded); `status { id }` answers the whole ledger; ' +
+  '`plan` { item, attribution? } → reads docs/pipeline/plans/<id>.md from the item\'s worktree, checks it (tasks numbered 1 to N, each with a Files line, needs naming earlier tasks) and, when it is sound, seeds the ledger\'s tasks and resume block and sets the item building, answering one line, `p12 · building · 5 tasks · next: brief task 1`; a missing plan answers the plan format, an unsound one the problems, and nothing is written; ' +
+  '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, attribution? } → renders that brief from the plan task, the config, rules.md, the spec and the ledger (a project\'s docs/pipeline/templates/<kind>.md replaces the built-in template), writes it under docs/pipeline/ledgers/<id>/ in the worktree, opens the dispatch in the ledger (task running or fix, the resume block, model and effort, brief and report paths) and answers one line with the role, model, effort and the prompt to give the Agent tool; fix needs findings and counts its own round, review needs commits and answers `no review` instead when config.taskReview is off, or is risky and the range touches no risky path; the lead closes the dispatch with ledger tasks[{ n, close: { tokens, minutes, result } }]; ' +
   '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists, and ends with the line to commit docs/pipeline/ on mainBranch now (the tool\'s files are versioned, never gitignored); ' +
   '`start` { item: "<id>" } (runner session only) → makes the item\'s worktree (.claude/worktrees/<id>, branch from config.branch off mainBranch, reused when there), marks the item building with the note `session runner`, records branch and worktree in its ledger and starts a headless Claude Code child in the worktree in this session\'s permission mode (acceptEdits, auto, dontAsk or bypassPermissions; otherwise refused with what to switch to; refused too past limits.parallel, for an item that is not ready, blocked or building with the note `session runner` and no child, for a building item run in-session, while a child runs it, and from a child session, which starts no children), answering one line with the session id and the log path; the child runs the item with the run skill and leaves the item as it ends it, a non-zero exit blocks it with the code and the log tail; ' +
   '`stop` { item } → kills the item\'s child session and sets the item blocked with `stopped by the user` unless it had merged; ' +
@@ -69,11 +74,11 @@ const TOOL_DESCRIPTION =
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'plan', 'brief', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
-      description: 'For add: the new item; it starts as inbox. For ledger, start, stop and log: the item id, as p12.',
+      description: 'For add: the new item; it starts as inbox. For ledger, plan, brief, start, stop and log: the item id, as p12.',
       properties: {
         title: { type: 'string' },
         size: { type: 'string', enum: ['S', 'M', 'L'] },
@@ -90,6 +95,13 @@ const TOOL_SCHEMA = {
     refresh: { type: 'boolean', description: 'For migrate and migrate-apply: go on although docs/pipeline/ exists; the apply then refreshes titles, sources and links and changes no status.' },
     config: { type: 'object', description: 'For migrate-apply: the corrected config, as migrate drafted it.' },
     items: { type: 'array', description: 'For migrate-apply: the corrected items in queue order (title, status, size, needs, source, spec, plan, pr, note; a building item with branch and resume), as migrate drafted them; needs may name the queue labels.', items: { type: 'object' } },
+    kind: { type: 'string', enum: ['implementer', 'fix', 'review', 'final'], description: 'For brief: which brief to render.' },
+    task: { type: 'number', description: 'For brief: the task number (not for final).' },
+    findings: { type: 'string', description: 'For brief: the findings, verbatim (required for fix; for a re-review or a second final review, its scope).' },
+    carried: { type: 'string', description: 'For an implementer brief: minor findings carried from the previous task.' },
+    commits: { type: 'string', description: 'For a review brief: the commit range, as <sha>..<sha>.' },
+    attribution: { type: 'string', description: 'For plan or brief: the attribution lines this session was given; kept in the ledger, so once per item is enough.' },
+    escalate: { type: 'boolean', description: 'For an implementer or fix brief: dispatch at config.models.escalate.' },
     rules: { type: 'array', description: 'For migrate-apply: the corrected rules, each { group, line, source }.', items: { type: 'object' } },
   },
   required: ['action'],
@@ -344,6 +356,13 @@ type ToolInput = {
   config?: unknown
   items?: unknown
   rules?: unknown
+  kind?: string
+  task?: number
+  findings?: string
+  carried?: string
+  commits?: string
+  attribution?: string
+  escalate?: boolean
 }
 
 class Refused extends Error {}
@@ -636,6 +655,10 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       if (Object.keys(mirror).length) await writeBacklog($, found, updateItem(current, id, mirror, now))
       return ledgerLine(merged)
     }
+    case 'plan':
+      return planAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+    case 'brief':
+      return briefAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'add': {
       const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
       if (!title) throw new Refused('add needs item.title')
@@ -681,6 +704,121 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     default:
       throw new Refused(`unknown action "${String(e.action)}"`)
   }
+}
+
+const BRIEF_KINDS: readonly string[] = ['implementer', 'fix', 'review', 'final']
+
+/** The item's worktree as an absolute path: the ledger's, under the main checkout when relative; the main checkout without one. */
+const worktreePath = (found: string, ledger: Ledger | null): string => {
+  const w = typeof ledger?.worktree === 'string' ? slashes(ledger.worktree) : ''
+  return !w ? found : /^(?:\/|[A-Za-z]:)/.test(w) ? w : `${found}/${w}`
+}
+
+/** A file of the item, read from its worktree first and from the main checkout otherwise. */
+async function readItemFile($: EngineInterface, found: string, wt: string, rel: string): Promise<string | null> {
+  return (await readText($, `${wt}/${rel}`)) ?? (wt === found ? null : await readText($, `${found}/${rel}`))
+}
+
+/** One git answer in the worktree, trimmed; null when git fails. */
+async function gitOut($: EngineInterface, wt: string, args: string[]): Promise<string | null> {
+  try {
+    const r = await $.process.run(['git', '-C', wt, ...args], { cwd: wt, timeoutMs: 30_000 })
+    return r.exitCode === 0 ? r.stdout.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/** The plan of an item, parsed and sound, or refused with the format or the problems. */
+async function loadPlan($: EngineInterface, found: string, wt: string, id: string, ledger: Ledger | null) {
+  const rel = typeof ledger?.plan === 'string' && ledger.plan ? ledger.plan : `docs/pipeline/plans/${id}.md`
+  const text = await readItemFile($, found, wt, rel)
+  if (text === null) throw new Refused(`no plan at ${rel}; write it in this format, then call plan again:\n\n${PLAN_FORMAT}`)
+  const plan = parsePlan(text)
+  const problems = checkPlan(plan)
+  if (problems.length) throw new Refused(`${rel} cannot be built:\n${problems.map(x => `- ${x}`).join('\n')}\n\nThe format:\n\n${PLAN_FORMAT}`)
+  return { plan, rel }
+}
+
+/** `plan`: the checked plan becomes the ledger's tasks and resume block, and the item is building. */
+async function planAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const ledger = await loadLedger($, found, id)
+  const wt = worktreePath(found, ledger)
+  const { plan, rel } = await loadPlan($, found, wt, id, ledger)
+  const known = new Map((ledger?.tasks ?? []).map(t => [t.n, t]))
+  const tasks = plan.tasks.map(t => (known.has(t.n) ? { n: t.n, title: t.title } : { n: t.n, title: t.title, status: 'pending' as const, dispatches: [] }))
+  const next = plan.tasks.find(t => known.get(t.n)?.status !== 'accepted')?.n ?? plan.tasks.length
+  const lastVerified = ledger?.resume?.lastVerified ?? ledger?.base ?? (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? undefined
+  const set: LedgerSet = { plan: rel, tasks, resume: { task: next, state: known.size ? ledger?.resume?.state ?? 'planned' : 'planned', ...(lastVerified ? { lastVerified } : {}) } }
+  if (typeof e.attribution === 'string') set['attribution'] = e.attribution
+  await runTool($, { action: 'ledger', item: id, set })
+  const item = current.items.find(i => i.id === id)!
+  if (item.status !== 'building') await runTool($, { action: 'update', id, set: { status: 'building' } })
+  return `${id} · building · ${plan.tasks.length} task${plan.tasks.length === 1 ? '' : 's'} · next: brief task ${next}`
+}
+
+/** `brief`: one brief rendered into the worktree, its dispatch opened in the ledger, and the Agent call in one line. */
+async function briefAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const kind = e.kind as BriefKind
+  if (!BRIEF_KINDS.includes(String(e.kind))) throw new Refused('brief needs kind: implementer, fix, review or final')
+  const cfg = normalizeConfig(c ?? DEFAULTS).config
+  const ledger = (await loadLedger($, found, id)) ?? emptyLedger(id)
+  const wt = worktreePath(found, ledger)
+  const { plan } = await loadPlan($, found, wt, id, ledger)
+  const n = kind === 'final' ? plan.tasks.length : Number(e.task)
+  if (kind !== 'final' && !plan.tasks.some(t => t.n === n)) throw new Refused(`brief needs task: 1 to ${plan.tasks.length}`)
+
+  // A review the config does not ask for is answered, not rendered; a re-review (findings given) always runs.
+  let risky: string[] = []
+  if (kind === 'review') {
+    if (!e.commits?.trim()) throw new Refused('a review brief needs commits, as <sha>..<sha>')
+    if (!e.findings?.trim()) {
+      if (cfg.taskReview === 'off') return `no review: taskReview off · accept task ${n} with review.kind lead-diff`
+      const names = await gitOut($, wt, ['diff', '--name-only', e.commits.trim()])
+      risky = names === null ? [] : riskyMatches(names.split('\n').map(l => l.trim()).filter(Boolean), cfg.riskyPaths)
+      if (cfg.taskReview === 'risky' && names !== null && !risky.length) return `no review: ${e.commits.trim()} touches no risky path · accept task ${n} with review.kind lead-diff`
+    }
+  }
+
+  // The round is the first whose brief is not on disk yet: fix rounds from 1, a re-review and a second final review from 2.
+  let round = 1
+  if (kind !== 'implementer') while (round < 50 && (await $.fs.exists(`${wt}/${briefPaths(id, kind, n, round).brief}`))) round++
+  if ((kind === 'review' || kind === 'final') && round > 1 && !e.findings?.trim()) throw new Refused(`${briefPaths(id, kind, n, 1).brief} exists: dispatch it again by its path, or pass findings for a scoped re-review`)
+
+  const item = current.items.find(i => i.id === id)!
+  const template = await readItemFile($, found, wt, `docs/pipeline/templates/${kind}.md`)
+  const head = kind === 'final' ? await gitOut($, wt, ['rev-parse', '--short', 'HEAD']) : null
+  let out: ReturnType<typeof renderBrief>
+  try {
+    out = renderBrief({
+      kind, item: id, itemTitle: item.title, task: n, round, plan, config: cfg, ledger,
+      rulesMd: (await readItemFile($, found, wt, 'docs/pipeline/rules.md')) ?? '',
+      specMd: (await readItemFile($, found, wt, item.spec ?? `docs/pipeline/specs/${id}.md`)) ?? '',
+      ...(template ? { template } : {}),
+      ...(e.findings !== undefined ? { findings: e.findings } : {}),
+      ...(e.carried !== undefined ? { carried: e.carried } : {}),
+      ...(e.commits !== undefined ? { commits: e.commits } : {}),
+      ...(typeof e.attribution === 'string' ? { attribution: e.attribution } : {}),
+      ...(head ? { head } : {}),
+      risky,
+      isEscalated: e.escalate === true,
+    })
+  } catch (err) {
+    throw new Refused(err instanceof Error ? err.message : String(err))
+  }
+  await $.fs.write(`${wt}/${out.brief}`, out.text)
+
+  const total = plan.tasks.length
+  const state = kind === 'implementer' ? 'implementer dispatched' : kind === 'fix' ? `fix round ${round} dispatched` : kind === 'review' ? 'review dispatched' : 'final review dispatched'
+  const set: LedgerSet = { resume: { task: n, state, ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) } }
+  if (kind !== 'final') {
+    const dispatch = { role: out.role, model: out.model, effort: out.effort, tokens: 0, minutes: 0, result: '', brief: out.brief, report: out.report, ...(risky[0] ? { risky: risky[0] } : {}) }
+    set.tasks = [{ n, ...(kind === 'implementer' ? { status: 'running' as const } : kind === 'fix' ? { status: 'fix' as const } : {}), dispatches: [dispatch as never] }]
+  }
+  if (typeof e.attribution === 'string') set['attribution'] = e.attribution
+  await runTool($, { action: 'ledger', item: id, set })
+  const what = kind === 'final' ? 'final review' : kind === 'fix' ? `task ${n}/${total} · fix round ${round} of ${cfg.limits.fixRounds}` : kind === 'review' ? `task ${n}/${total} · review${round > 1 ? ` ${round}` : ''}` : `task ${n}/${total}`
+  return `${id} · ${what} · Agent model ${out.model} effort ${out.effort} · prompt: Read ${out.brief} and follow it.`
 }
 
 /** Whether an update starts an item's run: to planning, or to building from another status. */

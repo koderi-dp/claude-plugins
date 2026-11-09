@@ -571,3 +571,122 @@ test('at session start a merged PR with its Close pending is one toast per item'
   await start($)
   expect(toasts).toEqual(['pipeline: p1 merged on main · run /pipeline next or "continue the pipeline" to close it'])
 })
+
+// ---------- 0.3.0: the tool reads the plan and renders the briefs ----------
+
+const WT = `${MAIN}/.claude/worktrees/p1`
+const PLAN_MD = `# p1: CSV export
+
+## Constraints
+Kysely only.
+
+### Task 1: Schema
+- Files: db/schema.sql, src/job.ts
+- Check: npm test -- job
+- Focus: the organization filter
+
+Write the failing test first.
+
+### Task 2: Route
+- Files: src/route.ts
+- Needs: 1
+
+Build the route.
+`
+const BUILD_SEED = {
+  [CONFIG]: JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: { fast: 'npm run fast', task: 'npm test', gate: 'npm run gate' }, riskyPaths: ['db/**'], merge: 'pr' }),
+  [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'CSV export', status: 'planning', spec: 'docs/pipeline/specs/p1.md', ledger: 'docs/pipeline/ledgers/p1.json' }] }),
+  [`${DIR}/ledgers/p1.json`]: JSON.stringify({ item: 'p1', branch: 'feat/p1', worktree: '.claude/worktrees/p1', base: 'a1b2c3d', tasks: [], rulings: [], blockers: [], tokens: 0 }),
+  [`${DIR}/specs/p1.md`]: '# p1\n\n## What\n\nx\n\n## Acceptance\n\n- [ ] A CSV downloads.\n\n## Open\n',
+  [`${DIR}/rules.md`]: '# Rules\n\n## In every implementer brief\n\n1. No raw SQL.\n',
+}
+/** A git that answers the changed files of a range and a head. */
+function diffWorld(on: On, changed: string[]) {
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    if (argv[3] === 'diff') return { value: { ...ok, stdout: changed.join('\n') + '\n' } } as never
+    if (argv[3] === 'rev-parse') return { value: { ...ok, stdout: 'f00d123\n' } } as never
+    return { value: { ...ok, exitCode: 1 } } as never
+  })
+}
+const buildLedger = (files: Map<string, string>) => JSON.parse(files.get(`${DIR}/ledgers/p1.json`)!) as { tasks: Array<{ n: number; title: string; status: string; dispatches: Array<Record<string, unknown>> }>; resume: Record<string, unknown>; attribution?: string }
+
+test('plan without a file answers the format; an unsound plan answers the problems; nothing is written', async ($, on) => {
+  const { files, writes } = world(on, BUILD_SEED)
+  const none = text(await call($, { action: 'plan', item: 'p1' }))
+  expect(none).toMatch(/^refused: no plan at docs\/pipeline\/plans\/p1\.md; write it in this format/)
+  expect(none).toContain('### Task 1: <title>')
+  files.set(`${WT}/docs/pipeline/plans/p1.md`, '# p1\n\n### Task 1: A\n\n### Task 3: B\n- Files: b.ts\n')
+  const bad = text(await call($, { action: 'plan', item: 'p1' }))
+  expect(bad).toContain('- task 1 has no `- Files:` line')
+  expect(bad).toContain('- task 3 is at position 2')
+  expect(writes).toEqual([])
+})
+
+test('plan seeds the tasks and the resume block from the worktree plan and sets the item building', async ($, on) => {
+  const { files } = world(on, { ...BUILD_SEED, [`${WT}/docs/pipeline/plans/p1.md`]: PLAN_MD })
+  expect(text(await call($, { action: 'plan', item: 'p1', attribution: 'Co-Authored-By: X' }))).toBe('p1 · building · 2 tasks · next: brief task 1')
+  const l = buildLedger(files)
+  expect(l.tasks).toEqual([{ n: 1, title: 'Schema', status: 'pending', dispatches: [] }, { n: 2, title: 'Route', status: 'pending', dispatches: [] }])
+  expect(l.resume).toMatchObject({ task: 1, state: 'planned', lastVerified: 'a1b2c3d' })
+  expect(l.attribution).toBe('Co-Authored-By: X')
+  expect(items(files)[0]).toMatchObject({ status: 'building', plan: 'docs/pipeline/plans/p1.md' })
+  // A second call after a task was accepted keeps the record and moves on.
+  await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 1, status: 'accepted', commits: 'a..b' }] } })
+  expect(text(await call($, { action: 'plan', item: 'p1' }))).toBe('p1 · building · 2 tasks · next: brief task 2')
+  expect(buildLedger(files).tasks[0]).toMatchObject({ status: 'accepted', commits: 'a..b' })
+})
+
+test('brief renders into the worktree, opens the dispatch and answers the Agent call; close ends it', async ($, on) => {
+  const { files } = world(on, { ...BUILD_SEED, [`${WT}/docs/pipeline/plans/p1.md`]: PLAN_MD })
+  diffWorld(on, ['src/route.ts'])
+  await call($, { action: 'plan', item: 'p1', attribution: 'Co-Authored-By: X' })
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'implementer', task: 1 }))).toBe('p1 · task 1/2 · Agent model sonnet effort medium · prompt: Read docs/pipeline/ledgers/p1/task-1-brief.md and follow it.')
+  const brief = files.get(`${WT}/docs/pipeline/ledgers/p1/task-1-brief.md`)!
+  expect(brief).toContain('# p1 · task 1 of 2: Schema')
+  expect(brief).toContain('1. No raw SQL.')
+  expect(brief).toContain('`npm test -- job` once')
+  expect(brief).toContain('Co-Authored-By: X')
+  expect(brief).not.toMatch(/\{\{/)
+  let l = buildLedger(files)
+  expect(l.tasks[0]).toMatchObject({ status: 'running', dispatches: [{ role: 'implementer', model: 'sonnet', effort: 'medium', result: '', brief: 'docs/pipeline/ledgers/p1/task-1-brief.md', report: 'docs/pipeline/ledgers/p1/task-1-report.md' }] })
+  expect(l.resume).toMatchObject({ task: 1, state: 'implementer dispatched', lastVerified: 'a1b2c3d' })
+  expect(text(await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 1, close: { tokens: 120000, minutes: 9, result: 'fix round 1' } }] } }))).toContain('120k tokens')
+  // Fix rounds count themselves from the briefs on disk.
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'fix', task: 1 }))).toBe('refused: a fix brief needs findings')
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'fix', task: 1, findings: '- src/job.ts:4 · no filter' }))).toBe('p1 · task 1/2 · fix round 1 of 3 · Agent model sonnet effort medium · prompt: Read docs/pipeline/ledgers/p1/task-1-fix-1-brief.md and follow it.')
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'fix', task: 1, findings: 'again', escalate: true }))).toBe('p1 · task 1/2 · fix round 2 of 3 · Agent model opus effort high · prompt: Read docs/pipeline/ledgers/p1/task-1-fix-2-brief.md and follow it.')
+  l = buildLedger(files)
+  expect(l.tasks[0]!.status).toBe('fix')
+  expect(l.tasks[0]!.dispatches.map((d: Record<string, unknown>) => d['role'])).toEqual(['implementer', 'implementer', 'escalate'])
+  expect(l.resume['state']).toBe('fix round 2 dispatched')
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'implementer', task: 7 }))).toBe('refused: brief needs task: 1 to 2')
+})
+
+test('a review brief is rendered only when the config asks for it; a re-review and the final review', async ($, on) => {
+  const { files } = world(on, { ...BUILD_SEED, [`${WT}/docs/pipeline/plans/p1.md`]: PLAN_MD })
+  diffWorld(on, ['src/route.ts'])
+  await call($, { action: 'plan', item: 'p1' })
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'review', task: 2 }))).toBe('refused: a review brief needs commits, as <sha>..<sha>')
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'review', task: 2, commits: 'a..b' }))).toBe('no review: a..b touches no risky path · accept task 2 with review.kind lead-diff')
+  expect(files.has(`${WT}/docs/pipeline/ledgers/p1/task-2-review-brief.md`)).toBe(false)
+  // The final review: the acceptance list, the base from the ledger and the head from git.
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'final' }))).toBe('p1 · final review · Agent model opus effort xhigh · prompt: Read docs/pipeline/ledgers/p1/final-brief.md and follow it.')
+  const final = files.get(`${WT}/docs/pipeline/ledgers/p1/final-brief.md`)!
+  expect(final).toContain('`git diff a1b2c3d..f00d123`')
+  expect(final).toContain('- [ ] A CSV downloads.')
+  expect(buildLedger(files).resume['state']).toBe('final review dispatched')
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'final' }))).toMatch(/^refused: docs\/pipeline\/ledgers\/p1\/final-brief\.md exists/)
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'final', findings: 'the fix wave of task 1' }))).toContain('final-review-2-brief.md')
+})
+
+test('a risky diff gets its review with the matched path; a project template replaces the built-in one', async ($, on) => {
+  const { files } = world(on, { ...BUILD_SEED, [`${WT}/docs/pipeline/plans/p1.md`]: PLAN_MD, [`${DIR}/templates/review.md`]: 'OWN {{item}} {{commits}} {{risky}}' })
+  diffWorld(on, ['db/schema.sql', 'src/job.ts'])
+  await call($, { action: 'plan', item: 'p1' })
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'review', task: 1, commits: 'a..b' }))).toBe('p1 · task 1/2 · review · Agent model opus effort high · prompt: Read docs/pipeline/ledgers/p1/task-1-review-brief.md and follow it.')
+  expect(files.get(`${WT}/docs/pipeline/ledgers/p1/task-1-review-brief.md`)).toBe('OWN p1 a..b db/schema.sql')
+  expect(buildLedger(files).tasks[0]!.dispatches[0]).toMatchObject({ role: 'reviewer', risky: 'db/schema.sql' })
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'review', task: 1, commits: 'b..c', findings: 'the fix commit' }))).toContain('task 1/2 · review 2 ·')
+})

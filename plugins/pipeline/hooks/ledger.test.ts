@@ -110,3 +110,17 @@ test('ledgerText without an item, with blockers and a final verdict', () => {
   expect(text).toContain('Tokens: 7')
   expect(text).not.toContain('Tasks')
 })
+
+test('close ends the dispatch a brief call opened, and falls back to the last one', () => {
+  const open = { role: 'implementer' as const, model: 'sonnet', effort: 'medium', tokens: 0, minutes: 0, result: '', brief: 'b.md', report: 'r.md' }
+  const one = mergeLedger(emptyLedger('p1'), { tasks: [{ n: 1, title: 'A', status: 'running', dispatches: [dispatch(5, 'done'), open] }] }, NOW)
+  const closed = mergeLedger(one, { tasks: [{ n: 1, close: { tokens: 240000, minutes: 31, result: 'done' } }] }, NOW)
+  expect(closed.tasks[0]!.dispatches[1]).toEqual({ ...open, tokens: 240000, minutes: 31, result: 'done' })
+  expect(closed.tasks[0]!.dispatches[0]!.tokens).toBe(5)
+  expect(closed.tokens).toBe(240005)
+  expect('close' in closed.tasks[0]!).toBe(false)
+  const again = mergeLedger(closed, { tasks: [{ n: 1, close: { result: 'fix round 1' } }] }, NOW)
+  expect(again.tasks[0]!.dispatches[1]!.result).toBe('fix round 1')
+  // No dispatch at all: nothing to close, nothing invented.
+  expect(mergeLedger(emptyLedger('p1'), { tasks: [{ n: 1, close: { result: 'x' } }] }, NOW).tasks[0]!.dispatches).toEqual([])
+})
