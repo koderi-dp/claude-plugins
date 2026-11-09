@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { CATALO_BACKLOG as CATALO, CATALO_QUEUE_2026_11 as QUEUE, OPENHUDDLE_CLAUDE as OH_CLAUDE, OPENHUDDLE_WORKFLOW as OH_WORKFLOW } from './fixtures'
-import { activeFromBranches, bulkToRemove, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse } from './migrate'
+import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse } from './migrate'
 
 // Review Focus 5: the catalo backlog
 
@@ -632,4 +632,20 @@ test('a State column counts as the Status column of the older table shapes too',
     ['Worker', 'parked', 'imported from docs/backlog.md, unverified. Phase 2'],
     ['Themes', 'blocked', 'imported from docs/backlog.md; row Blocked. Waits for the palette'],
   ])
+})
+
+test('decisionsFromBacklogMd: each open decision is a before-dispatch stop rule with its date, and the queue makes no item of it', () => {
+  const rules = decisionsFromBacklogMd(QUEUE, 'docs/backlog.md')
+  expect(rules).toEqual([
+    { group: 'before dispatch', line: "Stop before ECI's written permission to redistribute `PSOcoated_v3.icc` (or a profile swap) before any public repository or an image distributed outside the organisation: open user decision since 2026-11-03.", source: 'docs/backlog.md: Open decisions' },
+    { group: 'before dispatch', line: "Stop before Buy a PDF/X validator (callas pdfToolbox, Acrobat Preflight), or take the print shop's preflight of the first production file as the conformance check; ask the shop for its required output profile: open user decision since 2026-11-03.", source: 'docs/backlog.md: Open decisions' },
+    { group: 'before dispatch', line: 'Stop before Confirm the AGPL, GPL and ECI obligations in licensing before any public deployment: open user decision since 2026-11-03.', source: 'docs/backlog.md: Open decisions' },
+  ])
+  const text = ['## Decisions pending', '', '- [ ] Pick the S3 region.', '- Rename the org table (asked 2026-11-01).', '', '## Queue', '', '- [ ] Export jobs.'].join('\n')
+  expect(decisionsFromBacklogMd(text, 'docs/queue.md').map(r => r.line)).toEqual([
+    'Stop before Pick the S3 region: open user decision.',
+    'Stop before Rename the org table (asked 2026-11-01): open user decision since 2026-11-01.',
+  ])
+  expect(itemsFromBacklogMd(text, 'docs/queue.md').map(i => i.title)).toEqual(['Export jobs'])
+  expect(decisionsFromBacklogMd(CATALO, 'docs/backlog.md')).toEqual([])
 })

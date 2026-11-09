@@ -290,6 +290,28 @@ export function itemsFromBacklogMd(text: string, file: string, repoUrl?: string)
   return out
 }
 
+/**
+ * The open decisions of a queue, as rules to stop on before dispatch: one per bullet under a heading that names decisions,
+ * `Stop before <the decision>: open user decision since <date>.`, the date the bullet's first (the ` · user · ` owner
+ * segments dropped), `since` left out when it names none.
+ */
+export function decisionsFromBacklogMd(text: string, file: string): MigrateRule[] {
+  const out: MigrateRule[] = []
+  for (const u of units(text)) {
+    if (u.kind !== 'bullet' || !DECISION_HEADING.test(u.heading)) continue
+    let body = stripMd(u.text.replace(/^\[[ xX]\]\s+/, ''))
+    const date = /\b(\d{4}-\d{2}-\d{2})\b/.exec(body)?.[1]
+    body = body
+      .replace(/^\d{4}-\d{2}-\d{2}\s*(?:[·•|–—-]\s*)?/, '')
+      .replace(/^(?:[\w-]+\s*[·•|]\s*)+/, '')
+      .replace(/[.\s]+$/, '')
+      .trim()
+    if (!body) continue
+    out.push({ group: 'before dispatch', line: `Stop before ${body}: open user decision${date ? ` since ${date}` : ''}.`, source: `${file}: ${u.heading}` })
+  }
+  return out
+}
+
 // ---------- the openhuddle MVP queue shape ----------
 
 /** The top-level parenthesised groups of a text, as [start, end) offsets. */

@@ -83,6 +83,10 @@ const BACKLOG_MD = [
   '- [ ] Export jobs and downloads.',
   '- [ ] Brand filters (later).',
   '- [x] Search over articles. Merged in [PR #12](https://github.com/acme/app/pull/12), [plan](superpowers/plans/2026-11-01-search.md).',
+  '',
+  '## Open decisions',
+  '',
+  '- 2026-11-04 · user · Rename the organizations table.',
 ].join('\n')
 
 const SEARCH_LEDGER = [
@@ -160,6 +164,11 @@ test('migrate drafts the config with sources, the items, the rules, the active i
 
   expect(d.rules.some(x => x.source === 'CLAUDE.md' && x.group === 'before the PR' && x.line.startsWith('Never push to main'))).toBe(true)
   expect(d.rules.some(x => x.source === 'CLAUDE.md' && x.group === 'in every implementer brief' && /Playwright/.test(x.line))).toBe(true)
+  // The open decision of the queue is a stop rule, not an item.
+  expect(d.rules.filter(x => x.source === 'docs/backlog.md: Open decisions')).toEqual([
+    { group: 'before dispatch', line: 'Stop before Rename the organizations table: open user decision since 2026-11-04.', source: 'docs/backlog.md: Open decisions' },
+  ])
+  expect(d.report).toContain('docs/backlog.md: 3 items (1 merged, 1 parked), 1 open decision')
 
   expect(d.active).toEqual([{
     title: 'export',
@@ -221,6 +230,7 @@ test('migrate-apply writes the four files, the ledger of the building item, maps
   expect(JSON.parse(files.get(`${DIR}/config.json`)!)).toMatchObject({ version: 1, checks: { fast: 'npm run check:fast' }, limits: { fixRounds: 3 } })
   expect(files.get(`${DIR}/rules.md`)).toContain('## Before the PR')
   expect(files.get(`${DIR}/rules.md`)).toContain('Never push to main directly; every slice merges through a pull request. (CLAUDE.md)')
+  expect(files.get(`${DIR}/rules.md`)).toContain('Stop before Rename the organizations table: open user decision since 2026-11-04. (docs/backlog.md: Open decisions)')
 
   const backlog = JSON.parse(files.get(`${DIR}/backlog.json`)!) as { items: Record<string, unknown>[] }
   expect(backlog.items.map(i => [i.id, i.title, i.status])).toEqual([

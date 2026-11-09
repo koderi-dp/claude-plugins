@@ -10,7 +10,7 @@ import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
 import type { LedgerSet } from './ledger'
 import { parseLive, withEntry, withoutEntry } from './live'
-import { activeFromBranches, bulkToRemove, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse } from './migrate'
+import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse } from './migrate'
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { BAR_ROW_H, barSvg, barText, modelName } from './draw'
 import type { Bar } from './draw'
@@ -48,7 +48,7 @@ const TOOL_DESCRIPTION =
   '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers the ledger as text; ' +
   '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists; ' +
   '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/), for one merged item or for every merged item; it deletes nothing, the caller removes them with git rm -r and commits; ' +
-  '`migrate` { refresh? } → JSON { sources, config, sourcesOfConfig, items, rules, active, bulk: { files, count }, unsure, report }: reads the project\'s queue, workflow prose, ledgers, scripts and CI and drafts the config, the items, the rules and the active item, writing nothing; refused when config.json exists unless refresh; ' +
+  '`migrate` { refresh? } → JSON { sources, config, sourcesOfConfig, items, rules, active, bulk: { files, count }, unsure, report }: reads the project\'s queue, workflow prose, ledgers, scripts and CI and drafts the config, the items, the rules (the queue\'s open decisions among them, as before-dispatch stops) and the active item, writing nothing; refused when config.json exists unless refresh; ' +
   '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of files given the line and the bulk files to git rm; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
   'Every write re-reads backlog.json, merges, regenerates BACKLOG.md and answers the status text; a file that does not parse is refused with its line and left alone.'
 
@@ -599,11 +599,14 @@ async function migrateDraft($: EngineInterface, found: string): Promise<Record<s
 
   // The items: the markdown queue, the MVP queue of each CLAUDE.md.
   const items: Partial<Item>[] = []
+  const decisions: MigrateRule[] = []
   const backlogMd = texts.get('docs/backlog.md')
   if (backlogMd !== undefined) {
     const own = itemsFromBacklogMd(backlogMd, 'docs/backlog.md', await repoUrl($))
     items.push(...own)
-    yielded('docs/backlog.md', `${own.length} items (${own.filter(i => i.status === 'merged').length} merged, ${own.filter(i => i.status === 'parked').length} parked)`)
+    decisions.push(...decisionsFromBacklogMd(backlogMd, 'docs/backlog.md'))
+    const counts = `${own.length} items (${own.filter(i => i.status === 'merged').length} merged, ${own.filter(i => i.status === 'parked').length} parked)`
+    yielded('docs/backlog.md', decisions.length ? `${counts}, ${decisions.length} open decision${decisions.length === 1 ? '' : 's'}` : counts)
   }
   for (const f of sources.filter(isClaudeMd)) {
     const own = itemsFromMvpQueue(texts.get(f) ?? '', f)
@@ -613,7 +616,8 @@ async function migrateDraft($: EngineInterface, found: string): Promise<Record<s
 
   // The rules from the workflow prose.
   const ruleFiles = sources.filter(f => (isClaudeMd(f) || f === 'docs/WORKFLOW.md' || isSkill(f)) && texts.has(f))
-  const rules = rulesFromProse(ruleFiles.map(file => ({ file, text: texts.get(file)! })))
+  // The open decisions of the queue are stop rules before dispatch, not items.
+  const rules = [...decisions, ...rulesFromProse(ruleFiles.map(file => ({ file, text: texts.get(file)! })))]
   for (const f of ruleFiles) {
     const n = rules.filter(r => r.source === f).length
     if (n || !isClaudeMd(f)) yielded(f, `${n} candidate rules`)
