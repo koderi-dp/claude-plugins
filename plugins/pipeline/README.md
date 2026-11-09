@@ -13,7 +13,9 @@ docs/pipeline/
   specs/<id>.md        one page per item: what, why, acceptance, out of scope, open
   plans/<id>.md        the superpowers plan for the item
   ledgers/<id>.json    the item's record: tasks, dispatches, rulings, resume block
-  ledgers/<id>/        briefs and reports, for the record
+  ledgers/<id>/        briefs and reports, for the record: task-N-brief.md and task-N-report.md,
+                       task-N-fix-R-brief.md and -report.md, task-N-review-brief.md and -report.md
+                       (a re-review: task-N-review-R-), final-brief.md and final-report.md
 ```
 
 Only the plugin's tool writes `backlog.json` and the ledgers; a subagent's call is ignored. Everything under `docs/pipeline/` goes on the item's branch except `backlog.json` and `BACKLOG.md`, which the lead commits on the main branch, so two worktrees never carry diverging copies.
