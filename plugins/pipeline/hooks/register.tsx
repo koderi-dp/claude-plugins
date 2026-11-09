@@ -95,7 +95,7 @@ const signals = atom({ plugin: 'pipeline', key: 'signals' } as const, [] as Sign
 // The session runner's children and the other sessions on this repository, as the panel draws them; the runner keeps them.
 const children = atom({ plugin: 'pipeline', key: 'children' } as const, [] as ChildSession[])
 const siblings = atom({ plugin: 'pipeline', key: 'siblings' } as const, [] as Sibling[])
-const panel = atom({ plugin: 'pipeline', key: 'panel' } as const, { view: 'overview', filter: 'inbox', search: '', expanded: null, isMoreShown: false, isCompact: false, isDoneCollapsed: false, autoOpenedFor: '', isBandOpen: false } as Panel)
+const panel = atom({ plugin: 'pipeline', key: 'panel' } as const, { view: 'overview', filter: 'inbox', search: '', expanded: null, isMoreShown: false, autoOpenedFor: '', isBandOpen: false } as Panel)
 // The clock the panel draws against: the ticker moves it, so minutes and the merged week stay current.
 const now = atom({ plugin: 'pipeline', key: 'now' } as const, 0)
 
