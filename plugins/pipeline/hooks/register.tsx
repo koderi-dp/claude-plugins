@@ -10,7 +10,7 @@ import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
 import type { LedgerSet } from './ledger'
 import { parseLive, withEntry, withoutEntry } from './live'
-import { activeFromBranches, bulkToRemove, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, rulesFromProse } from './migrate'
+import { activeFromBranches, bulkToRemove, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse } from './migrate'
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { BAR_ROW_H, barSvg, barText, modelName } from './draw'
 import type { Bar } from './draw'
@@ -164,6 +164,15 @@ const self = {
   lastWrite: -Infinity,
   wakeUntil: -Infinity,
   ticker: null as null | { cancel: () => void },
+}
+
+/** The web URL of the repository's origin, for PR numbers the old queue names; nothing without a remote. */
+async function repoUrl($: EngineInterface): Promise<string | undefined> {
+  try {
+    return repoWebUrl((await $.session.repo())?.remote)
+  } catch {
+    return undefined
+  }
 }
 
 /** The main checkout's root, even from a worktree; the session's root without a repository. */
@@ -592,7 +601,7 @@ async function migrateDraft($: EngineInterface, found: string): Promise<Record<s
   const items: Partial<Item>[] = []
   const backlogMd = texts.get('docs/backlog.md')
   if (backlogMd !== undefined) {
-    const own = itemsFromBacklogMd(backlogMd, 'docs/backlog.md')
+    const own = itemsFromBacklogMd(backlogMd, 'docs/backlog.md', await repoUrl($))
     items.push(...own)
     yielded('docs/backlog.md', `${own.length} items (${own.filter(i => i.status === 'merged').length} merged, ${own.filter(i => i.status === 'parked').length} parked)`)
   }
