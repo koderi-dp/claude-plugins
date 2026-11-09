@@ -14,7 +14,7 @@ import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, 
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { BAND_COMPACT_H, BAND_H, bandSvg, bandText } from './draw'
 import { BLOCKED, renderPanel } from './pane'
-import { SEGMENT_COLORS, bandOf, specWhat, statusText, taskCounter } from './status'
+import { SEGMENT_COLORS, bandOf, sessionName, specWhat, statusText, taskCounter } from './status'
 import type { Band } from './status'
 import type { StatusInput } from './status'
 import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
@@ -188,6 +188,9 @@ const self = {
   ticker: null as null | { cancel: () => void },
   // The permission mode the engine last told us (a prompt's, a spawn's); a child runs in it.
   permissionMode: '',
+  // The items this session was named after, so an item renames it once, and the name waiting for the turn's end.
+  renamed: new Set<string>(),
+  pendingRename: '',
   // The running child processes by item: the stream whose end kills the child, the unread tail of a line, the log throttle.
   procs: new Map<string, { stream: AsyncGenerator<{ stream: string; text: string }, { code: number | null; signal: string | null }> | null; partial: string; lastWrite: number }>(),
 }
@@ -533,7 +536,12 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     case 'update': {
       const id = need(e.id)
       if (!e.set || typeof e.set !== 'object') throw new Refused('update needs set')
-      return writeBacklog($, found, c, updateItem(current, id, e.set as Partial<Item>, now))
+      const before = current.items.find(i => i.id === id)
+      const next = updateItem(current, id, e.set as Partial<Item>, now)
+      const out = await writeBacklog($, found, c, next)
+      const after = next.items.find(i => i.id === id)
+      if (before && after && startsRun(before.status, after.status)) await queueRename($, c, after)
+      return out
     }
     case 'move': {
       const id = need(e.id)
@@ -555,6 +563,32 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     default:
       throw new Refused(`unknown action "${String(e.action)}"`)
   }
+}
+
+/** Whether an update starts an item's run: to planning, or to building from another status. */
+const startsRun = (before: Item['status'], after: Item['status']) => (after === 'planning' || after === 'building') && before !== after
+
+/**
+ * Queues the session's name after the item it starts (`p12 · CSV export`), once per item in this session, unless
+ * `renameSession` is false; a child session is named by its argv from the start and never renames itself. The
+ * built-in rename command cannot run from the tool's own hook (it would wait on the turn the hook holds), so the
+ * name waits for the turn's end.
+ */
+async function queueRename($: EngineInterface, c: Config | null, item: Item): Promise<void> {
+  if ((c?.renameSession ?? DEFAULTS.renameSession) === false || self.renamed.has(item.id)) return
+  if (await isChildSession($)) return
+  self.renamed.add(item.id)
+  self.pendingRename = sessionName(item)
+}
+
+/** The queued rename, at the turn's end; a refusal (no such command, a surface without names) is ignored. */
+async function renameNow($: EngineInterface): Promise<void> {
+  const name = self.pendingRename
+  if (!name) return
+  self.pendingRename = ''
+  try {
+    await $.command.run({ command: 'rename', args: name })
+  } catch {}
 }
 
 // ---------- the session runner ----------
@@ -633,7 +667,7 @@ async function startChild($: EngineInterface, found: string, c: Config | null, c
   } catch {}
   const child: ChildSession = { id: sessionId, item: id, worktree, branch, status: 'starting', startedAt: at, log: '' }
   await update($, children, prev => [...prev.filter(ch => ch.item !== id), child])
-  const argv = childArgv({ prompt: childPrompt(id, { isResume }), permissionMode: mode, sessionId })
+  const argv = childArgv({ prompt: childPrompt(id, { isResume }), permissionMode: mode, sessionId, ...((c?.renameSession ?? DEFAULTS.renameSession) !== false ? { name: sessionName(item) } : {}) })
   // `env` is set over the host's environment, so the child inherits the rest and sees the mark.
   void runChild($, found, child, { argv, cwd: worktree, env: { [CHILD_MARK]: '1' } })
   await heartbeat($, true)
@@ -1382,6 +1416,7 @@ export const register: Register = (on, options) => {
       await heartbeat($, true)
       if (!agentId) await scheduleWake($, at)
     } catch {}
+    if (!e.agentId) await renameNow($)
     return next(e)
   })
 

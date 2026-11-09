@@ -17,7 +17,7 @@ const TOOL = 'mcp__pipeline__pipeline'
 
 const slashes = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
-export type ChildArgvInput = { prompt: string; permissionMode: string; sessionId?: string }
+export type ChildArgvInput = { prompt: string; permissionMode: string; sessionId?: string; /** The child's display name, `p12 · CSV export`. */ name?: string }
 
 /**
  * `claude -p` in the item's worktree: the parent's permission mode, since the child cannot ask (anything that
@@ -25,8 +25,8 @@ export type ChildArgvInput = { prompt: string; permissionMode: string; sessionId
  * chose, so the child's live entry is found by it. No plugin flag: a child started on the same machine loads
  * the installed plugins as the parent did.
  */
-export function childArgv({ prompt, permissionMode, sessionId }: ChildArgvInput): string[] {
-  return ['claude', '-p', prompt, '--permission-mode', permissionMode, '--permission-prompts', 'none', '--output-format', 'stream-json', '--verbose', ...(sessionId ? ['--session-id', sessionId] : [])]
+export function childArgv({ prompt, permissionMode, sessionId, name }: ChildArgvInput): string[] {
+  return ['claude', '-p', prompt, '--permission-mode', permissionMode, '--permission-prompts', 'none', '--output-format', 'stream-json', '--verbose', ...(sessionId ? ['--session-id', sessionId] : []), ...(name ? ['--name', name] : [])]
 }
 
 /** What the child is told: the item, the skill, that the parent already set the status and made the worktree it runs in. */

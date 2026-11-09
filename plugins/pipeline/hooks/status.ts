@@ -43,6 +43,12 @@ export function displayTitle(title: string): string {
   return m ? m[1]! : title
 }
 
+/** The session's name while it runs an item: `p12 · CSV export`, the title without its slug, cut to 60 characters. */
+export function sessionName(item: Pick<Item, 'id' | 'title'>): string {
+  const title = displayTitle(item.title)
+  return `${item.id} · ${title.length > 60 ? title.slice(0, 59).trimEnd() + '…' : title}`
+}
+
 /** The PR as `#35` with its address when the record is a URL: from `https://…/pull/35`, `#35` or `35`; nothing otherwise. */
 export function prLabel(pr: string | null | undefined): { label: string; href?: string } | undefined {
   if (!pr) return undefined

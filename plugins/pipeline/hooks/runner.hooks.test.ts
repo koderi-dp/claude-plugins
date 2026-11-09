@@ -270,6 +270,7 @@ test('Review Focus 4: start makes the worktree, spawns the child there, marks th
   expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('acceptEdits')
   const sessionId = argv[argv.indexOf('--session-id') + 1]!
   expect(sessionId).toMatch(UUID)
+  expect(argv[argv.indexOf('--name') + 1]).toBe('p12 · CSV export')
   expect(answer).toContain(sessionId)
   // The item and its ledger.
   expect(itemOf(files, 'p12')).toMatchObject({ status: 'building', note: 'session runner', branch: 'feat/p12', ledger: 'docs/pipeline/ledgers/p12.json' })

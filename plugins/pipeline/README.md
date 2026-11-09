@@ -60,6 +60,7 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 | `afterMerge` | `["docs/pipeline/BACKLOG.md"]` | Paths to regenerate, commands to run or skills to invoke after a merge |
 | `retain` | `plans` true, `briefs` false, `superpowers` false | What stays after an item merges; the spec and the ledger always stay |
 | `notify` | `milestones` | `off`, `milestones` (started, PR open, merged, blocked, a watchdog signal) or `all` |
+| `renameSession` | `true` | Name the session after the item it runs (`p12 · CSV export`) when an update starts it, and a child session from its start; `false` leaves the names alone |
 
 ## Runners
 

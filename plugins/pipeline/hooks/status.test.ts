@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Backlog, Item, Ledger } from '../types'
 
 import { DEFAULTS } from './config'
-import { displayTitle, idleLine, prLabel, statusText, taskCounter } from './status'
+import { displayTitle, idleLine, prLabel, sessionName, statusText, taskCounter } from './status'
 import type { StatusInput } from './status'
 
 const NOW = Date.parse('2026-11-05T12:00:00Z')
@@ -105,6 +105,14 @@ test('displayTitle drops a migrated slug and keeps every other title', () => {
   expect(displayTitle('Login — the second step')).toBe('Login — the second step')
   expect(displayTitle('grid-track-sizes—Grid')).toBe('grid-track-sizes—Grid')
   expect(displayTitle('a-b — ')).toBe('a-b — ')
+})
+
+test('sessionName: the id and the title without its slug, cut to 60 characters', () => {
+  expect(sessionName({ id: 'p1', title: 'grid-track-sizes — Grid row and column sizes' })).toBe('p1 · Grid row and column sizes')
+  expect(sessionName({ id: 'p12', title: 'CSV export' })).toBe('p12 · CSV export')
+  const long = sessionName({ id: 'p2', title: 'x'.repeat(80) })
+  expect(long).toBe(`p2 · ${'x'.repeat(59)}…`)
+  expect(long.length - 'p2 · '.length).toBe(60)
 })
 
 test('prLabel reads the number from a URL, a #NN or a bare number', () => {

@@ -208,6 +208,15 @@ test('mismatch 10: "do not ... without asking" is a stop entry', () => {
   expect(sources['stop']).toContain('prose')
 })
 
+test('renameSession: true by default, false accepted, a wrong type named and defaulted', () => {
+  expect(DEFAULTS.renameSession).toBe(true)
+  expect(normalizeConfig({}).config.renameSession).toBe(true)
+  expect(normalizeConfig({ renameSession: false }).config.renameSession).toBe(false)
+  const bad = normalizeConfig({ renameSession: 'no' })
+  expect(bad.config.renameSession).toBe(true)
+  expect(bad.problems).toContain('renameSession: expected a boolean, got string')
+})
+
 test('retain: defaults keep plans and drop briefs and superpowers; a wrong type is named', () => {
   const a = normalizeConfig({})
   expect(a.config.retain).toEqual({ plans: true, briefs: false, superpowers: false })

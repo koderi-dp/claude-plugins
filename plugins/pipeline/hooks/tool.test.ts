@@ -13,12 +13,18 @@ const NOW = Date.parse('2026-11-05T10:00:00Z')
 const VALID_CONFIG = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: {}, merge: 'pr' }, null, 2) + '\n'
 
 /** A main checkout at /p/main, this session in its worktree, files in memory; records the writes and the plugin's state. */
-function world(on: On, seed: Record<string, string> = {}) {
+function world(on: On, seed: Record<string, string> = {}, options: { rename?: 'ok' | 'deny' } = {}) {
   mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
   const state = new Map<string, unknown>()
   const tools: string[] = []
+  const renames: string[] = []
+  on('command.run', { command: 'rename' }, (_$, e) => {
+    if (options.rename === 'deny') return { deny: 'no names on this surface' } as never
+    renames.push(String(e.args ?? ''))
+    return { text: 'renamed' } as never
+  })
   const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
@@ -46,11 +52,14 @@ function world(on: On, seed: Record<string, string> = {}) {
     return r
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
-  return { files, writes, state, tools }
+  on('turn.complete', () => ({ text: '' }) as never)
+  return { files, writes, state, tools, renames }
 }
 
 const text = (r: unknown) => String((r as { result: unknown }).result)
 const call = ($: { tool: { call: (e: never) => Promise<unknown> } }, input: Record<string, unknown>) => $.tool.call({ tool: TOOL, ...input } as never)
+/** The turn's end, where a queued rename runs. */
+const endTurn = ($: { turn: { complete: unknown } }) => ($.turn.complete as (e: unknown) => Promise<unknown>)({ reason: 'answer', answer: 'ok' })
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) => $.session.start({ cwd: WORKTREE, surface: 'terminal', isInteractive: true } as never)
 const items = (files: Map<string, string>) => JSON.parse(files.get(BACKLOG)!).items as Record<string, unknown>[]
 
@@ -121,6 +130,58 @@ test('an item whose needs are not merged stays inbox with the reason', async ($,
   const r = text(await call($, { action: 'add', item: { ...ITEM, title: 'Needs one', needs: ['p1'] } }))
   expect(r).toContain('p2 · Needs one · M · waits for p1')
   expect(items(files)[1]).toMatchObject({ status: 'inbox' })
+})
+
+test('an update that starts an item names the session after it once: to planning, or to building from another status; never for a note or a later step', async ($, on) => {
+  const { renames } = world(on, { [CONFIG]: VALID_CONFIG })
+  await call($, { action: 'add', item: { ...ITEM, title: 'grid-track-sizes — Grid row and column sizes' } })
+  await call($, { action: 'add', item: { ...ITEM, title: 'y'.repeat(80) } })
+  await call($, { action: 'update', id: 'p1', set: { note: 'a note' } })
+  await endTurn($)
+  expect(renames).toEqual([])
+  // The rename cannot run inside the tool's hook: it runs when the turn ends.
+  await call($, { action: 'update', id: 'p1', set: { status: 'planning' } })
+  expect(renames).toEqual([])
+  await endTurn($)
+  expect(renames).toEqual(['p1 · Grid row and column sizes'])
+  await endTurn($)
+  expect(renames).toEqual(['p1 · Grid row and column sizes'])
+  // The same item going on to building, review and merged renames nothing more.
+  for (const status of ['building', 'review', 'merged']) {
+    await call($, { action: 'update', id: 'p1', set: { status } })
+    await endTurn($)
+  }
+  expect(renames).toEqual(['p1 · Grid row and column sizes'])
+  // Another item straight to building: its own name, the title cut to 60 characters.
+  await call($, { action: 'update', id: 'p2', set: { status: 'building' } })
+  await endTurn($)
+  expect(renames).toEqual(['p1 · Grid row and column sizes', `p2 · ${'y'.repeat(59)}…`])
+  await call($, { action: 'update', id: 'p2', set: { status: 'blocked', note: 'CI red' } })
+  await call($, { action: 'update', id: 'p2', set: { status: 'building' } })
+  await endTurn($)
+  expect(renames).toHaveLength(2)
+})
+
+test('renameSession false never renames, and a refused rename does not fail the update', async ($, on) => {
+  const off = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: {}, merge: 'pr', renameSession: false }, null, 2) + '\n'
+  const { renames } = world(on, { [CONFIG]: off })
+  await call($, { action: 'add', item: ITEM })
+  await call($, { action: 'update', id: 'p1', set: { status: 'planning' } })
+  await endTurn($)
+  expect(renames).toEqual([])
+})
+
+test('a refused rename does not fail the update', async ($, on) => {
+  const { renames, files } = world(on, { [CONFIG]: VALID_CONFIG }, { rename: 'deny' })
+  await call($, { action: 'add', item: ITEM })
+  const r = text(await call($, { action: 'update', id: 'p1', set: { status: 'building' } }))
+  expect(r).toContain('p1 · CSV export · M · building')
+  expect(items(files)[0]).toMatchObject({ status: 'building' })
+  await endTurn($)
+  expect(renames).toEqual([])
+  // The next turn's end does not try again.
+  await endTurn($)
+  expect(renames).toEqual([])
 })
 
 test('update of an unknown id is refused', async ($, on) => {
