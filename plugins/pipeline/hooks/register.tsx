@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
-import type { AgentRun, Backlog, Config, Item, Ledger, LiveEntry, Panel, Signal } from '../types'
+import type { AgentRun, Backlog, ChildSession, Config, Item, Ledger, Live, LiveEntry, Panel, Sibling, Signal } from '../types'
 import { addItem, emptyBacklog, moveItem, readiness, removeItem, renderBacklogMd, updateItem } from './backlog'
 import type { Readiness } from './backlog'
 import { cleanList, planOf } from './clean'
@@ -9,7 +9,7 @@ import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, serialize } from './files'
 import { ledgerText, mergeLedger, emptyLedger } from './ledger'
 import type { LedgerSet } from './ledger'
-import { parseLive, withEntry, withoutEntry } from './live'
+import { parseLive, siblingsOf, withEntry, withoutEntry } from './live'
 import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse, specStub } from './migrate'
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { BAR_ROW_H, barSvg, barText, modelName } from './draw'
@@ -17,15 +17,16 @@ import type { Bar } from './draw'
 import { BLOCKED, RUNNING, activeTitle, renderPanel } from './pane'
 import { statusText } from './status'
 import type { StatusInput } from './status'
-import { deadAgents, isProtected, mergeSignals, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
-import type { Call, Limits } from './watch'
+import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
+import { STALE_MS, deadAgents, isProtected, mergeSignals, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
+import type { Call } from './watch'
 
 const TOOL = 'mcp__pipeline__pipeline'
 const PANE = 'pipeline'
-const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `move`, `park`, `unpark`, `clean`'
+const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
 const USAGE =
-  'pipeline: status [id] | panel | config [key=value] | init | add <text> | next | run <id> | run all | migrate | stop | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
-const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify']
+  'pipeline: status [id] | panel | config [key=value] | init | add <text> | next | run <id> | run all | migrate | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
+const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify']
 const CONFIG_FILE = 'docs/pipeline/config.json'
 const BACKLOG_FILE = 'docs/pipeline/backlog.json'
 const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
@@ -33,12 +34,15 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const TICK_MS = 30_000
 const HEARTBEAT_MS = 2000
 const WAKE_PROMPT = 'pipeline: check the watchdog signals with the pipeline tool'
+/** The log file of a child, under the main checkout's .git (shared by every worktree, never committed). */
+const childLog = (found: string, id: string) => `${found}/.git/pipeline/${id}.log`
+const LOG_WRITE_MS = 1000
 const ACTIVE_STATUSES = ['planning', 'building', 'review'] as const
 const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', 'review', 'merged', 'blocked', 'parked']
 
 const TOOL_DESCRIPTION =
   'The pipeline: backlog and status. Main session only; a subagent\'s call is ignored. Actions: ' +
-  '`get` → JSON { config, backlog, readiness, active, resume, signals }: the active item, its ledger\'s resume block and the open watchdog signals (silent, dead, looping, budget), each delivered once; ' +
+  '`get` → JSON { config, backlog, readiness, active, resume, signals, children, siblings }: the active item, its ledger\'s resume block, the open watchdog signals (silent, dead, looping, budget), each delivered once, the child sessions this session runs and the other sessions on the repository; ' +
   '`status` { id? } → the status block, or one item\'s ledger as text; ' +
   '`add` { item: { title, size, needs, source, note } } → appends an inbox item with the next id and answers `added <id>` and the status; ' +
   '`update` { id, set: { ...fields } } → merges fields into the item (status, spec, plan, branch, pr, note, needs, size, title); ' +
@@ -47,6 +51,9 @@ const TOOL_DESCRIPTION =
   '`ledger` { item: "<id>", set: { tasks?: [{ n, title?, status?, commits?, dispatches?: [{ role, model, effort, tokens, minutes, result, risky? }], review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate?, tokens?, findings? }, blockers?: [..], pr?, branch?, worktree?, base?, plan? } } ' +
   '→ merges into docs/pipeline/ledgers/<id>.json (tasks by n with dispatches appended, rulings appended and numbered, blockers appended, tokens recomputed), creates it and links it from the item when missing, mirrors branch, pr and plan onto the item, and answers the ledger as text; ' +
   '`init` → writes config.json with the defaults, an empty backlog.json and BACKLOG.md when no config exists; ' +
+  '`start` { item: "<id>" } (runner session only) → makes the item\'s worktree (.claude/worktrees/<id>, branch from config.branch off mainBranch, reused when there), marks the item building with the note `session runner`, records branch and worktree in its ledger and starts a headless Claude Code child in the worktree in this session\'s permission mode (acceptEdits, auto, dontAsk or bypassPermissions; otherwise refused with what to switch to; refused too past limits.parallel, for an item that is not ready, blocked or building without a child, or while a child runs it), answering one line with the session id and the log path; the child runs the item with the run skill and leaves the item as it ends it, a non-zero exit blocks it with the code and the log tail; ' +
+  '`stop` { item } → kills the item\'s child session and sets the item blocked with `stopped by the user` unless it had merged; ' +
+  '`log` { item } → the last 60 lines of the child\'s log; ' +
   '`clean` { item? } → the repo-relative paths config.retain says may go, one per line (a merged item\'s ledgers/<id>/ unless retain.briefs, its plan unless retain.plans, its .superpowers/sdd/ folders unless retain.superpowers, its worktree under .claude/worktrees/), for one merged item or for every merged item; it deletes nothing, the caller removes them with git rm -r and commits; ' +
   '`migrate` { refresh? } → JSON { sources, config, sourcesOfConfig, items, rules, active, bulk: { files, count }, unsure, report }: reads the project\'s queue, workflow prose, ledgers, scripts and CI and drafts the config, the items, the rules (the queue\'s open decisions among them, as before-dispatch stops) and the active item, writing nothing; refused when config.json exists unless refresh; ' +
   '`migrate-apply` { config, items, rules, refresh? } → writes config.json, rules.md, backlog.json and BACKLOG.md from the corrected drafts (items in order with new ids, needs mapped from the queue labels, a building item\'s resume into its ledger, a spec stub from the title and note for every inbox or building item without one, so the needs-free ones settle to ready), prepends the Historical line once to the old queue and ledger files, and answers the status, the count of spec stubs, the count of files given the line and the bulk files to git rm; refused when docs/pipeline/ exists unless refresh, and a refresh changes no status. ' +
@@ -55,11 +62,11 @@ const TOOL_DESCRIPTION =
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init', 'clean', 'migrate', 'migrate-apply'] },
+    action: { type: 'string', enum: ['get', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12.' },
     item: {
       type: ['object', 'string'],
-      description: 'For add: the new item; it starts as inbox. For ledger: the item id, as p12.',
+      description: 'For add: the new item; it starts as inbox. For ledger, start, stop and log: the item id, as p12.',
       properties: {
         title: { type: 'string' },
         size: { type: 'string', enum: ['S', 'M', 'L'] },
@@ -85,6 +92,9 @@ const backlog = atom({ plugin: 'pipeline', key: 'backlog' } as const, null as Ba
 const fileError = atom({ plugin: 'pipeline', key: 'fileError' } as const, null as string | null)
 const agents = atom({ plugin: 'pipeline', key: 'agents' } as const, [] as AgentRun[])
 const signals = atom({ plugin: 'pipeline', key: 'signals' } as const, [] as Signal[])
+// The session runner's children and the other sessions on this repository, as the panel draws them; the runner keeps them.
+const children = atom({ plugin: 'pipeline', key: 'children' } as const, [] as ChildSession[])
+const siblings = atom({ plugin: 'pipeline', key: 'siblings' } as const, [] as Sibling[])
 const panel = atom({ plugin: 'pipeline', key: 'panel' } as const, { isMoreShown: false, isCompact: false, isDoneCollapsed: false, autoOpenedFor: '' } as Panel)
 // The clock the panel draws against: the ticker moves it, so minutes and the merged week stay current.
 const now = atom({ plugin: 'pipeline', key: 'now' } as const, 0)
@@ -140,6 +150,17 @@ const INTAKE_PROMPT = (text: string) =>
 const RUN_PROMPT = (target: string) =>
   `Use the pipeline-run skill. First tool call: ${call({ action: 'get' })}. Then ${target === 'all' ? 'run ready items until none is left' : target ? `run item ${target}` : 'run the first ready item'} as the skill says, from pick to merge, one line per turn.`
 
+/** With runner session the lead only starts children: the mod's `start` does the worktree and the child does the rest. */
+const SESSION_RUN_PROMPT = (target: string) => {
+  const what =
+    target === 'all'
+      ? 'each ready item in order up to limits.parallel children, and again for the next ready item each time a child finishes (the wake-up or the next get brings you back; a child that exited non-zero left its item blocked with the reason)'
+      : target
+        ? `item ${target}`
+        : 'the first ready item'
+  return `Use the pipeline-run skill with runner session. First tool call: ${call({ action: 'get' })}. Then call ${call({ action: 'start', item: '<id>' })} for ${what}; the child session does the planning, the build, the review and the PR in its worktree. Answer the tool's one line and stop; never run the item in this session.`
+}
+
 const MIGRATE_PROMPT = `Use the pipeline-migrate skill. First tool call: ${call({ action: 'migrate' })}, which reads the project's queue, workflow prose and ledgers and drafts the config, the rules and the items without writing. Then finish the mapping, ask once, and apply as the skill says.`
 
 const INIT_PROMPT =
@@ -164,6 +185,10 @@ const self = {
   lastWrite: -Infinity,
   wakeUntil: -Infinity,
   ticker: null as null | { cancel: () => void },
+  // The permission mode the engine last told us (a prompt's, a spawn's); a child runs in it.
+  permissionMode: '',
+  // The running child processes by item: the stream whose end kills the child, the unread tail of a line, the log throttle.
+  procs: new Map<string, { stream: AsyncGenerator<{ stream: string; text: string }, { code: number | null; signal: string | null }> | null; partial: string; lastWrite: number }>(),
 }
 
 /** The web URL of the repository's origin, for PR numbers the old queue names; nothing without a remote. */
@@ -418,7 +443,7 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     // The active item is the one in planning, building or review; resume is null until its ledger has the block.
     const active = activeItem(loaded)
     const ledger = active ? await loadLedger($, found, active.id) : null
-    const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open }
+    const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: await read($, children), siblings: await read($, siblings) }
     if (error) out['error'] = error
     const answer = JSON.stringify(out, null, 2)
     // Each signal is delivered once: what this answer carries is marked.
@@ -447,6 +472,14 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     if (!e.refresh && (await $.fs.exists(p.dir))) throw new Refused('docs/pipeline/ exists; pass refresh: true to refresh titles, sources and links without changing a status')
     if (error) throw new Refused(error)
     return migrateApply($, found, loaded, e)
+  }
+
+  if (e.action === 'log') {
+    const id = typeof e.item === 'string' ? e.item : e.item?.id ?? e.id
+    if (!id) throw new Refused('an id is needed')
+    const child = (await read($, children)).find(ch => ch.item === id)
+    const log = child?.log || (await readText($, childLog(found, id))) || ''
+    return log ? tail(log) : `no log for ${id}`
   }
 
   // Every write: the file as it is on disk, or refused when it does not parse.
@@ -499,6 +532,10 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       if (to !== 'top') need(to.after)
       return writeBacklog($, found, c, moveItem(current, id, to))
     }
+    case 'start':
+      return startChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
+    case 'stop':
+      return stopChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
     case 'remove':
       return writeBacklog($, found, c, removeItem(current, need(e.id)))
     case 'park':
@@ -508,6 +545,164 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     default:
       throw new Refused(`unknown action "${String(e.action)}"`)
   }
+}
+
+// ---------- the session runner ----------
+
+/** The session's permission mode: the one the engine last told us, else the settings' default mode, else `default`. */
+async function permissionModeOf($: EngineInterface): Promise<string> {
+  if (self.permissionMode) return self.permissionMode
+  try {
+    const permissions = await $.settings.read({ key: 'permissions' })
+    const mode = permissions && typeof permissions === 'object' ? (permissions as { defaultMode?: unknown }).defaultMode : undefined
+    if (typeof mode === 'string' && mode) return mode
+  } catch {}
+  return 'default'
+}
+
+/** The item's worktree: made off mainBranch on its branch, reused when it is there, added on the branch alone when the branch exists. */
+async function ensureWorktree($: EngineInterface, found: string, worktree: string, branch: string, mainBranch: string): Promise<void> {
+  try {
+    if (await $.fs.exists(worktree)) return
+  } catch {}
+  const add = async (argv: string[]) => {
+    try {
+      return await $.process.run(argv, { cwd: found, timeoutMs: 120_000 })
+    } catch (err) {
+      return { exitCode: 1, stdout: '', stderr: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  let r = await add(['git', 'worktree', 'add', worktree, '-b', branch, mainBranch])
+  if (r.exitCode !== 0 && /already exists/i.test(r.stderr)) r = await add(['git', 'worktree', 'add', worktree, branch])
+  if (r.exitCode !== 0) throw new Refused(`git worktree add failed: ${(r.stderr || r.stdout).trim().split('\n')[0] ?? ''}`)
+}
+
+const list = (xs: readonly string[]) => `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`
+
+/** `start`: the checks, the worktree, the item marked building, the ledger's branch and worktree, the child spawned and its loop detached. */
+async function startChild($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string): Promise<string> {
+  const runner = c?.runner ?? DEFAULTS.runner
+  if (runner !== 'session') throw new Refused(`runner is ${runner}; set it with /pipeline config runner=session`)
+  const item = current.items.find(i => i.id === id)!
+  const running = runningOf(await read($, children))
+  const own = running.find(ch => ch.item === id)
+  if (own) throw new Refused(`${id} already runs in session ${own.id}`)
+  if (item.status !== 'ready' && item.status !== 'blocked' && item.status !== 'building') throw new Refused(`${id} is ${item.status}, not ready`)
+  const mode = await permissionModeOf($)
+  if (!(ALLOWED_MODES as readonly string[]).includes(mode)) {
+    throw new Refused(`the session's permission mode is ${mode}; a headless child cannot ask, so switch to ${list(ALLOWED_MODES)} (Shift+Tab) and start again`)
+  }
+  const parallel = limitsOf(c).parallel
+  if (running.length >= parallel) throw new Refused(`${running.length} child session${running.length === 1 ? '' : 's'} running; limits.parallel is ${parallel}`)
+  const worktree = worktreeOf(found, id)
+  const branch = itemBranchOf(c?.branch ?? DEFAULTS.branch, id)
+  await ensureWorktree($, found, worktree, branch, c?.mainBranch ?? DEFAULTS.mainBranch)
+  const at = await $.clock.now()
+  const sessionId = crypto.randomUUID()
+  const isResume = item.status !== 'ready'
+  const note = item.status === 'blocked' && item.note ? `session runner · was blocked: ${item.note}` : 'session runner'
+  await writeBacklog($, found, c, updateItem(current, id, { status: 'building', note }, new Date(at).toISOString()))
+  try {
+    await runTool($, { action: 'ledger', item: id, set: { branch, worktree: `.claude/worktrees/${id}` } })
+  } catch {}
+  const child: ChildSession = { id: sessionId, item: id, worktree, branch, status: 'starting', startedAt: at, log: '' }
+  await update($, children, prev => [...prev.filter(ch => ch.item !== id), child])
+  const argv = childArgv({ prompt: childPrompt(id, { isResume }), permissionMode: mode, sessionId })
+  void runChild($, found, child, { argv, cwd: worktree })
+  await heartbeat($, true)
+  return `started ${id} in .claude/worktrees/${id} · session ${sessionId} · log .git/pipeline/${id}.log`
+}
+
+/** The child's life: its output into the record and the log file, piece by piece, then its end. */
+async function runChild($: EngineInterface, found: string, child: ChildSession, request: { argv: string[]; cwd: string }): Promise<void> {
+  const logPath = childLog(found, child.item)
+  const proc = { stream: null as null | AsyncGenerator<{ stream: string; text: string }, { code: number | null; signal: string | null }>, partial: '', lastWrite: -Infinity }
+  self.procs.set(child.item, proc)
+  let end: { code: number | null; signal: string | null } = { code: null, signal: 'SIGTERM' }
+  try {
+    const stream = $.process.spawn(request)
+    proc.stream = stream
+    for (;;) {
+      const r = await stream.next()
+      if (r.done) {
+        if (r.value) end = r.value
+        break
+      }
+      const at = await $.clock.now()
+      const before = (await read($, children)).find(ch => ch.id === child.id)
+      if (!before) break
+      const { child: next, partial } = appendOutput(before, r.value.text, proc.partial)
+      proc.partial = partial
+      const after = { ...next, status: next.status === 'starting' ? ('running' as const) : next.status }
+      await update($, children, prev => prev.map(ch => (ch.id === child.id ? after : ch)))
+      if (at - proc.lastWrite >= LOG_WRITE_MS) {
+        proc.lastWrite = at
+        try {
+          await $.fs.write(logPath, after.log)
+        } catch {}
+      }
+    }
+  } catch (err) {
+    // The child could not start, or the stream failed: the record says so and the item is blocked below.
+    end = { code: 1, signal: null }
+    const message = `could not run the child: ${err instanceof Error ? err.message : String(err)}`
+    await update($, children, prev => prev.map(ch => (ch.id === child.id ? { ...ch, log: `${ch.log}${message}\n`, lastLine: message } : ch))).catch(() => {})
+  } finally {
+    self.procs.delete(child.item)
+  }
+  try {
+    await finishChild($, found, child.id, end, proc.partial, logPath)
+  } catch {}
+}
+
+/** The child ended: the record closed, the log flushed, a failed exit blocks the item, the person hears of it. */
+async function finishChild($: EngineInterface, found: string, id: string, end: { code: number | null; signal: string | null }, partial: string, logPath: string): Promise<void> {
+  const at = await $.clock.now()
+  const before = (await read($, children)).find(ch => ch.id === id)
+  if (!before) return
+  const flushed = partial.trim() ? appendOutput(before, '\n', partial).child : before
+  const after = withExit(flushed, end, at)
+  await update($, children, prev => prev.map(ch => (ch.id === id ? after : ch)))
+  try {
+    await $.fs.write(logPath, after.log)
+  } catch {}
+  const c = await read($, config)
+  // Stopped by the person: the item was blocked then. Failed: blocked now, unless the child got it past the build.
+  if (before.status !== 'stopped' && after.status === 'failed') {
+    const { backlog: fresh, error } = await loadAll($, found)
+    const item = fresh?.items.find(i => i.id === after.item)
+    if (!error && fresh && item && item.status !== 'merged' && item.status !== 'review') {
+      await writeBacklog($, found, c, updateItem(fresh, item.id, { status: 'blocked', note: exitNote(after, end) }, new Date(at).toISOString()))
+      try {
+        await runTool($, { action: 'ledger', item: item.id, set: { blockers: [exitNote(after, end)] } })
+      } catch {}
+    }
+  }
+  if (before.status !== 'stopped') await announce($, c, `pipeline: child ${after.item} ${after.status}${after.lastLine ? ` · ${after.lastLine}` : ''}`)
+  await heartbeat($, true)
+}
+
+/** `stop`: the child's stream closed, which kills it; the record stopped; the item blocked unless it is past the build. */
+async function stopChild($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string): Promise<string> {
+  const child = runningOf(await read($, children)).find(ch => ch.item === id)
+  if (!child) throw new Refused(`no child session runs ${id}`)
+  const at = await $.clock.now()
+  await update($, children, prev => prev.map(ch => (ch.id === child.id ? withStopped(ch, at) : ch)))
+  const proc = self.procs.get(id)
+  // Not awaited: the engine kills the child when the loop is left, and the loop's own end closes the record.
+  if (proc?.stream) void proc.stream.return({ code: null, signal: 'SIGTERM' }).catch(() => {})
+  const item = current.items.find(i => i.id === id)
+  const reason = 'stopped by the user'
+  let outcome = ''
+  if (item && item.status !== 'merged' && item.status !== 'review') {
+    await writeBacklog($, found, c, updateItem(current, id, { status: 'blocked', note: reason }, new Date(at).toISOString()))
+    try {
+      await runTool($, { action: 'ledger', item: id, set: { blockers: [reason] } })
+    } catch {}
+    outcome = ` · ${id} blocked: ${reason}`
+  } else if (item) outcome = ` · ${id} stays ${item.status}`
+  await heartbeat($, true)
+  return `stopped ${id} · session ${child.id}${outcome}`
 }
 
 // ---------- migration ----------
@@ -759,11 +954,11 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
 // ---------- the watchdog and the live file ----------
 
 /** The limits in force: the config's over the defaults, so a partial config still has every number. */
-function limitsOf(c: Config | null): Limits {
+function limitsOf(c: Config | null): Config['limits'] {
   const given = c && typeof c.limits === 'object' && c.limits ? c.limits : {}
   const out = { ...DEFAULTS.limits }
-  for (const k of Object.keys(out) as (keyof Limits)[]) {
-    const v = (given as Partial<Limits>)[k]
+  for (const k of Object.keys(out) as (keyof Config['limits'])[]) {
+    const v = (given as Partial<Config['limits']>)[k]
     if (typeof v === 'number' && Number.isFinite(v) && v > 0) out[k] = v
   }
   return out
@@ -814,7 +1009,10 @@ const activeItem = (b: Backlog | null): Item | null => b?.items.find(i => (ACTIV
 async function entryOf($: EngineInterface, previous: LiveEntry | undefined, at: number): Promise<LiveEntry> {
   const nowIso = new Date(at).toISOString()
   if (!self.startedAt) self.startedAt = nowIso
-  const item = activeItem(await read($, backlog))
+  const active = activeItem(await read($, backlog))
+  // An item a child session runs is the child's: its own entry names it.
+  const owned = new Set(runningOf(await read($, children)).map(ch => ch.item))
+  const item = active && !owned.has(active.id) ? active : null
   const running = (await read($, agents)).filter(a => a.status === 'running')
   let cwd = ''
   try {
@@ -852,25 +1050,36 @@ async function heartbeat($: EngineInterface, isForced = false): Promise<void> {
     const id = await $.session.id()
     const current = parseLive((await readText($, path)) ?? '')
     await $.fs.write(path, serialize(withEntry(current, id, await entryOf($, current.sessions[id], at), at)))
+    await refreshSiblings($, current, id, at)
   } catch {}
+}
+
+/** The other sessions of the live file into the atom, the children this session runs left out. */
+async function refreshSiblings($: EngineInterface, current: Live, id: string, at: number): Promise<void> {
+  const own = (await read($, children)).map(ch => ch.id)
+  await update($, siblings, () => siblingsOf(current, id, at, own))
 }
 
 /** A signal to the person, per `config.notify`: a push notification, or a toast when the push is refused. */
 async function notify($: EngineInterface, c: Config | null, list: Signal[]): Promise<void> {
   const mode = c?.notify ?? DEFAULTS.notify
   if (mode === 'off') return
-  for (const s of list) {
-    const message = `pipeline: ${s.kind} · ${s.agent} · ${s.detail}`.slice(0, 200)
-    let isSent = false
+  for (const s of list) await announce($, c, `pipeline: ${s.kind} · ${s.agent} · ${s.detail}`)
+}
+
+/** One message to the person: a push notification, or a toast when the push is refused; nothing with notify off. */
+async function announce($: EngineInterface, c: Config | null, text: string): Promise<void> {
+  if ((c?.notify ?? DEFAULTS.notify) === 'off') return
+  const message = text.slice(0, 200)
+  let isSent = false
+  try {
+    const r = await $.tool.call({ tool: 'PushNotification', message, status: 'proactive' })
+    isSent = !(r && typeof r === 'object' && 'deny' in r && r.deny !== undefined)
+  } catch {}
+  if (!isSent) {
     try {
-      const r = await $.tool.call({ tool: 'PushNotification', message, status: 'proactive' })
-      isSent = !(r && typeof r === 'object' && 'deny' in r && r.deny !== undefined)
+      await $.ui.toast(message)
     } catch {}
-    if (!isSent) {
-      try {
-        await $.ui.toast(message)
-      } catch {}
-    }
   }
 }
 
@@ -882,11 +1091,27 @@ async function notify($: EngineInterface, c: Config | null, list: Signal[]): Pro
 async function tick($: EngineInterface): Promise<void> {
   try {
     const at = await $.clock.now()
-    const c = await read($, config)
+    let c = await read($, config)
+    const kids = await read($, children)
+    // Other sessions (the children, a sibling) write the backlog too: with the session runner the files are re-read.
+    if (kids.length || c?.runner === 'session') {
+      const found = (await read($, root)) || (await resolveRoot($))
+      c = (await loadAll($, found)).config
+    }
     const fresh = raiseSignals(await read($, agents), limitsOf(c), at, await read($, signals))
     if (fresh.length) {
       await update($, signals, list => [...list, ...fresh])
       await notify($, c, fresh)
+    }
+    if (kids.length) {
+      const path = await liveFile($)
+      const live = parseLive((await readText($, path)) ?? '')
+      const before = await read($, signals)
+      const added = mergeSignals(before, childSignals({ children: kids, live, items: (await read($, backlog))?.items ?? [], now: at, staleMs: STALE_MS })).slice(before.length)
+      if (added.length) {
+        await update($, signals, list => mergeSignals(list, added))
+        await notify($, c, added)
+      }
     }
     await reportGone($, at, c)
     await update($, now, () => at)
@@ -938,6 +1163,7 @@ async function arrive($: EngineInterface): Promise<void> {
   self.startedAt = new Date(at).toISOString()
   self.lastWrite = at
   await $.fs.write(path, serialize(withEntry(current, id, await entryOf($, undefined, at), at)))
+  await refreshSiblings($, current, id, at)
   self.ticker?.cancel()
   self.ticker = $.clock.every(TICK_MS, () => void tick($))
 }
@@ -945,7 +1171,7 @@ async function arrive($: EngineInterface): Promise<void> {
 /** Between items: one wake-up at `silentMinutes` while an agent runs, where the host offers ScheduleWakeup; never two pending. */
 async function scheduleWake($: EngineInterface, at: number): Promise<void> {
   if (at < self.wakeUntil) return
-  if (!(await read($, agents)).some(a => a.status === 'running')) return
+  if (!(await read($, agents)).some(a => a.status === 'running') && !runningOf(await read($, children)).length) return
   let isOffered = false
   try {
     isOffered = (await $.tool.list()).some(t => t.name === 'ScheduleWakeup')
@@ -954,7 +1180,7 @@ async function scheduleWake($: EngineInterface, at: number): Promise<void> {
   const delaySeconds = limitsOf(await read($, config)).silentMinutes * 60
   self.wakeUntil = at + delaySeconds * 1000
   try {
-    await $.tool.call({ tool: 'ScheduleWakeup', delaySeconds, reason: 'pipeline: a subagent is running; the watchdog signals are checked at silentMinutes', prompt: WAKE_PROMPT, noop: true })
+    await $.tool.call({ tool: 'ScheduleWakeup', delaySeconds, reason: 'pipeline: a subagent or a child session is running; the watchdog signals are checked at silentMinutes', prompt: WAKE_PROMPT, noop: true })
   } catch {}
 }
 
@@ -991,7 +1217,19 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // The session's permission mode, as the engine tells it on each prompt and each spawn: a child runs in it.
+  on('classic.UserPromptSubmit', async (_$, e, next) => {
+    try {
+      const mode = (e as { permission_mode?: unknown }).permission_mode
+      if (typeof mode === 'string' && mode) self.permissionMode = mode
+    } catch {}
+    return next(e)
+  })
+
   on('agent.spawn', async ($, e, next) => {
+    try {
+      if (typeof e.permissionMode === 'string' && e.permissionMode) self.permissionMode = e.permissionMode
+    } catch {}
     const started = await next(e)
     try {
       if (started && started.deny === undefined && typeof started.model === 'string') {
@@ -1164,12 +1402,16 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
       if (!arg) return { text: 'pipeline: add needs the request, as /pipeline add <text>' }
       return prompt(`pipeline: intake of "${arg}"…`, INTAKE_PROMPT(arg))
     case 'next':
-      return prompt('pipeline: running the first ready item…', RUN_PROMPT(''))
+      return prompt('pipeline: running the first ready item…', (await isSessionRunner($)) ? SESSION_RUN_PROMPT('') : RUN_PROMPT(''))
     case 'run':
       if (!arg || (arg !== 'all' && !ID.test(arg))) return { text: 'pipeline: run needs an id or all, as /pipeline run p12' }
-      return prompt(arg === 'all' ? 'pipeline: running until nothing is ready…' : `pipeline: running ${arg}…`, RUN_PROMPT(arg))
+      return prompt(arg === 'all' ? 'pipeline: running until nothing is ready…' : `pipeline: running ${arg}…`, (await isSessionRunner($)) ? SESSION_RUN_PROMPT(arg) : RUN_PROMPT(arg))
     case 'stop':
+      if (arg && ID.test(arg)) return { text: await runTool($, { action: 'stop', item: arg }) }
       return prompt('pipeline: stopping after the running task…', STOP_PROMPT)
+    case 'log':
+      if (!ID.test(arg)) return { text: 'pipeline: log needs an id, as /pipeline log p12' }
+      return { text: await runTool($, { action: 'log', item: arg }) }
     case 'clean':
       return prompt('pipeline: cleaning…', CLEAN_PROMPT)
     case 'move': {
@@ -1184,6 +1426,16 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
       return prompt(`pipeline: ${sub === 'park' ? 'parking' : 'unparking'} ${arg}…`, QUEUE_PROMPT({ action: sub, id: arg }))
     default:
       return { text: USAGE }
+  }
+}
+
+/** Whether the config on disk says `runner: session`, so the commands hand the model the start prompt. */
+async function isSessionRunner($: EngineInterface): Promise<boolean> {
+  try {
+    const found = (await read($, root)) || (await resolveRoot($))
+    return (await loadConfig($, found)).value?.runner === 'session'
+  } catch {
+    return false
   }
 }
 
