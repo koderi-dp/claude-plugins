@@ -33,7 +33,7 @@ type Engine = {
 }
 
 /** A main checkout at /p/main, files in memory, git and the child processes faked; records writes, runs, toasts and the plugin's state. */
-function world(on: On, seed: Record<string, string> = {}, options: { worktreeAdd?: 'ok' | 'branch-exists' | 'fail'; wakeup?: boolean; env?: Record<string, string>; cwd?: string } = {}) {
+function world(on: On, seed: Record<string, string> = {}, options: { worktreeAdd?: 'ok' | 'branch-exists' | 'fail'; wakeup?: boolean; env?: Record<string, string>; cwd?: string; children?: Child[] } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
@@ -66,6 +66,14 @@ function world(on: On, seed: Record<string, string> = {}, options: { worktreeAdd
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('tool.register', (_$, e) => ({ value: { tool: e.name } }))
   on('tool.list', () => ({ value: options.wakeup ? [{ name: 'ScheduleWakeup', description: '', isMcp: false }] : [] }) as never)
+  // Children a life before this one left in the state (the state survives a reload, the module's processes do not).
+  if (options.children) {
+    on('state.get', { plugin: 'pipeline', key: 'children' }, async (_$, e, next) => {
+      const r = (await next(e)) as { value?: { value?: unknown; version: number } }
+      const held = r.value
+      return held && held.value === undefined && !state.has('children') ? ({ value: { ...held, value: options.children } } as never) : (r as never)
+    })
+  }
   on('state.set', async (_$, e, next) => {
     const r = await next(e)
     const ev = e as { plugin: string; key: string; value: unknown }
@@ -178,6 +186,41 @@ test('start refuses: runner subagent, a permission mode that asks, an item that 
   expect(spawned).toEqual([])
   // Only the live file was written, at session start.
   expect(writes.filter(w => w !== LIVE)).toEqual([])
+})
+
+test('review 0.2 I5: child records a restart left running are failed at session start, their items blocked, a dead signal raised once; review items are left alone', async ($, on) => {
+  const left: Child[] = [
+    { id: 'old-12', item: 'p12', worktree: WORKTREE, branch: 'feat/p12', status: 'running', log: 'p12 · task 1/3\n', lastLine: 'p12 · task 1/3' },
+    { id: 'old-13', item: 'p13', worktree: `${MAIN}/.claude/worktrees/p13`, branch: 'feat/p13', status: 'starting', log: '' },
+    { id: 'old-15', item: 'p15', worktree: `${MAIN}/.claude/worktrees/p15`, branch: 'feat/p15', status: 'finished', log: '', endedAt: NOW - MIN },
+  ]
+  const backlog = backlogOf([item('p12', 'CSV export', 'building', { note: 'session runner', spec: 'docs/pipeline/specs/p12.md' }), item('p13', 'Second', 'review', { note: 'session runner', spec: 'docs/pipeline/specs/p13.md' }), item('p15', 'Fourth', 'merged', { pr: '#2' })])
+  const { files, state, pushes, spawned } = world(on, { [CONFIG]: config(), [BACKLOG]: backlog, ...SPECS, [`${WORKTREE}/.git`]: 'gitdir: x' }, { children: left })
+  await start($)
+  expect(children(state).map(c => [c.id, c.status, c.lastLine])).toEqual([
+    ['old-12', 'failed', 'the parent session restarted'],
+    ['old-13', 'failed', 'the parent session restarted'],
+    ['old-15', 'finished', undefined],
+  ])
+  expect(itemOf(files, 'p12')).toMatchObject({ status: 'blocked', note: 'the parent session restarted' })
+  expect(itemOf(files, 'p13')).toMatchObject({ status: 'review' })
+  expect(itemOf(files, 'p15')).toMatchObject({ status: 'merged' })
+  expect((JSON.parse(files.get(`${DIR}/ledgers/p12.json`)!) as { blockers: string[] }).blockers).toEqual(['the parent session restarted'])
+  const signals = () => (state.get('signals') ?? []) as Record<string, unknown>[]
+  expect(signals().map(s => [s['kind'], s['agent']])).toEqual([
+    ['dead', 'child p12'],
+    ['dead', 'child p13'],
+  ])
+  expect(signals()[0]).toMatchObject({ agentId: 'old-12', delivered: false, detail: 'the parent session restarted while the child session ran · p12 blocked · resume with /pipeline run p12' })
+  expect(pushes.filter(p => p.includes('dead') && p.includes('child p12'))).toHaveLength(1)
+  // Another start (a second reload) raises nothing more; the item is started again as a resume.
+  await start($)
+  expect(signals()).toHaveLength(2)
+  expect(pushes.filter(p => p.includes('dead'))).toHaveLength(2)
+  await mode($, 'acceptEdits')
+  expect(await call($, { action: 'start', item: 'p12' })).toStartWith('started p12')
+  expect(spawned).toHaveLength(1)
+  expect(itemOf(files, 'p12')).toMatchObject({ status: 'building', note: 'session runner · was blocked: the parent session restarted' })
 })
 
 test('review 0.2 I3: a child session (its worktree, the mark in its environment) may not start children; a building item run in-session is not taken over', async ($, on) => {

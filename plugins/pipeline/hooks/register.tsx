@@ -1188,12 +1188,53 @@ async function arrive($: EngineInterface): Promise<void> {
     const announced = added.filter(s => dead.fresh.includes(s))
     if (announced.length) await notify($, await read($, config), announced)
   }
+  try {
+    await orphanChildren($, at)
+  } catch {}
   self.startedAt = new Date(at).toISOString()
   self.lastWrite = at
   await $.fs.write(path, serialize(withEntry(current, id, await entryOf($, undefined, at), at)))
   await refreshSiblings($, current, id, at)
   self.ticker?.cancel()
   self.ticker = $.clock.every(TICK_MS, () => void tick($))
+}
+
+const RESTARTED = 'the parent session restarted'
+
+/**
+ * The child records of a life before this one (the state survives a hot reload, the processes do not: a child dies
+ * with its parent's module): every starting or running record whose item has no process here is failed, its item
+ * blocked unless the child got it past the build, and a dead signal is raised once for each.
+ */
+async function orphanChildren($: EngineInterface, at: number): Promise<void> {
+  const orphans = runningOf(await read($, children)).filter(ch => !self.procs.has(ch.item))
+  if (!orphans.length) return
+  const ids = new Set(orphans.map(o => o.id))
+  await update($, children, prev => prev.map(ch => (ids.has(ch.id) ? { ...ch, status: 'failed' as const, endedAt: at, lastLine: RESTARTED } : ch)))
+  const found = (await read($, root)) || (await resolveRoot($))
+  const { config: c, backlog: fresh, error } = await loadAll($, found)
+  const blocked: string[] = []
+  if (!error && fresh) {
+    let next = fresh
+    for (const o of orphans) {
+      const item = next.items.find(i => i.id === o.item)
+      if (!item || item.status === 'merged' || item.status === 'review') continue
+      next = updateItem(next, item.id, { status: 'blocked', note: RESTARTED }, new Date(at).toISOString())
+      blocked.push(item.id)
+    }
+    if (blocked.length) await writeBacklog($, found, c, next)
+    for (const id of blocked) {
+      try {
+        await runTool($, { action: 'ledger', item: id, set: { blockers: [RESTARTED] } })
+      } catch {}
+    }
+  }
+  const dead: Signal[] = orphans.map(o => ({ kind: 'dead', agent: `child ${o.item}`, agentId: o.id, detail: `${RESTARTED} while the child session ran${blocked.includes(o.item) ? ` · ${o.item} blocked` : ''} · resume with /pipeline run ${o.item}`, at, delivered: false }))
+  const before = await read($, signals)
+  const added = mergeSignals(before, dead).slice(before.length)
+  if (!added.length) return
+  await update($, signals, list => mergeSignals(list, added))
+  await notify($, c, added)
 }
 
 /** Between items: one wake-up at `silentMinutes` while an agent runs, where the host offers ScheduleWakeup; never two pending. */
