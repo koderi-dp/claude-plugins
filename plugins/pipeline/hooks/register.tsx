@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
-import type { AgentRun, Backlog, ChildSession, Config, Item, Ledger, Live, LiveEntry, Panel, Sibling, Signal } from '../types'
+import type { AgentRun, Backlog, ChildSession, Config, Item, Ledger, Live, LiveEntry, Panel, QueueFilter, Sibling, Signal, View } from '../types'
 import { addItem, emptyBacklog, moveItem, readiness, removeItem, renderBacklogMd, updateItem } from './backlog'
 import type { Readiness } from './backlog'
 import { cleanList, planOf } from './clean'
@@ -12,10 +12,10 @@ import type { LedgerSet } from './ledger'
 import { parseLive, siblingsOf, withEntry, withoutEntry } from './live'
 import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse, specStub } from './migrate'
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
-import { BAR_ROW_H, barSvg, barText, modelName } from './draw'
-import type { Bar } from './draw'
-import { BLOCKED, RUNNING, activeTitle, renderPanel } from './pane'
-import { statusText } from './status'
+import { BAND_COMPACT_H, BAND_H, bandSvg, bandText } from './draw'
+import { BLOCKED, renderPanel } from './pane'
+import { SEGMENT_COLORS, bandOf, specWhat, statusText, taskCounter } from './status'
+import type { Band } from './status'
 import type { StatusInput } from './status'
 import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
 import { STALE_MS, deadAgents, isProtected, mergeSignals, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
@@ -95,7 +95,7 @@ const signals = atom({ plugin: 'pipeline', key: 'signals' } as const, [] as Sign
 // The session runner's children and the other sessions on this repository, as the panel draws them; the runner keeps them.
 const children = atom({ plugin: 'pipeline', key: 'children' } as const, [] as ChildSession[])
 const siblings = atom({ plugin: 'pipeline', key: 'siblings' } as const, [] as Sibling[])
-const panel = atom({ plugin: 'pipeline', key: 'panel' } as const, { isMoreShown: false, isCompact: false, isDoneCollapsed: false, autoOpenedFor: '' } as Panel)
+const panel = atom({ plugin: 'pipeline', key: 'panel' } as const, { view: 'overview', filter: 'inbox', search: '', expanded: null, isMoreShown: false, isCompact: false, isDoneCollapsed: false, autoOpenedFor: '', isBandOpen: false } as Panel)
 // The clock the panel draws against: the ticker moves it, so minutes and the merged week stay current.
 const now = atom({ plugin: 'pipeline', key: 'now' } as const, 0)
 
@@ -103,8 +103,9 @@ const slashes = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
 // ---------- the panel ----------
 
-/** The `autoOpen` setting as this load of the module received it. */
+/** The `autoOpen` and `band` settings as this load of the module received them. */
 let isAutoOpen = true
+let isCompactBand = false
 
 async function openPane($: EngineInterface): Promise<void> {
   const at = await $.clock.now()
@@ -1186,6 +1187,7 @@ async function scheduleWake($: EngineInterface, at: number): Promise<void> {
 
 export const register: Register = (on, options) => {
   isAutoOpen = (options as Record<string, unknown> | undefined)?.autoOpen !== 'never'
+  isCompactBand = (options as Record<string, unknown> | undefined)?.band === 'compact'
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -1329,38 +1331,76 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    let bar: Bar | null = null
+    let band: Band | null = null
     try {
-      if (!e.props.hasSurvey) bar = await barOf($)
+      if (!e.props.hasSurvey) band = await bandNow($, e.props.isWorking)
     } catch {}
-    if (!bar) return next(e)
+    if (!band) return next(e)
     // The engine's own placeholder ({ type: 'engine' }) is never nested: the desktop drops a band that nests it.
     const drawn = await Promise.resolve(next(e)).catch(() => null)
     const other = drawn && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
     const ui = $.ui.resolve(e)
-    const { Box, Text } = ui
+    const { Box, Text, Button } = ui
     const cols = e.props.bodyColumns || 100
+    let isOpen = false
+    try {
+      isOpen = (await read($, panel)).isBandOpen
+    } catch {}
+    const toggle = () => void update($, panel, prev => ({ ...prev, isBandOpen: !prev.isBandOpen }))
+    const chevron = <Button key="band-expand" plain dimColor label={isOpen ? '⌃' : '⌄'} onPress={toggle} />
+    const details = isOpen ? (
+      <Box flexDirection="column" paddingLeft={2}>
+        <Text dimColor>{`Execution tasks · ${band.summary}`}</Text>
+        {band.tasks.map((t, i) => (
+          <Text key={`band-task-${i}`} color={t.segment === 'accepted' ? SEGMENT_COLORS.accepted : t.segment === 'current' ? band!.color : t.segment === 'blocked' ? SEGMENT_COLORS.blocked : undefined} dimColor={t.segment === 'pending'}>
+            {`${t.segment === 'accepted' ? '✓' : t.segment === 'current' ? '•' : t.segment === 'blocked' ? '✕' : '○'} ${t.title}`}
+          </Text>
+        ))}
+        {!band.tasks.length ? <Text dimColor>No ledger yet.</Text> : null}
+      </Box>
+    ) : null
     if (e.surface !== 'terminal' && 'Svg' in ui) {
       const { Svg } = ui
-      const width = Math.max(180, Math.min(1600, cols * 8 - 40))
+      const width = Math.max(180, Math.min(1600, cols * 8 - 40)) - 24
+      const height = isCompactBand ? BAND_COMPACT_H : BAND_H
       return (
         <Box flexDirection="column">
-          <Svg source={barSvg(bar, width)} alt={`${bar.title}: ${bar.text}`} width={width} height={BAR_ROW_H} />
+          <Box flexDirection="row" alignItems="flex-start">
+            <Svg source={bandSvg(band, width, isCompactBand)} alt={`${band.id} ${band.state}: ${band.title}, ${band.count}, ${band.activity}`} width={width} height={height} />
+            {chevron}
+          </Box>
+          {details}
           {other}
         </Box>
       )
     }
-    const width = Math.max(6, Math.min(30, cols - bar.text.length - 12))
+    const row = bandText(band, Math.max(10, cols - 4))
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" gap={1}>
-          <Text color={RUNNING}>{barText(bar, width)}</Text>
-          <Text bold>{bar.text}</Text>
+          <Text color={band.color} bold>
+            {row.head}
+          </Text>
+          {row.segments ? (
+            <Text>
+              <Text dimColor>· </Text>
+              {band.segments.map((seg, i) => (
+                <Text key={`seg-${i}`} color={seg === 'pending' ? undefined : seg === 'current' ? band!.color : SEGMENT_COLORS[seg]} dimColor={seg === 'pending'}>
+                  {row.segments.charAt(i)}
+                </Text>
+              ))}
+              {!band.segments.length ? <Text dimColor>▱</Text> : null}
+            </Text>
+          ) : null}
+          {row.tail ? <Text dimColor>{`· ${row.tail}`}</Text> : null}
+          {chevron}
         </Box>
+        {details}
         {other}
       </Box>
     )
   })
+
 }
 
 // ---------- the commands ----------
@@ -1488,41 +1528,85 @@ async function configCommand($: EngineInterface, arg: string): Promise<string> {
   return `${key} = ${JSON.stringify(value)}`
 }
 
+/** The first line of the active item's spec, for the running hero; nothing without a spec file. */
+async function specLine($: EngineInterface, found: string, item: Item | null): Promise<string> {
+  if (!item || typeof item.spec !== 'string' || !item.spec) return ''
+  const text = await readText($, `${found}/${item.spec.replace(/^\/+/, '')}`)
+  return text ? specWhat(text) : ''
+}
+
+/** A tool action pressed from the panel: its one-line answer as a toast, so the person sees what happened. */
+async function pressTool($: EngineInterface, input: ToolInput): Promise<void> {
+  let text: string
+  try {
+    text = await runTool($, input)
+  } catch (err) {
+    text = `refused: ${err instanceof Error ? err.message : String(err)}`
+  }
+  try {
+    await $.ui.toast(`pipeline: ${text.split('\n')[0] ?? ''}`)
+  } catch {}
+}
+
 async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']['resolve']>, e: { surface: string; props: { bodyColumns?: number } }): Promise<RenderElement> {
   const found = (await read($, root)) || (await resolveRoot($))
   const c = await read($, config)
-  const d = await gather($, found, c, await read($, backlog), await read($, fileError))
+  const b = await read($, backlog)
+  const d = await gather($, found, c, b, await read($, fileError))
   const p = await read($, panel)
-  const flip = (key: 'isMoreShown' | 'isCompact' | 'isDoneCollapsed') => () => void update($, panel, prev => ({ ...prev, [key]: !prev[key] }))
+  const kids = await read($, children)
+  const ledgers: Record<string, Ledger | null> = {}
+  for (const k of kids) ledgers[k.item] = await loadLedger($, found, k.item)
+  const set = (patch: Partial<Panel>) => void update($, panel, prev => ({ ...prev, ...patch }))
   return renderPanel(ui, {
     ...d,
     now: Math.max(d.now, await read($, now)),
     surface: e.surface,
     hasSvg: 'Svg' in ui,
     bodyColumns: e.props.bodyColumns ?? 40,
-    isMoreShown: p.isMoreShown,
-    isCompact: p.isCompact,
-    isDoneCollapsed: p.isDoneCollapsed,
+    project: found.split('/').pop() || 'project',
+    branch: (await branchOf($)) ?? '',
+    panel: p,
+    children: kids,
+    siblings: await read($, siblings),
+    ledgers,
+    activeLine: await specLine($, found, activeItem(b)),
     limitMs: limitsOf(c).taskMinutes * 60_000,
-    onMore: flip('isMoreShown'),
-    onCompact: flip('isCompact'),
-    onDone: flip('isDoneCollapsed'),
+    onView: (view: View) => set({ view }),
+    onFilter: (filter: QueueFilter) => set({ filter, expanded: null }),
+    onSearch: (search: string) => set({ search, expanded: null }),
+    onExpand: (expanded: string | null) => set({ expanded }),
+    onMore: () => void update($, panel, prev => ({ ...prev, isMoreShown: !prev.isMoreShown })),
+    onStop: (item: string) => void pressTool($, { action: 'stop', item }),
+    onLog: (item: string) => void pressTool($, { action: 'log', item }),
   })
 }
 
-/** The band above the prompt while an item is building: its line and a bar of accepted tasks over the total; nothing otherwise. */
-async function barOf($: EngineInterface): Promise<Bar | null> {
+// The item the band keeps showing after it left the active statuses (blocked, or just merged), until the next turn starts.
+const bandHold = { item: '', sawIdle: false }
+
+/**
+ * The band's data while an item is planning, building or in review, and for a blocked or just-merged item until the
+ * model's next turn starts (`isWorking` false once, then true again); nothing when idle.
+ */
+async function bandNow($: EngineInterface, isWorking: boolean): Promise<Band | null> {
   const b = await read($, backlog)
-  const active = b?.items.find(i => i.status === 'building')
-  if (!active) return null
+  let item = activeItem(b)
+  if (item) {
+    bandHold.item = item.id
+    bandHold.sawIdle = false
+  } else if (bandHold.item) {
+    const held = b?.items.find(i => i.id === bandHold.item)
+    if (held && (held.status === 'blocked' || held.status === 'merged')) {
+      if (!isWorking) bandHold.sawIdle = true
+      else if (bandHold.sawIdle) bandHold.item = ''
+      if (bandHold.item) item = held
+    } else bandHold.item = ''
+  }
+  if (!item) return null
   const found = (await read($, root)) || (await resolveRoot($))
-  const ledger = await loadLedger($, found, active.id)
-  const tasks = ledger?.tasks ?? []
-  const done = tasks.filter(t => t.status === 'accepted').length
-  const running = tasks.filter(t => t.status === 'running' || t.status === 'fix').length
+  const ledger = await loadLedger($, found, item.id)
   const at = Math.max(await read($, now), await $.clock.now())
   const agent = (await read($, agents)).find(a => a.status === 'running')
-  const minutes = agent ? Math.max(0, Math.round((at - agent.startedAt) / 60_000)) : 0
-  const text = [activeTitle({ backlog: b, ledger }), agent ? `${agent.name} · ${modelName(agent.model)} · ${minutes} min` : ''].filter(Boolean).join(' · ')
-  return { title: active.id, text, done, running, total: tasks.length, isFinished: false }
+  return bandOf(item, ledger, agent, at)
 }

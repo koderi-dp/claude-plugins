@@ -549,13 +549,13 @@ function renderHistory(u: Desk, d: PanelInput, W: number): Element {
     const pr = prLabel(i.pr)
     return (
       <Box key={`history-${i.id}`} flexDirection="row" justifyContent="space-between" gap={1}>
-        <Text>
+        <Box flexDirection="row" gap={2}>
           <Text color={DONE} weight="semibold">
             {i.id}
           </Text>
-          {`  ${displayTitle(i.title)}`}
-          <Text color={DONE}>{'  ✓ Merged'}</Text>
-        </Text>
+          <Text>{displayTitle(i.title)}</Text>
+          <Text color={DONE}>✓ Merged</Text>
+        </Box>
         {pr ? pr.href && Link ? <Link href={pr.href}>{`${pr.label} ↗`}</Link> : <Text color={DONE}>{pr.label}</Text> : null}
       </Box>
     )

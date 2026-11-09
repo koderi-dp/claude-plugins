@@ -2,7 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { BLOCKED, DONE, OVERVIEW_ROWS, ROWS_SHOWN, RUNNING } from './pane'
-import { BAND_COLORS, SEGMENT_COLORS } from './status'
+import { bandText } from './draw'
+import { BAND_COLORS, SEGMENT_COLORS, bandOf } from './status'
 
 const MAIN = '/p/main'
 const DIR = `${MAIN}/docs/pipeline`
@@ -201,7 +202,7 @@ test('terminal: the text block keeps every reason and the parked ids, with the s
   const ui = await mount($ as never, 'terminal')
   expect((await ui.find({ type: 'Text', text: /^p1 · / }))?.text).toBe('p1 · Grid row and column sizes · M · no spec')
   expect((await ui.find({ type: 'Text', text: /^p2 · / }))?.text).toBe('p2 · Inbox item 2 · M · no spec')
-  expect((await ui.find({ type: 'Link' }))?.props['href']).toBe('https://x/pull/30')
+  expect((await ui.find({ type: 'Link' }))?.props['href']).toBe('https://x/pull/33')
   expect(await ui.find({ type: 'Text', text: /^o1 · / })).toBeUndefined()
   await ui.unmount()
 })
@@ -281,8 +282,9 @@ test('desktop idle Overview: the hero says nothing runs and why, three metrics, 
   // Recently merged: two rows, newest first, with PR links.
   expect(await ui.find({ type: 'Text', text: /^Recently merged/ })).toBeDefined()
   const links = await ui.findAll({ type: 'Link' })
-  expect(links.map(l => l.props['href'])).toEqual(['https://x/pull/30', 'https://x/pull/33'])
-  expect(links[0]!.text).toBe('PR #30 ↗')
+  expect(links.map(l => l.props['href'])).toEqual(['https://x/pull/33', 'https://x/pull/30'])
+  expect(links[0]!.text).toContain('PR #33 ↗')
+  expect(await ui.find({ type: 'Text', text: /Merged item 4/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Merged item 1/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Merged item 2/ })).toBeUndefined()
   // The footer.
@@ -340,7 +342,7 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   // The usage line.
   expect((await ui.find({ type: 'Text', text: /elapsed · / }))?.text).toMatch(/^5:00 elapsed · 0 tokens · ≈\$0\.00 cost$/)
   // One card for the running agent: its role, model and effort; the failed one as a line.
-  expect(a[1]).toBe('Implementer: Sonnet 5.5 · medium, running, ')
+  expect(a[1]).toBe('Implementer: Sonnet 5.5 · medium, running, starting')
   const card = await svgOf(ui, /^Implementer/)
   expect(card).toContain('Sonnet 5.5 · medium')
   expect(card).toContain('5:00')
@@ -385,7 +387,7 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   expect((await ui.find({ key: 'filter-ready' }))?.props['label']).toBe('Ready · 2')
   expect((await ui.find({ key: 'filter-blocked' }))?.props['label']).toBe('Blocked · 1')
   expect((await ui.find({ key: 'filter-parked' }))?.props['label']).toBe('Parked · 1')
-  expect((await ui.find({ key: 'filter-all' }))?.props['label']).toBe('All · 6')
+  expect((await ui.find({ key: 'filter-all' }))?.props['label']).toBe('All · 5')
   expect((await ui.find({ key: 'filter-inbox' }))?.props['dimColor']).toBe(false)
   expect((await ui.find({ key: 'filter-all' }))?.props['dimColor']).toBe(true)
   expect(await ui.find({ type: 'Text', text: '1 item · inbox' })).toBeDefined()
@@ -441,15 +443,16 @@ test('desktop History: the hero counts the week, every merged item newest first 
   await ui.press({ key: 'tab-history' })
   expect((await alts(ui))[0]).toBe('3 items merged: Completed this week · last 7 days')
   expect(await ui.find({ type: 'Text', text: /^Recent pull requests/ })).toBeDefined()
-  const rows = await ui.findAll({ type: 'Text', text: /^m\d+  Merged \d+  ✓ Merged$/ })
+  const rows = await ui.findAll({ type: 'Text', text: /^Merged \d+$/ })
   expect(rows).toHaveLength(20)
-  expect(rows[0]!.text).toBe('m3  Merged 3  ✓ Merged')
+  expect(rows[0]!.text).toBe('Merged 3')
   expect((await ui.find({ type: 'Text', text: 'm3' }))?.props['color']).toBe(DONE)
+  expect((await ui.findAll({ type: 'Text', text: '✓ Merged' }))[0]?.props['color']).toBe(DONE)
   expect((await ui.find({ type: 'Link', text: '#3 ↗' }))?.props['href']).toBe('https://x/pull/3')
   expect(await ui.find({ type: 'Text', text: '#9' })).toBeDefined()
   expect((await ui.find({ key: 'history-more' }))?.props['label']).toBe('Show all 23 →')
   await ui.press({ key: 'history-more' })
-  expect(await ui.findAll({ type: 'Text', text: /^m\d+  Merged \d+  ✓ Merged$/ })).toHaveLength(23)
+  expect(await ui.findAll({ type: 'Text', text: /^Merged \d+$/ })).toHaveLength(23)
   expect((await ui.find({ key: 'history-more' }))?.props['label']).toBe('Show fewer')
   expect(await ui.find({ key: 'row-q1' })).toBeUndefined()
   await ui.unmount()
@@ -480,7 +483,7 @@ test('the band: two lines on the desktop within the width, segment colours, the 
   expect(W).toBe(176)
   expect(svgs[0]!.props['height']).toBe(54)
   const src = String(svgs[0]!.props['source'])
-  expect(svgs[0]!.props['alt']).toBe('p2 BUILDING: Show saved password and SSH key state in custom credentials, a long title, Task 2 / 3, Implementer · Sonnet 5.5')
+  expect(svgs[0]!.props['alt']).toBe('p2 BUILDING: Show saved password and SSH key state in custom credentials, a long title, Task 2 / 3, Implementer · Sonnet 5.5 · starting')
   expect(src).toContain('>Task 2 / 3<')
   expect(src).toContain('>BUILDING<')
   expect(src).toContain('>3:44<')
@@ -511,22 +514,28 @@ test('the band: two lines on the desktop within the width, segment colours, the 
   await ui.unmount()
 
   // The terminal: one row, the head in the state colour, the segments, the tail; cut to the columns.
-  ui = await band($ as never, 'terminal', { bodyColumns: 60 })
+  ui = await band($ as never, 'terminal', { bodyColumns: 80 })
   expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
   const head = await ui.find({ type: 'Text', text: /^● p2/ })
   expect(head?.text).toBe('● p2 · Task 2 / 3')
   expect(head?.props['color']).toBe(BAND_COLORS.running)
   const tail = await ui.find({ type: 'Text', text: /3:44$/ })
-  expect(tail?.text).toBe('· Implementer · Sonnet 5.5 · 3:44')
+  expect(tail?.text).toBe('· Implementer · Sonnet 5.5 · starting · 3:44')
   expect(await ui.find({ type: 'Text', text: '▰' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '▱' })).toBeDefined()
   await ui.unmount()
   ui = await band($ as never, 'terminal', { bodyColumns: 40 })
+  // 36 characters for the row: the head and the segments stay, the activity goes, the clock stays.
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
-  const row = texts.find(t => t.startsWith('● p2'))! + ' ' + texts.find(t => t.endsWith('3:44'))!
-  expect(row.length).toBeLessThanOrEqual(40)
-  expect(row).toContain('Task 2 / 3')
-  expect(row).toContain('…')
+  const headText = texts.find(t => t.startsWith('● p2'))!
+  const tailText = texts.find(t => t.endsWith('3:44'))!
+  expect(`${headText} · ▰▰▱ ${tailText}`.length).toBeLessThanOrEqual(36)
+  expect(headText).toBe('● p2 · Task 2 / 3')
+  expect(tailText).toBe('· 3:44')
+  // Narrower still, the activity is cut with an ellipsis before the clock goes.
+  const cut = bandText(bandOf(item('p2', 'A long title', 'building') as never, JSON.parse(LEDGER), { id: 'a', name: 'Implement task 2', model: 'claude-sonnet-5-5', status: 'running', startedAt: NOW - 224_000, lastStepAt: NOW, calls: 0, tokens: 0, activity: 'running npm run lint', lastCommands: [], failures: 0 }, NOW), 50)
+  expect(`${cut.head} · ${cut.segments} · ${cut.tail}`.length).toBeLessThanOrEqual(50)
+  expect(cut.tail).toMatch(/^Implementer · S.*… · 3:44$/)
   await ui.unmount()
 })
 

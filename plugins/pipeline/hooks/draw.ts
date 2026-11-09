@@ -347,7 +347,7 @@ export const bandSvg = (b: Band, W: number, isCompact = false): string => {
 
 /** The terminal's row: `● p1 · Task 1 / 3 · ▰▱▱ · Implementer · 3:44`, as pieces, cut to `cols` columns from the activity first. */
 export const bandText = (b: Band, cols: number): { head: string; segments: string; tail: string } => {
-  const head = ['●', b.id, b.count].filter(Boolean).join(' · ')
+  const head = `● ${[b.id, b.count].filter(Boolean).join(' · ')}`
   const segments = b.segments.map(s => (s === 'pending' ? '▱' : '▰')).join('') || '▱'
   const fixed = `${head} · ${segments} · `
   const room = cols - fixed.length - b.clock.length - 3
