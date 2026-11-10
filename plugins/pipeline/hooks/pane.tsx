@@ -5,7 +5,7 @@
 import type { EngineInterface, RenderElement } from 'claude-code'
 
 import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, TaskReview, TasksMode, View } from '../types'
-import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TASK_BAR_H, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, taskBarSvg, taskRowSvg, totals } from './draw'
+import { ACCENT, AGENT_CARD_H, BLOCKED, CAPTION_H, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TASK_BAR_H, agentCardSvg, captionSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, taskBarSvg, taskRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
 import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from './status'
@@ -28,6 +28,8 @@ export const HISTORY_SHOWN = 20
 
 const ACTIVE: ItemStatus[] = ['planning', 'building', 'review']
 const FINISHED_SHOWN = 3
+/** The command the footer names, at its right. */
+const FOOTER_COMMAND = '/pipeline status'
 const FILTERS: { filter: QueueFilter; label: string }[] = [
   { filter: 'inbox', label: 'Inbox' },
   { filter: 'ready', label: 'Ready' },
@@ -229,8 +231,9 @@ type Desk = { Box: Comp; Text: Comp; Button: Comp; Svg: Comp; Input: Comp; Link?
 /** The desktop: header, tabs, the view, footer. */
 function renderDesktop(ui: Ui, d: PanelInput): Element {
   const u = ui as unknown as Desk
-  const { Box, Text, Button } = u
+  const { Box, Text, Button, Svg } = u
   const items = d.backlog?.items ?? []
+  const footer = footerText(d.agents, d.signals, d.children)
   const W = Math.max(240, Math.min(900, (d.bodyColumns || 40) * 8 - 8))
   const counts = groupCounts(items)
   const tabs: { view: View; label: string }[] = [
@@ -260,12 +263,7 @@ function renderDesktop(ui: Ui, d: PanelInput): Element {
       </Box>
       {notices.length ? <Box flexDirection="column">{notices}</Box> : null}
       {view}
-      <Box flexDirection="row" justifyContent="space-between">
-        <Text dimColor>{footerText(d.agents, d.signals, d.children)}</Text>
-        <Text dimColor mono>
-          /pipeline status
-        </Text>
-      </Box>
+      <Svg key="caption-footer" source={captionSvg(W, footer, FOOTER_COMMAND, true)} alt={line([footer, FOOTER_COMMAND])} width={W} height={CAPTION_H} />
     </Box>
   )
 }
@@ -414,6 +412,7 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
     steps: stepsOf(active, ledger),
   }
   const drawn = heroSvg(W, hero)
+  const usage = `${fmtTime(t.time)} elapsed · ${fmtTokens(t.tokens)} tokens · ≈${fmtCost(t.cost)} cost`
   // The task bar and its legend: one segment per task.
   const segments = tasks.map(task => taskSegment(task, current))
   const legend = segmentLegend(segments)
@@ -441,9 +440,7 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
   return (
     <Box flexDirection="column">
       <Svg source={drawn.source} alt={`${hero.state}: ${hero.headline}, ${done} of ${tasks.length} tasks accepted`} width={W} height={drawn.height} />
-      <Text dimColor tabular>
-        {`${fmtTime(t.time)} elapsed · ${fmtTokens(t.tokens)} tokens · ≈${fmtCost(t.cost)} cost`}
-      </Text>
+      <Svg key="caption-usage" source={captionSvg(W, usage)} alt={usage} width={W} height={CAPTION_H} />
       {heading(u, 'Tasks', `${done} of ${tasks.length} accepted`)}
       <Svg source={taskBarSvg(W, segments)} alt={`Task progress: ${legend.map(l => `${l.n} ${l.word}`).join(', ')}`} width={W} height={TASK_BAR_H} />
       {taskRows.length ? (

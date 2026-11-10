@@ -4,6 +4,7 @@ import type { AgentRun, Backlog, Config, Item, ItemStatus, Ledger, QueueFilter, 
 import type { Readiness } from './backlog'
 import type { MergedPending } from './merged'
 import { mergedLine } from './merged'
+import { ACCENT, BLOCKED, DONE, MUTED, TRACK } from './ui/tokens'
 
 export type StatusInput = {
   /** The item this session runs, when the caller knows it; without it the first active item counts. */
@@ -515,8 +516,9 @@ export function segmentLegend(segments: Segment[]): { n: number; word: string; k
   return out
 }
 
-export const BAND_COLORS = { running: '#b69aff', blocked: '#f0b56f', merged: '#6dd9a1', idle: '#96929f' } as const
-export const SEGMENT_COLORS: Record<Segment, string> = { accepted: '#69c99a', current: '#a990fc', blocked: '#f0b56f', pending: '#404048' }
+// The band's colours are the tokens': the drawn band maps them back to a tone, a Text takes them as they are.
+export const BAND_COLORS = { running: ACCENT, blocked: BLOCKED, merged: DONE, idle: MUTED } as const
+export const SEGMENT_COLORS: Record<Segment, string> = { accepted: DONE, current: ACCENT, blocked: BLOCKED, pending: TRACK }
 
 const fmtClock = (ms: number): string => {
   const s = Math.max(0, Math.round(ms / 1000))

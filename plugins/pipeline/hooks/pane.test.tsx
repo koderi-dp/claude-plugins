@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { BLOCKED, DONE, OVERVIEW_ROWS, ROWS_SHOWN, RUNNING } from './pane'
-import { bandSvg, bandText } from './draw'
+import { CAPTION_H, bandSvg, bandText } from './draw'
 import { BAND_COLORS, SEGMENT_COLORS, bandOf } from './status'
 
 const MAIN = '/p/main'
@@ -132,7 +132,9 @@ const IDLE = backlogOf([
   ...Array.from({ length: 2 }, (_, i) => item(`o${i + 1}`, `Older ${i + 1}`, 'merged', { pr: `https://x/pull/${10 + i}`, updatedAt: '2026-10-01T00:00:00Z' })),
 ])
 
-const alts = async (ui: Mounted) => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props['alt']))
+/** The drawings' alts, in order; the caption lines (the usage line, the footer) are apart, found by their height. */
+const alts = async (ui: Mounted) => (await ui.findAll({ type: 'Svg' })).filter(s => s.props['height'] !== CAPTION_H).map(s => String(s.props['alt']))
+const captionOf = async (ui: Mounted, which: 'usage' | 'footer') => (await ui.findAll({ type: 'Svg' })).filter(s => s.props['height'] === CAPTION_H).map(s => String(s.props['alt'])).find(a => (which === 'usage' ? / elapsed · /.test(a) : a.endsWith('/pipeline status')))
 const svgOf = async (ui: Mounted, alt: RegExp) => String((await ui.findAll({ type: 'Svg' })).find(s => alt.test(String(s.props['alt'])))?.props['source'])
 /** The drawn item rows (`p1: title · meta · tag`) by their alt. */
 const rowAlts = async (ui: Mounted) => (await alts(ui)).filter(a => /^[a-z]\d+: /.test(a))
@@ -281,11 +283,11 @@ test('desktop idle Overview: the hero says nothing runs and why, three metrics, 
   expect(row).not.toContain('grid-track-sizes')
   expect(row).toContain('>M · Inbox<')
   expect(row).toContain('>No spec<')
-  expect(row).toContain(`fill="${BLOCKED}"`)
-  expect(row).toContain('class="chip"')
+  expect(row).toContain('class="f-warning"')
+  expect(row).toContain('class="f-card k-border"')
   // A hairline under every row but the last of its card.
-  expect(row).toContain('class="hair"')
-  expect(await svgOf(ui, /^p3: /)).toContain('class="hair"')
+  expect(row).toContain('class="f-border"')
+  expect(await svgOf(ui, /^p3: /)).toContain('class="f-border"')
   expect(await ui.find({ type: 'Text', text: 'and 25 more in the queue' })).toBeDefined()
   // Recently merged: two drawn rows (the mockup's .merged-row: check, id, title), newest first, with PR links beside them.
   expect(await ui.find({ type: 'Text', text: /^Recently merged/ })).toBeDefined()
@@ -295,14 +297,14 @@ test('desktop idle Overview: the hero says nothing runs and why, three metrics, 
   expect(links[0]!.text).toContain('#33 ↗')
   expect(links[0]!.text).not.toContain('PR ')
   const merged = await svgOf(ui, /^m4: /)
-  expect(merged).toContain(`stroke="${DONE}"`)
+  expect(merged).toContain('class="k-success"')
   expect(merged).toContain('>m4<')
   expect(merged).toContain('>Merged item 4<')
-  expect(merged).toContain('class="hair"')
-  expect(await svgOf(ui, /^m1: /)).not.toContain('class="hair"')
+  expect(merged).toContain('class="f-border"')
+  expect(await svgOf(ui, /^m1: /)).not.toContain('class="f-border"')
   // The footer.
-  expect(await ui.find({ type: 'Text', text: 'No subagents running' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '/pipeline status' })).toBeDefined()
+  expect(await captionOf(ui, 'footer')).toBe('No subagents running · /pipeline status')
+  expect(await svgOf(ui, /^No subagents running/)).toContain('>/pipeline status<')
   // The section buttons switch the tab.
   expect((await ui.find({ key: 'goto-queue' }))?.props['label']).toBe('View queue →')
   await ui.press({ key: 'goto-history' })
@@ -323,7 +325,7 @@ test('desktop idle Overview with ready items: Up next lists them and the hero na
   const row = await svgOf(ui, /^p1: /)
   expect(row).toContain('>Search<')
   expect(row).toContain('>Ready<')
-  expect(row).toContain(`fill="${DONE}"`)
+  expect(row).toContain('class="f-success"')
   expect(await ui.find({ key: 'row-p1' })).toBeDefined()
   expect(await ui.find({ key: 'row-p2' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'Nothing merged yet.' })).toBeDefined()
@@ -349,23 +351,24 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   expect(hero).toContain('A CSV export of every catalog, streamed to the browser.')
   expect(hero).toContain('1 of 3 tasks accepted')
   expect(hero).toContain('>33%<')
-  expect(hero).toContain('✓ Plan')
-  expect(hero).toContain('● Build')
-  expect(hero).toContain('○ Review')
-  expect(hero).toContain('○ Merge')
+  // The steps: an icon and the name, done in green, the current one in purple, the rest in the subtle grey.
+  expect(hero).toMatch(/class="f-success"[^>]*>Plan</)
+  expect(hero).toMatch(/class="f-primary"[^>]*>Build</)
+  expect(hero).toMatch(/class="m"[^>]*>Review</)
+  expect(hero).toMatch(/class="m"[^>]*>Merge</)
   expect(hero).toContain('class="live"')
   expect(a.some(t => t === 'dotted grid')).toBe(false)
   // The usage line.
-  expect((await ui.find({ type: 'Text', text: /elapsed · / }))?.text).toMatch(/^5:00 elapsed · 0 tokens · ≈\$0\.00 cost$/)
+  expect(await captionOf(ui, 'usage')).toMatch(/^5:00 elapsed · 0 tokens · ≈\$0\.00 cost$/)
   // One heading carries the count; no caption above the bar and no legend under it.
   expect((await ui.find({ type: 'Text', text: /^Tasks/ }))?.text).toBe('Tasks · 1 of 3 accepted')
   expect(await ui.find({ type: 'Text', text: 'Task progress' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /1 in progress/ })).toBeUndefined()
   expect(a[1]).toBe('Task progress: 1 accepted, 1 in progress, 1 pending')
   const bar = await svgOf(ui, /^Task progress:/)
-  expect(bar).toContain(`fill="${DONE}"`)
-  expect(bar).toContain('url(#task-stripe)')
-  expect(bar).toContain('fill="#3b3b46"')
+  expect(bar).toContain('class="f-success"')
+  expect(bar).toContain('url(#stripe-primary)')
+  expect(bar).toContain('class="f-input"')
   expect(await ui.find({ type: 'Text', text: /^Tasks/ })).toBeDefined()
   // One drawn row per task: the accepted one, the current one with its running agent, the next one; the old agent card and timeline are gone.
   expect(a[2]).toBe('Task 1 · The parser · Accepted')
@@ -374,10 +377,11 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   const parser = await svgOf(ui, /^Task 1 · /)
   expect(parser).toContain('01 · COMPLETED')
   expect(parser).toContain('>Accepted<')
-  expect(parser).toContain(`fill="${DONE}"`)
+  expect(parser).toContain('class="f-success"')
   const writer = await svgOf(ui, /^Task 2 · /)
   expect(writer).toContain('02 · CURRENT TASK')
-  expect(writer).toContain('>● Running<')
+  // The badge draws the dot itself, pulsing, beside the word.
+  expect(writer).toContain('>Running<')
   expect(writer).toContain('>Implementer<')
   expect(writer).toContain('>Sonnet 5.5 · medium<')
   expect(writer).toContain('>starting<')
@@ -403,11 +407,11 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   expect(a[5]).toBe('p3: Search · M · Ready')
   expect(await ui.find({ key: 'row-p3' })).toBeDefined()
   expect(await ui.find({ key: 'row-p5' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: '1 agent working · no signals' })).toBeDefined()
+  expect(await captionOf(ui, 'footer')).toBe('1 agent working · no signals · /pipeline status')
   // A silent agent: the signal row above the view, and the footer counts it.
   await clock.advance(11 * MIN)
   expect((await ui.find({ type: 'Text', text: /^silent:/ }))?.props['color']).toBe(BLOCKED)
-  expect(await ui.find({ type: 'Text', text: '1 agent working · 1 open signal' })).toBeDefined()
+  expect(await captionOf(ui, 'footer')).toBe('1 agent working · 1 open signal · /pipeline status')
   await ui.unmount()
 })
 
@@ -422,7 +426,7 @@ test('tasks compact: no legend, no sub-lines, no Recent activity, the current ta
   expect(a[2]).toBe('Task 1 · The parser · Accepted')
   expect(a[3]).toBe('Task 2 · The writer · ● Running · Implementer · Sonnet 5.5 · medium · starting · 0 tool calls · 0 tokens · 1m 00s elapsed')
   const writer = await svgOf(ui, /^Task 2 · /)
-  expect(writer).toContain('>● Running<')
+  expect(writer).toContain('>Running<')
   expect(writer).toContain('>starting<')
   expect(writer).not.toContain('>Implementer<')
   expect(writer).not.toContain('elapsed')
@@ -454,15 +458,15 @@ test('desktop running Overview in a fix round: the current task reads Fix round 
   expect(a[3]).toBe('Task 2 · The writer · Fix round 1 of 3 · Fix round 1 of 3 · after review: FIX REQUIRED · Lead · fix round 1 dispatched · 2:10 · Build · Sonnet 5.5 · 3:20 ✓ · Review · Opus 5.5 · 0:58 · FIX REQUIRED · Fix 1 of 3 · Sonnet 5.5 · 0:37 ✓')
   const writer = await svgOf(ui, /^Task 2 · /)
   expect(writer).toContain('>Fix round 1 of 3<')
-  expect(writer).toContain(`fill="${RUNNING}">Lead · fix round 1 dispatched · 2:10<`)
-  expect(writer).toContain(`fill="${BLOCKED}">Review · Opus 5.5 · 0:58 · FIX REQUIRED<`)
+  expect(writer).toMatch(/class="f-primary"[^>]*>Lead · fix round 1 dispatched · 2:10</)
+  expect(writer).toMatch(/class="f-warning"[^>]*>Review · Opus 5\.5 · 0:58 · FIX REQUIRED</)
   expect(writer).toContain('>Build · Sonnet 5.5 · 3:20 ✓<')
   expect(writer).toContain('>Fix 1 of 3 · Sonnet 5.5 · 0:37 ✓<')
   expect(writer).not.toContain('>Implementer<')
   expect(writer).not.toContain('tool calls')
   expect(await ui.find({ type: 'Text', text: /fix round 1 · / })).toBeUndefined()
   expect(await svgOf(ui, /^Task progress:/)).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'No subagents running' })).toBeDefined()
+  expect(await captionOf(ui, 'footer')).toBe('No subagents running · /pipeline status')
   await ui.unmount()
 })
 
@@ -474,7 +478,7 @@ test('taskReview: an accepted task the lead read itself shows a dim line under i
   await start($ as never)
   const ui = await mount($ as never, 'desktop')
   expect((await alts(ui))[2]).toBe('Task 1 · The parser · Accepted · review skipped (taskReview off)')
-  expect(await svgOf(ui, /^Task 1 · /)).toContain('fill="#898696">review skipped (taskReview off)<')
+  expect(await svgOf(ui, /^Task 1 · /)).toMatch(/class="m"[^>]*>review skipped \(taskReview off\)</)
   await ui.press({ key: 'activity-toggle' })
   expect((await ui.find({ type: 'Text', text: /^✓ Task 1 accepted/ }))?.text).toBe('✓ Task 1 accepted · review skipped')
   await ui.unmount()
@@ -519,7 +523,7 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   // Ready holds the item in flight first.
   await ui.press({ key: 'filter-ready' })
   expect(await rowAlts(ui)).toEqual(['p2: Export · M · Building', 'p3: Search · M · Ready'])
-  expect(await svgOf(ui, /^p2: /)).toContain(`fill="${RUNNING}"`)
+  expect(await svgOf(ui, /^p2: /)).toContain('class="f-primary"')
   expect(await ui.find({ type: 'Text', text: '2 items · ready' })).toBeDefined()
   // All, then the search narrows live.
   await ui.press({ key: 'filter-all' })
@@ -552,7 +556,7 @@ test('desktop Queue: the search narrows rows live, the filters switch groups wit
   await ui.press({ key: 'filter-blocked' })
   expect(await ui.find({ type: 'Text', text: '/pipeline status p4' })).toBeUndefined()
   expect(await rowAlts(ui)).toEqual(['p4: Import · M · Blocked'])
-  expect(await svgOf(ui, /^p4: /)).toContain(`fill="${BLOCKED}"`)
+  expect(await svgOf(ui, /^p4: /)).toContain('class="f-warning"')
   await ui.unmount()
 })
 
@@ -571,7 +575,7 @@ test('desktop History: the hero counts the week, every merged item newest first 
   expect(rows).toHaveLength(20)
   expect(rows[0]).toBe('m3: Merged 3 · merged · #3')
   const first = await svgOf(ui, /^m3: /)
-  expect(first).toContain(`stroke="${DONE}"`)
+  expect(first).toContain('class="k-success"')
   expect(first).toContain('>m3<')
   expect(first).toContain('>Merged 3<')
   expect((await ui.find({ type: 'Link', text: '#3 ↗' }))?.props['href']).toBe('https://x/pull/3')
@@ -712,7 +716,7 @@ test('idle: a one-line strip with the idle line and an Open panel button that op
   expect(W).toBe(176)
   const cut = />(pipeline · idle[^<]*)</.exec(narrow)?.[1]
   expect(cut?.endsWith('…')).toBe(true)
-  for (const m of narrow.matchAll(/<text x="([\d.]+)"/g)) expect(Number(m[1])).toBeLessThan(W)
+  for (const m of narrow.matchAll(/<text[^>]* x="([\d.]+)"/g)) expect(Number(m[1])).toBeLessThan(W)
   await ui.unmount()
   // The terminal: one dim row with a hollow dot, cut to the columns, and the same button.
   ui = await band($ as never, 'terminal', { bodyColumns: 100 })
@@ -757,14 +761,13 @@ test('the band: two lines on the desktop within the width, segment colours, the 
   expect(src).not.toContain('>BUILDING<')
   expect(src).toContain('>3:44<')
   // Every text starts inside the band, and the title is cut with an ellipsis instead of running over.
-  for (const m of src.matchAll(/<text x="([\d.]+)"/g)) expect(Number(m[1])).toBeLessThan(W)
+  for (const m of src.matchAll(/<text[^>]* x="([\d.]+)"/g)) expect(Number(m[1])).toBeLessThan(W)
   for (const m of src.matchAll(/<rect x="(-?[\d.]+)"/g)) expect(Number(m[1])).toBeGreaterThanOrEqual(0)
-  const title = /<text class="t" x="[\d.]+" y="20" font-size="12" font-weight="650">([^<]*)</.exec(src)?.[1]
+  const title = /<text class="t" x="[\d.]+" y="21" font-size="12" font-weight="640">([^<]*)</.exec(src)?.[1]
   expect(title === undefined || title.endsWith('…')).toBe(true)
   // The segments: one accepted (green), the running one (the state's purple), one pending (grey), in order.
-  const fills = [...src.matchAll(/height="5" rx="2.5" fill="(#[0-9a-f]{6})"/g)].map(m => m[1])
-  expect(fills).toEqual([SEGMENT_COLORS.accepted, BAND_COLORS.running, SEGMENT_COLORS.pending])
-  expect(src).toContain(`fill="${BAND_COLORS.running}"`)
+  const fills = [...src.matchAll(/height="6" rx="3" class="(f-[a-z]+)"/g)].map(m => m[1])
+  expect(fills).toEqual(['f-success', 'f-primary', 'f-input'])
   // The Panel button beside the chevron: the spawn opened the pane, so it reads open; closed, it opens it on a press.
   const { opened, panes } = worldRef
   expect((await ui.find({ key: 'band-panel' }))?.props['label']).toBe('Panel ↗')
@@ -829,18 +832,18 @@ test('review 0.2 M2: at the minimum width the hook allows (156 px) the band leav
   expect(W).toBe(156)
   const narrow = bandSvg(b, W)
   expect(narrow).not.toContain('>BUILDING<')
-  expect(/<rect x="(-?[\d.]+)" y="8" width="[\d.]+" height="17"/.exec(narrow)).toBeNull()
+  expect(/<rect x="(-?[\d.]+)" y="8" width="[\d.]+" height="18"/.exec(narrow)).toBeNull()
   expect(narrow).toContain('>p12<')
   expect(narrow).toContain('>Task 1 / 1<')
   for (const m of narrow.matchAll(/<(?:rect|text) x="(-?[\d.]+)"/g)) expect(Number(m[1])).toBeGreaterThanOrEqual(0)
   // Room enough: the tag sits to the right of the id with its separator.
   const wide = bandSvg(b, 600)
-  const tag = /<rect x="(-?[\d.]+)" y="8" width="([\d.]+)" height="17"/.exec(wide)
+  const tag = /<rect x="(-?[\d.]+)" y="8" width="([\d.]+)" height="18"/.exec(wide)
   expect(tag).not.toBeNull()
   expect(Number(tag![1])).toBeGreaterThan(29 + 24)
   expect(wide).toContain('>BUILDING<')
-  expect(wide).toContain('class="sep"')
-  expect(narrow).not.toContain('class="sep"')
+  expect(wide).toContain('width="1" height="12" class="f-border"')
+  expect(narrow).not.toContain('width="1" height="12"')
 })
 
 test('the band in compact mode: one line with the id, title, count and clock, no state tag, no activity', { options: { band: 'compact' } }, async ($, on) => {
@@ -857,7 +860,7 @@ test('the band in compact mode: one line with the id, title, count and clock, no
   expect(src).toContain('>0:00<')
   expect(src).not.toContain('>BUILDING<')
   expect(src).not.toContain('Implementer')
-  expect(src).not.toContain('height="5"')
+  expect(src).not.toContain('height="6"')
   await ui.unmount()
 })
 
@@ -873,7 +876,7 @@ test('the band stays for a blocked item until the next turn starts, then goes', 
   let src = String((await ui.find({ type: 'Svg' }))?.props['source'])
   expect(src).toContain('>BLOCKED<')
   expect(src).toContain('CI red twice')
-  expect(src).toContain(`fill="${BAND_COLORS.blocked}"`)
+  expect(src).toContain('class="f-warning"')
   await ui.unmount()
   // Idle between turns: still shown.
   ui = await band($ as never, 'desktop', { isWorking: false })
@@ -895,7 +898,7 @@ test('the band stays for a blocked item until the next turn starts, then goes', 
   expect(src).toContain('>MERGED<')
   expect(src).toContain('>1 / 3 accepted<')
   expect(src).toContain('Merged · #7')
-  expect(src).toContain(`fill="${BAND_COLORS.merged}"`)
+  expect(src).toContain('class="f-success"')
   await ui.unmount()
 })
 
