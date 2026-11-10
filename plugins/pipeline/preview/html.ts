@@ -134,5 +134,5 @@ a{color:var(--accent);text-decoration:none}
 .caption{margin-top:32px}
 .sheet .label{margin-top:20px}
 .sheet .label:first-child{margin-top:0}
-.sheet .svg{margin-bottom:8px}
+.sheet > .svg{margin-bottom:8px}
 `

@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
-import { agentCardSvg, bandSvg, captionSvg, heroSvg, idleStripSvg, itemRowSvg, mergedRowSvg, metricsSvg, sessionRowSvg, taskBarSvg, taskRowSvg } from '../draw'
+import { agentCardSvg, bandSvg, captionSvg, separatorSvg, tabUnderlineSvg, heroSvg, idleStripSvg, itemRowSvg, mergedRowSvg, metricsSvg, sessionRowSvg, taskBarSvg, taskRowSvg } from '../draw'
 import type { Band, TaskRow } from '../status'
 import { BAND_COLORS } from '../status'
-import { BADGE_H, ICON_NAMES, badge, check, disc, divider, dot, fitText, frame, icon, progress, segments, separator, soft, stripeId, surface, text, textWidth, xml } from './kit'
+import { BADGE_H, ICON_NAMES, TAB_UNDERLINE_H, badge, check, disc, divider, dot, fitText, frame, icon, progress, segments, separator, soft, stripeId, surface, tabUnderline, text, textWidth, xml } from './kit'
 import { ACCENT, ALL_COLORS, BLOCKED, COLORS, DONE, FAILED, MUTED, ROLES, STYLE, TONES, fillClass, strokeClass, styleFor, toneOf } from './tokens'
 
 const HEX = /#[0-9a-fA-F]{3,8}\b/g
@@ -100,6 +100,10 @@ test('dots, lines and icons: the pulse only when live, a hollow dot is a ring, e
   expect(dot(5, 5, 'neutral')).toBe('<circle cx="5" cy="5" r="3.5" class="s"/>')
   expect(dot(5, 5, 'neutral', false, { isHollow: true })).toContain('fill="none" stroke-width="1.5" class="k-mutedForeground"')
   expect(separator(0, 9, 40)).toBe('<rect x="0" y="9" width="40" height="1" class="f-border"/>')
+  // A tab's underline: a 2 px primary bar at the foot of its 3 px slot when active, nothing otherwise.
+  expect(tabUnderline(0, 0, 60, true)).toBe('<rect x="0" y="1" width="60" height="2" rx="1" class="f-primary"/>')
+  expect(tabUnderline(0, 0, 60, false)).toBe('')
+  expect(TAB_UNDERLINE_H).toBe(3)
   expect(divider(3, 0, 12)).toBe('<rect x="3" y="0" width="1" height="12" class="f-border"/>')
   expect(surface(0, 0, 100, 50, { variant: 'primary' })).toBe('<rect x="0.5" y="0.5" width="99" height="49" rx="10" class="f-primarySurface k-primaryBorder"/>')
   expect(soft(0, 0, 28, 28, 'primary')).toContain('fill-opacity="0.14" class="f-primary"')
@@ -141,6 +145,9 @@ const drawings = (): string[] => [
   bandSvg({ ...BAND, state: 'READY', color: BAND_COLORS.idle }, 600),
   bandSvg(BAND, 600, true),
   idleStripSvg('pipeline · idle', 600),
+  tabUnderlineSvg(60, true),
+  tabUnderlineSvg(60, false),
+  separatorSvg(400),
 ]
 
 test('no colour outside the tokens: every drawing paints by class, and the only hex colours are the tokens\' in its stylesheet', () => {

@@ -68,7 +68,8 @@ export const toneOf = (color: string | undefined): Tone => (color === ACCENT ? '
 export const RADIUS = { sm: 6, md: 8, lg: 10, full: 999 } as const
 /** The 4 px spacing scale: `SPACE[3]` is 12. */
 export const SPACE = [0, 4, 8, 12, 16, 20, 24, 32] as const
-export const SIZE = { xs: 10, sm: 11, base: 12, md: 13, lg: 17 } as const
+/** `xl` is for a tile's number only. */
+export const SIZE = { xs: 10, sm: 11, base: 12, md: 13, lg: 17, xl: 20 } as const
 export const WEIGHT = { regular: 450, medium: 560, semibold: 640 } as const
 
 export const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"

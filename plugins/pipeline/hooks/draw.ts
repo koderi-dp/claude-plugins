@@ -7,7 +7,7 @@ import type { AgentRun } from '../types'
 import type { Band, Segment, Step, TagKind, TaskRow } from './status'
 import { fmtDuration } from './status'
 import type { IconName, Piece, Seg } from './ui/kit'
-import { BADGE_H, BAR_H, badge, check, disc, divider, dot, frame, icon, progress, segments, separator, soft, surface, text, textWidth, wrapText } from './ui/kit'
+import { BADGE_H, BAR_H, TAB_UNDERLINE_H, badge, check, disc, divider, dot, frame, icon, progress, segments, separator, soft, surface, tabUnderline, text, textWidth, wrapText } from './ui/kit'
 import type { Role, Tone } from './ui/tokens'
 import { ACCENT, BLOCKED, DONE, MUTED, RADIUS, SIZE, SPACE, WEIGHT, fillClass, toneOf } from './ui/tokens'
 
@@ -88,6 +88,21 @@ const ROW_GAP = 10
 
 export type Drawing = { source: string; height: number }
 
+// ---------- the tabs ----------
+
+export { TAB_UNDERLINE_H }
+/** The size the app draws a Button's label at, about; a tab's underline is measured with it. */
+const TAB_LABEL_SIZE = 13
+
+/** The width of the underline under a tab's label. */
+export const tabWidth = (label: string): number => Math.ceil(textWidth(label, TAB_LABEL_SIZE))
+
+/** The underline of one tab, as wide as its label: a primary bar when active, an empty drawing of the same size when not. */
+export const tabUnderlineSvg = (W: number, isActive: boolean): string => frame(W, TAB_UNDERLINE_H, tabUnderline(0, 0, W, isActive))
+
+/** The hairline under the row of tabs. */
+export const separatorSvg = (W: number): string => frame(W, 1, separator(0, 0, W))
+
 // ---------- the hero ----------
 
 export type Hero = {
@@ -162,7 +177,7 @@ export const heroSvg = (W: number, h: Hero): Drawing => {
 export type Metric = { value: number | string; label: string; color?: string }
 export const METRICS_H = 62
 
-/** A row of compact tiles: the number, then a dot in the metric's tone and its label. */
+/** A row of tiles on the card surface: a small uppercase label over the number; the number in the metric's tone when it has a colour. */
 export const metricsSvg = (W: number, list: Metric[]): string => {
   const gap = SPACE[2]
   const count = Math.max(1, list.length)
@@ -170,11 +185,11 @@ export const metricsSvg = (W: number, list: Metric[]): string => {
   const body = list
     .map((m, i) => {
       const x = i * (tw + gap)
+      const tone = toneOf(m.color)
       return (
-        surface(x, 0, tw, METRICS_H, { variant: 'muted' }) +
-        text(x + ROW_PAD, 28, String(m.value), { size: SIZE.lg, weight: WEIGHT.semibold, tracking: -0.2, isTabular: true, maxW: tw - ROW_PAD * 2 }) +
-        dot(x + ROW_PAD + 3, 45, toneOf(m.color), false, { r: 3 }) +
-        text(x + ROW_PAD + 12, 49, m.label, { size: SIZE.sm, role: 'mutedForeground', maxW: tw - ROW_PAD * 2 - 12 })
+        surface(x, 0, tw, METRICS_H) +
+        text(x + ROW_PAD, 22, m.label.toUpperCase(), { size: SIZE.xs, weight: WEIGHT.medium, role: 'mutedForeground', tracking: 0.6, maxW: tw - ROW_PAD * 2 }) +
+        text(x + ROW_PAD, 47, String(m.value), { size: SIZE.xl, weight: WEIGHT.semibold, tracking: -0.3, isTabular: true, maxW: tw - ROW_PAD * 2, ...(tone === 'neutral' ? {} : { role: tone }) })
       )
     })
     .join('')

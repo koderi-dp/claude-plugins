@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { BLOCKED, DONE, OVERVIEW_ROWS, ROWS_SHOWN, RUNNING } from './pane'
-import { CAPTION_H, bandSvg, bandText } from './draw'
+import { CAPTION_H, TAB_UNDERLINE_H, bandSvg, bandText, tabWidth } from './draw'
 import { BAND_COLORS, SEGMENT_COLORS, bandOf } from './status'
 
 const MAIN = '/p/main'
@@ -132,8 +132,8 @@ const IDLE = backlogOf([
   ...Array.from({ length: 2 }, (_, i) => item(`o${i + 1}`, `Older ${i + 1}`, 'merged', { pr: `https://x/pull/${10 + i}`, updatedAt: '2026-10-01T00:00:00Z' })),
 ])
 
-/** The drawings' alts, in order; the caption lines (the usage line, the footer) are apart, found by their height. */
-const alts = async (ui: Mounted) => (await ui.findAll({ type: 'Svg' })).filter(s => s.props['height'] !== CAPTION_H).map(s => String(s.props['alt']))
+/** The drawings' alts, in order; the caption lines (the usage line, the footer) are apart, found by their height, and the tabs' underlines and hairline carry no alt. */
+const alts = async (ui: Mounted) => (await ui.findAll({ type: 'Svg' })).filter(s => s.props['height'] !== CAPTION_H && s.props['alt'] !== '').map(s => String(s.props['alt']))
 const captionOf = async (ui: Mounted, which: 'usage' | 'footer') => (await ui.findAll({ type: 'Svg' })).filter(s => s.props['height'] === CAPTION_H).map(s => String(s.props['alt'])).find(a => (which === 'usage' ? / elapsed · /.test(a) : a.endsWith('/pipeline status')))
 const svgOf = async (ui: Mounted, alt: RegExp) => String((await ui.findAll({ type: 'Svg' })).find(s => alt.test(String(s.props['alt'])))?.props['source'])
 /** The drawn item rows (`p1: title · meta · tag`) by their alt. */
@@ -267,8 +267,19 @@ test('desktop idle Overview: the hero says nothing runs and why, three metrics, 
   expect(hero).toContain('Nothing running right now')
   expect(hero).toContain('Awaiting ready work')
   expect(hero).toContain('0 active agents')
-  // Three metrics in one drawing.
-  expect(a[1]).toBe('28 Inbox, 0 Ready, 5 Merged this week')
+  // Four metrics in one drawing: an uppercase label over each number, Merged's number in green; the alt says the week.
+  expect(a[1]).toBe('0 Active, 0 Ready, 28 Inbox, 5 Merged this week')
+  const tiles = await svgOf(ui, /^0 Active, /)
+  expect([...tiles.matchAll(/class="s"[^>]*letter-spacing="0.6">([^<]*)</g)].map(m => m[1])).toEqual(['ACTIVE', 'READY', 'INBOX', 'MERGED'])
+  expect(tiles).toMatch(/class="t"[^>]*font-size="20"[^>]*>28</)
+  expect(tiles).toMatch(/class="f-success"[^>]*font-size="20"[^>]*>5</)
+  // The tabs: three Buttons, a primary underline under the active one only, sized from its label, and one hairline under the row.
+  const lines = (await ui.findAll({ type: 'Svg' })).filter(s => s.props['height'] === TAB_UNDERLINE_H)
+  expect(lines).toHaveLength(3)
+  expect(lines.map(s => String(s.props['source']).includes('class="f-primary"'))).toEqual([true, false, false])
+  expect(lines.map(s => s.props['width'])).toEqual(['Overview', 'Queue · 28', 'History'].map(tabWidth))
+  expect((await ui.find({ key: 'tab-queue' }))?.props['label']).toBe('Queue · 28')
+  expect((await ui.findAll({ type: 'Svg' })).filter(s => s.props['height'] === 1 && String(s.props['source']).includes('class="f-border"'))).toHaveLength(1)
   // Needs specification: three drawn rows (the mockup's .item-row), the slug dropped, the reason once as the amber tag,
   // each with a chevron Button beside it, then the count of the rest.
   expect(await ui.find({ type: 'Text', text: /^Needs specification/ })).toBeDefined()
@@ -309,6 +320,7 @@ test('desktop idle Overview: the hero says nothing runs and why, three metrics, 
   expect((await ui.find({ key: 'goto-queue' }))?.props['label']).toBe('View queue →')
   await ui.press({ key: 'goto-history' })
   expect((await ui.find({ key: 'tab-history' }))?.props['dimColor']).toBe(false)
+  expect((await ui.findAll({ type: 'Svg' })).filter(s => s.props['height'] === TAB_UNDERLINE_H).map(s => String(s.props['source']).includes('class="f-primary"'))).toEqual([false, false, true])
   expect((await alts(ui))[0]).toBe('7 items merged: all time · 5 this week')
   await ui.press({ key: 'tab-overview' })
   expect((await alts(ui))[0]).toMatch(/^PIPELINE IDLE/)
@@ -663,7 +675,7 @@ test('a migrated project: imported items carry the migration date, so the Histor
   world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([...imported, built, item('q1', 'Open', 'inbox')]) })
   await start($ as never)
   const ui = await mount($ as never, 'desktop')
-  expect((await alts(ui))[1]).toBe('1 Inbox, 0 Ready, 1 Merged this week')
+  expect((await alts(ui))[1]).toBe('0 Active, 0 Ready, 1 Inbox, 1 Merged this week')
   await ui.press({ key: 'tab-history' })
   expect((await alts(ui))[0]).toBe('34 items merged: all time · 1 this week')
   const links = await ui.findAll({ type: 'Link' })

@@ -5,7 +5,7 @@
 import type { EngineInterface, RenderElement } from 'claude-code'
 
 import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, TaskReview, TasksMode, View } from '../types'
-import { ACCENT, AGENT_CARD_H, BLOCKED, CAPTION_H, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TASK_BAR_H, agentCardSvg, captionSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, taskBarSvg, taskRowSvg, totals } from './draw'
+import { ACCENT, AGENT_CARD_H, BLOCKED, CAPTION_H, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TAB_UNDERLINE_H, TASK_BAR_H, agentCardSvg, captionSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, separatorSvg, sessionRowSvg, tabUnderlineSvg, tabWidth, taskBarSvg, taskRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
 import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from './status'
@@ -256,14 +256,35 @@ function renderDesktop(ui: Ui, d: PanelInput): Element {
         </Text>
         <Text dimColor>{line([d.project, d.branch])}</Text>
       </Box>
-      <Box flexDirection="row" gap={2}>
-        {tabs.map(t => (
-          <Button key={`tab-${t.view}`} plain dimColor={d.panel.view !== t.view} label={t.label} onPress={() => d.onView(t.view)} />
-        ))}
-      </Box>
+      {tabsRow(u, tabs, d.panel.view, d.onView, W)}
       {notices.length ? <Box flexDirection="column">{notices}</Box> : null}
       {view}
       <Svg key="caption-footer" source={captionSvg(W, footer, FOOTER_COMMAND, true)} alt={line([footer, FOOTER_COMMAND])} width={W} height={CAPTION_H} />
+    </Box>
+  )
+}
+
+/**
+ * The tabs: each a Button (a drawing cannot be pressed) over its own underline, a primary bar under the active one,
+ * and one hairline under the row. The underline is measured from the label and sits in the tab's own column, so it
+ * stays under its Button.
+ */
+function tabsRow(u: Desk, tabs: { view: View; label: string }[], active: View, onView: (view: View) => void, W: number): Element {
+  const { Box, Button, Svg } = u
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="row" gap={2}>
+        {tabs.map(t => {
+          const w = tabWidth(t.label)
+          return (
+            <Box key={`tab-box-${t.view}`} flexDirection="column" alignItems="flex-start">
+              <Button key={`tab-${t.view}`} plain dimColor={active !== t.view} label={t.label} onPress={() => onView(t.view)} />
+              <Svg source={tabUnderlineSvg(w, active === t.view)} alt="" width={w} height={TAB_UNDERLINE_H} />
+            </Box>
+          )
+        })}
+      </Box>
+      <Svg source={separatorSvg(W)} alt="" width={W} height={1} />
     </Box>
   )
 }
@@ -358,10 +379,12 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
     hint: `${d.agents.filter(a => a.status === 'running').length} active agents`,
   }
   const drawn = heroSvg(W, hero)
-  const metrics: Metric[] = [
+  // Merged counts this week; the tile says Merged, the alt says the rest.
+  const metrics: (Metric & { alt?: string })[] = [
+    { value: items.filter(i => ACTIVE.includes(i.status)).length, label: 'Active' },
+    { value: ready.length, label: 'Ready' },
     { value: inbox.length, label: 'Inbox' },
-    { value: ready.length, label: 'Ready', color: ACCENT },
-    { value: merged.length, label: 'Merged this week', color: DONE },
+    { value: merged.length, label: 'Merged', color: DONE, alt: 'Merged this week' },
   ]
   const list = ready.length ? ready : inbox
   const toQueue = (id: string | null) => () => {
@@ -381,7 +404,7 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
     <Box flexDirection="column">
       <Svg source={drawn.source} alt={`${hero.state}: ${hero.headline}. ${hero.line}`} width={W} height={drawn.height} />
       <Box marginTop={1}>
-        <Svg source={metricsSvg(W, metrics)} alt={metrics.map(m => `${m.value} ${m.label}`).join(', ')} width={W} height={METRICS_H} />
+        <Svg source={metricsSvg(W, metrics)} alt={metrics.map(m => `${m.value} ${m.alt ?? m.label}`).join(', ')} width={W} height={METRICS_H} />
       </Box>
       {heading(u, ready.length ? 'Up next' : 'Needs specification', undefined, { key: 'goto-queue', label: 'View queue →', onPress: toQueue(null) })}
       {rows.length ? card(u, [...rows, ...(list.length > OVERVIEW_ROWS ? [<Text key="more-items" dimColor>{`and ${list.length - OVERVIEW_ROWS} more in the queue`}</Text>] : [])]) : <Text dimColor>Nothing waiting. Add work with /pipeline add.</Text>}

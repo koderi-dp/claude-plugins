@@ -1,12 +1,14 @@
 // The kit sheet: every primitive of hooks/ui/kit.ts and every drawing of hooks/draw.ts on one page, each tone and
 // state, so the look is checked in one place and a new section is compared against it. Shot in both colour schemes.
 
+import { TAB_UNDERLINE_H, separatorSvg, tabUnderlineSvg, tabWidth } from '../hooks/draw'
+import { Box, Button, Svg, htmlOf } from './html'
 import { AGENT_CARD_H, BAND_COMPACT_H, BAND_H, CAPTION_H, MERGED_ROW_H, METRICS_H, ROW_H, SESSION_ROW_H, TASK_BAR_H, agentCardSvg, bandSvg, captionSvg, heroSvg, idleStripSvg, itemRowSvg, mergedRowSvg, metricsSvg, sessionRowSvg, taskBarSvg, taskRowSvg } from '../hooks/draw'
 import type { Band, TagKind, TaskRow } from '../hooks/status'
 import { BAND_COLORS } from '../hooks/status'
 import { BADGE_H, ICON_NAMES, badge, check, disc, divider, dot, frame, icon, progress, segments, separator, soft, surface, text } from '../hooks/ui/kit'
 import type { Role } from '../hooks/ui/tokens'
-import { ACCENT, DONE, RADIUS, SIZE, TONES, WEIGHT } from '../hooks/ui/tokens'
+import { DONE, RADIUS, SIZE, TONES, WEIGHT } from '../hooks/ui/tokens'
 
 const label = (s: string): string => `<p class="label">${s}</p>`
 const block = (W: number, H: number, source: string): string => `<div class="svg" style="width:${W}px;height:${H}px">${source}</div>`
@@ -87,6 +89,24 @@ export const kitSheet = (W: number): string => {
   out.push(drawn(W, 6, segments(0, 0, W, [{ tone: 'success' }, { tone: 'primary', isStriped: true }, { tone: 'warning' }, { tone: 'destructive' }, { tone: 'track' }])))
   out.push(block(W, TASK_BAR_H, taskBarSvg(W, ['accepted', 'accepted', 'current', 'blocked', 'pending'])))
 
+  out.push(label('Tabs · a Button over its underline, one hairline under the row'))
+  const tabs = ['Overview', 'Queue · 38', 'History']
+  out.push(
+    htmlOf(
+      Box({
+        flexDirection: 'column',
+        children: [
+          Box({
+            flexDirection: 'row',
+            gap: 2,
+            children: tabs.map((t, i) => Box({ flexDirection: 'column', alignItems: 'flex-start', children: [Button({ plain: true, dimColor: i !== 0, label: t }), Svg({ source: tabUnderlineSvg(tabWidth(t), i === 0), alt: '', width: tabWidth(t), height: TAB_UNDERLINE_H })] })),
+          }),
+          Svg({ source: separatorSvg(W), alt: '', width: W, height: 1 }),
+        ],
+      }),
+    ),
+  )
+
   out.push(label('Hero · idle, running, history'))
   for (const hero of [
     heroSvg(W, { kind: 'idle', state: 'PIPELINE IDLE', headline: 'Nothing running right now', line: 'There are 27 items in your inbox and 1 is ready to build. Run /pipeline next to start the first.', chip: 'Ready to build', hint: '0 active agents' }),
@@ -113,9 +133,10 @@ export const kitSheet = (W: number): string => {
       W,
       METRICS_H,
       metricsSvg(W, [
+        { value: 0, label: 'Active' },
+        { value: 1, label: 'Ready' },
         { value: 27, label: 'Inbox' },
-        { value: 1, label: 'Ready', color: ACCENT },
-        { value: 5, label: 'Merged this week', color: DONE },
+        { value: 5, label: 'Merged', color: DONE },
       ]),
     ),
   )

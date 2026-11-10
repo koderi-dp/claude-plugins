@@ -114,6 +114,10 @@ export const disc = (x: number, y: number, r: number, tone: Tone | 'plain', isSt
   return `<circle cx="${n(x)}" cy="${n(y)}" r="${n(r)}" fill-opacity="0.14" stroke-opacity="${isStrong ? 1 : 0.5}" class="${fillClass(role)} ${strokeClass(role)}"/>`
 }
 
+/** The bar under a tab's label, `TAB_UNDERLINE_H` tall from `y`: the primary colour under the active tab, nothing under the others. */
+export const TAB_UNDERLINE_H = 3
+export const tabUnderline = (x: number, y: number, w: number, isActive: boolean): string => (isActive ? `<rect x="${n(x)}" y="${n(y + 1)}" width="${n(Math.max(0, w))}" height="2" rx="1" class="${fillClass('primary')}"/>` : '')
+
 // ---------- the dot ----------
 
 /** A disc in a tone at its centre, pulsing when live; hollow for what is idle. */
