@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Item, Ledger } from '../types'
 
-import { emptyLedger, ledgerText, mergeLedger } from './ledger'
+import { emptyLedger, ledgerText, mergeLedger, repairResume, shapeSet } from './ledger'
 
 const NOW = '2026-11-05T10:00:00.000Z'
 const item = (id: string, status: Item['status'], rest: Partial<Item> = {}): Item => ({ id, title: `Item ${id}`, status, ...rest })
@@ -123,4 +123,30 @@ test('close ends the dispatch a brief call opened, and falls back to the last on
   expect(again.tasks[0]!.dispatches[1]!.result).toBe('fix round 1')
   // No dispatch at all: nothing to close, nothing invented.
   expect(mergeLedger(emptyLedger('p1'), { tasks: [{ n: 1, close: { result: 'x' } }] }, NOW).tasks[0]!.dispatches).toEqual([])
+})
+
+test('0.3.5: shapeSet keeps what was plainly meant and names what is wrong', () => {
+  const cur = { resume: { task: 4, state: 'gate run', lastVerified: '8bd83a6', at: NOW }, tasks: [] }
+  expect(shapeSet({ resume: 'merged; review stack up' }, cur).set.resume).toEqual({ task: 4, state: 'merged; review stack up', lastVerified: '8bd83a6' })
+  expect(shapeSet({ final: 'approved', blockers: 'CI red', tasks: { n: 2, status: 'accepted' } }, cur).set).toEqual({ final: { verdict: 'approved' }, blockers: ['CI red'], tasks: [{ n: 2, status: 'accepted' }] })
+  expect(shapeSet({ resume: 7, tasks: 'x', rulings: ['a'], blockers: [1], final: 3 }, cur).problems).toEqual([
+    'resume is { task, state, lastVerified? } (or text, taken as the state)',
+    'final is { verdict, gate?, tokens?, findings? } (or text, taken as the verdict)',
+    'tasks is a list of objects',
+    'rulings is a list of objects',
+    'blockers is a list of text',
+  ])
+  expect(shapeSet({ tasks: [{ status: 'accepted' }] }, cur).problems).toEqual(['every task entry needs its number n'])
+  expect(shapeSet({ resume: { task: 2, state: 'planned' }, note: 'x' }, cur)).toEqual({ set: { resume: { task: 2, state: 'planned' }, note: 'x' }, problems: [] })
+})
+
+test('0.3.5: a resume saved from text one character per key reads as that text; null removes another key', () => {
+  const broken = { 0: 'm', 1: 'e', 2: 'r', 3: 'g', 4: 'e', 5: 'd', at: NOW }
+  expect(repairResume(broken, 4)).toEqual({ task: 4, state: 'merged', at: NOW })
+  expect(repairResume({ task: 1, state: 'planned', at: NOW }, 4)).toEqual({ task: 1, state: 'planned', at: NOW })
+  expect(repairResume('text', 4)).toBeUndefined()
+  const withNote = mergeLedger(emptyLedger('p1'), { reviewStack: { url: 'x' }, note: 'old' }, NOW)
+  const cleaned = mergeLedger(withNote, { note: null }, NOW)
+  expect('note' in cleaned).toBe(false)
+  expect(cleaned['reviewStack']).toEqual({ url: 'x' })
 })

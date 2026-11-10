@@ -909,3 +909,24 @@ test('close from inside the item worktree leaves that worktree and says so; a ma
   expect(runs.some(r => r[3] === 'worktree' && r[4] === 'remove')).toBe(false)
   void files
 })
+
+test('0.3.5: ledger given text for resume keeps it as the state; a wrong shape is refused and nothing is written; a broken file is repaired on the next write', async ($, on) => {
+  const { files, writes } = world(on, { [CONFIG]: VALID_CONFIG })
+  await call($, { action: 'add', item: ITEM })
+  await call($, { action: 'ledger', item: 'p1', set: { tasks: [{ n: 1, title: 'A', status: 'accepted' }], resume: { task: 1, state: 'task 1 accepted', lastVerified: 'abc1234' } } })
+  await call($, { action: 'ledger', item: 'p1', set: { resume: 'merged; review stack up' } })
+  const file = `${DIR}/ledgers/p1.json`
+  expect(JSON.parse(files.get(file)!).resume).toMatchObject({ task: 1, state: 'merged; review stack up', lastVerified: 'abc1234' })
+  const before = writes.length
+  expect(text(await call($, { action: 'ledger', item: 'p1', set: { tasks: 'all done' } }))).toBe('refused: ledger p1 not written: tasks is a list of objects')
+  expect(writes.length).toBe(before)
+  // What 0.3.4 and earlier left on disk: the text spread one character per key.
+  const broken = JSON.parse(files.get(file)!)
+  broken.resume = { 0: 'o', 1: 'k', at: '2026-11-10T00:00:00.000Z' }
+  files.set(file, JSON.stringify(broken))
+  expect(text(await call($, { action: 'status', id: 'p1' }))).toContain('resume: task 1/1 · ok')
+  await call($, { action: 'ledger', item: 'p1', set: { note: 'x' } })
+  expect(JSON.parse(files.get(file)!).resume).toMatchObject({ task: 1, state: 'ok' })
+  await call($, { action: 'ledger', item: 'p1', set: { note: null } })
+  expect('note' in JSON.parse(files.get(file)!)).toBe(false)
+})

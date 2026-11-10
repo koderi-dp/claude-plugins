@@ -8,7 +8,7 @@ import { compactSignal, itemState, ledgerLine, slimGet } from './answers'
 import { cleanList, planOf } from './clean'
 import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, serialize } from './files'
-import { ledgerText, mergeLedger, emptyLedger } from './ledger'
+import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
 import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
 import { PLAN_FORMAT } from './templates'
 import type { BriefKind } from './templates'
@@ -57,7 +57,7 @@ const TOOL_DESCRIPTION =
   '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
   '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. ' +
   '`close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is (also from inside the item\'s worktree): the main checkout on mainBranch and pulled, the item merged, what config.retain lets go removed, docs/pipeline committed on mainBranch and pushed unless config.pushMain is false, the worktree and local branch removed (a worktree this session is inside is left and removed by a later begin or close). ' +
-  '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?, final?, blockers?, pr?, branch?, worktree?, base? } } merges anything else into the ledger. ' +
+  '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate? }, blockers?: [text], pr?, branch?, worktree?, base?, <any other key>?: value | null } } merges anything else into the ledger: text for resume is taken as its state, a wrong shape is refused and nothing is written, and null removes one of the other keys. ' +
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain says may go and deletes nothing. ' +
   'A file that does not parse is refused with its line and left alone.'
 
@@ -399,7 +399,9 @@ async function loadLedger($: EngineInterface, found: string, id: string): Promis
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const set = parsed as unknown as LedgerSet
     const lists = { tasks: Array.isArray(set.tasks) ? set.tasks : [], rulings: Array.isArray(set.rulings) ? set.rulings : [], blockers: Array.isArray(set.blockers) ? set.blockers.filter((b): b is string => typeof b === 'string') : [] }
-    return mergeLedger(emptyLedger(id), { ...set, ...lists }, await nowIso($))
+    // A resume block an earlier version saved from text, one character per key, reads as that text again.
+    const resume = repairResume(set.resume, Math.max(1, lists.tasks.length))
+    return mergeLedger(emptyLedger(id), { ...set, ...lists, ...(resume ? { resume } : {}) }, await nowIso($))
   } catch {
     return null
   }
@@ -582,7 +584,7 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
     if (!item) return `no item ${e.id}`
     const ledger = await readLedger($, found, item.id)
     if (ledger.error) return `${[item.id, item.title, item.status].join(' · ')}\n${ledger.error}`
-    return ledger.value ? ledgerText(ledger.value, item) : `${[item.id, item.title, item.status].join(' · ')}\nno ledger`
+    return ledger.value ? ledgerText((await loadLedger($, found, item.id)) ?? ledger.value, item) : `${[item.id, item.title, item.status].join(' · ')}\nno ledger`
   }
   if (e.action === 'get') {
     const r = loaded ? await judgeAll($, found, loaded) : {}
@@ -672,7 +674,11 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       if (onDisk.value && (linked === null || linked === undefined)) {
         throw new Refused(`${ledgerFile(id)} exists but ${id} has no ledger link: a stale file of an earlier item; move or delete it, or link it with update { id: "${id}", set: { ledger: "${ledgerFile(id)}" } }`)
       }
-      const merged = mergeLedger(onDisk.value ?? emptyLedger(id), set, now)
+      // A wrong shape is refused before anything is written; what was plainly meant (text for the resume state) is kept.
+      const base = onDisk.value ?? emptyLedger(id)
+      const shaped = shapeSet(set as Record<string, unknown>, { resume: repairResume(base.resume, Math.max(1, base.tasks?.length ?? 1)), tasks: base.tasks ?? [] })
+      if (shaped.problems.length) throw new Refused(`ledger ${id} not written: ${shaped.problems.join('; ')}`)
+      const merged = mergeLedger({ ...base, ...(base.resume ? { resume: repairResume(base.resume, Math.max(1, base.tasks?.length ?? 1))! } : {}) }, shaped.set, now)
       await $.fs.write(p.ledger(id), serialize(merged))
       self.memo.delete(`ledger:${id}`)
       // The item points at its ledger, and carries the branch, PR and plan the ledger names.

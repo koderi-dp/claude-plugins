@@ -20,6 +20,56 @@ export type LedgerSet = {
 /** The fields the merge handles itself; anything else in `set` is copied over as given. */
 const HANDLED = new Set(['item', 'tasks', 'rulings', 'resume', 'final', 'blockers', 'tokens'])
 
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/** Whether an object is what spreading a string leaves behind: only the keys 0, 1, 2… each holding one character. */
+const isSpreadText = (v: Record<string, unknown>): boolean => {
+  const keys = Object.keys(v).filter(k => k !== 'at')
+  return keys.length > 0 && keys.every((k, i) => k === String(i) && typeof v[k] === 'string' && (v[k] as string).length === 1)
+}
+
+/**
+ * A ledger `set` in the shapes the merge expects, with what a caller plainly meant kept: text for `resume` is its
+ * state, text for `final` its verdict, one string for `blockers` a list of one, one task or ruling object a list
+ * of one. Anything else of the wrong type is named in `problems` and nothing is written.
+ */
+export function shapeSet(set: Record<string, unknown>, current: Pick<Ledger, 'resume' | 'tasks'>): { set: LedgerSet; problems: string[] } {
+  const out: Record<string, unknown> = { ...set }
+  const problems: string[] = []
+  if ('resume' in set && set['resume'] !== undefined) {
+    const r = set['resume']
+    if (typeof r === 'string') out['resume'] = { task: current.resume?.task ?? Math.max(1, current.tasks?.length ?? 1), state: r, ...(current.resume?.lastVerified ? { lastVerified: current.resume.lastVerified } : {}) }
+    else if (!isRecord(r) || typeof r['state'] !== 'string') problems.push('resume is { task, state, lastVerified? } (or text, taken as the state)')
+    else if (typeof r['task'] !== 'number') out['resume'] = { ...r, task: Number(r['task']) || (current.resume?.task ?? 1) }
+  }
+  if ('final' in set && set['final'] !== undefined && set['final'] !== null) {
+    const f = set['final']
+    if (typeof f === 'string') out['final'] = { verdict: f }
+    else if (!isRecord(f)) problems.push('final is { verdict, gate?, tokens?, findings? } (or text, taken as the verdict)')
+  }
+  for (const key of ['tasks', 'rulings'] as const) {
+    const v = set[key]
+    if (v === undefined) continue
+    if (isRecord(v)) out[key] = [v]
+    else if (!Array.isArray(v) || v.some(x => !isRecord(x))) problems.push(`${key} is a list of objects`)
+  }
+  if (Array.isArray(out['tasks']) && (out['tasks'] as Record<string, unknown>[]).some(t => typeof t['n'] !== 'number')) problems.push('every task entry needs its number n')
+  if ('blockers' in set && set['blockers'] !== undefined) {
+    const b = set['blockers']
+    if (typeof b === 'string') out['blockers'] = [b]
+    else if (!Array.isArray(b) || b.some(x => typeof x !== 'string')) problems.push('blockers is a list of text')
+  }
+  return { set: out as LedgerSet, problems }
+}
+
+/** A resume block an earlier version wrote from text, one character per key: the text again, as its state. */
+export function repairResume(resume: unknown, fallbackTask: number): Resume | undefined {
+  if (!isRecord(resume)) return undefined
+  if (!isSpreadText(resume)) return resume as unknown as Resume
+  const text = Object.keys(resume).filter(k => k !== 'at').map(k => resume[k]).join('')
+  return { task: fallbackTask, state: text, at: typeof resume['at'] === 'string' ? (resume['at'] as string) : '' }
+}
+
 /** A ledger with nothing recorded yet. */
 export function emptyLedger(item: string): Ledger {
   return { item, pr: null, tasks: [], rulings: [], blockers: [], final: null, tokens: 0 }
@@ -78,11 +128,16 @@ export function mergeLedger(current: Ledger, set: LedgerSet, now: string): Ledge
     out.rulings.push({ ...rest, n: out.rulings.length + 1 })
   }
 
-  if (set.resume) out.resume = { ...set.resume, at: set.resume.at ?? now }
+  if (set.resume) out.resume = { ...set.resume, at: set.resume.at || now }
   if (set.final !== undefined) out.final = set.final
   for (const b of set.blockers ?? []) if (!out.blockers.includes(b)) out.blockers.push(b)
 
-  for (const [k, v] of Object.entries(set)) if (!HANDLED.has(k) && v !== undefined) out[k] = v
+  // Any other field is copied over as given; null removes it, so a wrong key can be taken out again.
+  for (const [k, v] of Object.entries(set)) {
+    if (HANDLED.has(k) || v === undefined) continue
+    if (v === null && k !== 'pr') delete out[k]
+    else out[k] = v
+  }
 
   out.tokens = totalTokens(out)
   return out
