@@ -19,23 +19,47 @@ export type Role =
   | 'primarySurface'
   | 'primaryBorder'
 
-/** Each role's value per scheme. `background` is the app's own and is never painted; it is here for the preview. */
+/**
+ * Each role's colour per scheme. The app paints the panel's background, and its grey is not ours to know, so no
+ * drawing paints one: every surface, border and track is the colour here at the alpha in `ALPHA`, an overlay that
+ * darkens a light background and lightens a dark one. The text roles and the state tones are opaque, tuned for a
+ * mid-dark grey, not for black. `background` is the app's own and is never painted; it is here for the preview.
+ */
 export const COLORS: Record<Role, { light: string; dark: string }> = {
-  background: { light: '#ffffff', dark: '#0a0a0a' },
-  card: { light: '#ffffff', dark: '#171717' },
-  muted: { light: '#f5f5f5', dark: '#1f1f1f' },
-  border: { light: '#e5e5e5', dark: '#2e2e2e' },
+  background: { light: '#faf9f7', dark: '#1f1f22' },
+  card: { light: '#000000', dark: '#ffffff' },
+  muted: { light: '#000000', dark: '#ffffff' },
+  border: { light: '#000000', dark: '#ffffff' },
   // The track of a bar and a pending segment.
-  input: { light: '#e0e0e0', dark: '#3a3a3a' },
+  input: { light: '#000000', dark: '#ffffff' },
   foreground: { light: '#0a0a0a', dark: '#fafafa' },
-  mutedForeground: { light: '#636363', dark: '#a1a1a1' },
-  subtle: { light: '#8a8a8a', dark: '#737373' },
+  mutedForeground: { light: '#5e5e5e', dark: '#b0b0b0' },
+  subtle: { light: '#858585', dark: '#8c8c8c' },
   primary: { light: '#6a4bd6', dark: '#af99ff' },
   success: { light: '#178245', dark: '#78dbac' },
   warning: { light: '#b0590a', dark: '#ebba79' },
   destructive: { light: '#d42f38', dark: '#f68b91' },
-  primarySurface: { light: '#f7f5ff', dark: '#1c1927' },
-  primaryBorder: { light: '#ddd6fa', dark: '#3b3257' },
+  primarySurface: { light: '#6a4bd6', dark: '#af99ff' },
+  primaryBorder: { light: '#6a4bd6', dark: '#af99ff' },
+}
+
+/** The alpha of the roles that are overlays; a role not here is opaque. */
+export const ALPHA: Partial<Record<Role, { light: number; dark: number }>> = {
+  card: { light: 0.025, dark: 0.04 },
+  muted: { light: 0.045, dark: 0.06 },
+  border: { light: 0.1, dark: 0.11 },
+  input: { light: 0.1, dark: 0.12 },
+  primarySurface: { light: 0.07, dark: 0.09 },
+  primaryBorder: { light: 0.3, dark: 0.32 },
+}
+
+/** A role as a CSS colour, with its alpha: for the preview page, which is HTML. */
+export const cssOf = (role: Role, scheme: 'light' | 'dark'): string => {
+  const hex = COLORS[role][scheme]
+  const alpha = ALPHA[role]?.[scheme]
+  if (alpha === undefined) return hex
+  const channel = (at: number) => parseInt(hex.slice(at, at + 2), 16)
+  return `rgba(${channel(1)},${channel(3)},${channel(5)},${alpha})`
 }
 
 export const ROLES = Object.keys(COLORS) as Role[]
@@ -57,10 +81,10 @@ export const BLOCKED = COLORS.warning.dark
 export const MUTED = COLORS.mutedForeground.dark
 export const FAILED = COLORS.destructive.dark
 /** The current task's card border, and the hairline. */
-export const CARD_BORDER = COLORS.primaryBorder.dark
-export const LINE = COLORS.border.dark
-/** A pending segment as a Text colour. */
-export const TRACK = COLORS.input.dark
+export const CARD_BORDER = cssOf('primaryBorder', 'dark')
+export const LINE = cssOf('border', 'dark')
+/** A pending segment as a Text colour: the track is an overlay, so a Text takes the subtle grey. */
+export const TRACK = COLORS.subtle.dark
 
 /** The tone a colour handed in by name (`ACCENT`, `DONE`, …) stands for; neutral for anything else. */
 export const toneOf = (color: string | undefined): Tone => (color === ACCENT ? 'primary' : color === DONE ? 'success' : color === BLOCKED ? 'warning' : color === FAILED ? 'destructive' : 'neutral')
@@ -92,7 +116,9 @@ const LIVE_CSS = `.live{animation:p 2.2s ease-in-out infinite}@keyframes p{50%{o
 const MONO_CSS = `.mono{font-family:${MONO}}`
 
 const sheet = (rules: Rule[], hasLive: boolean, hasMono: boolean): string => {
-  const css = (scheme: 'light' | 'dark') => rules.map(r => `.${r.cls}{${r.prop}:${COLORS[r.role][scheme]}}`).join('')
+  // Alpha is `fill-opacity` / `stroke-opacity` beside the colour: plain SVG, read by every renderer of an SVG image.
+  const paint = (r: Rule, scheme: 'light' | 'dark') => `${r.prop}:${COLORS[r.role][scheme]}${ALPHA[r.role] ? `;${r.prop}-opacity:${ALPHA[r.role]![scheme]}` : ''}`
+  const css = (scheme: 'light' | 'dark') => rules.map(r => `.${r.cls}{${paint(r, scheme)}}`).join('')
   return `<style>${BASE_CSS}${css('light')}@media (prefers-color-scheme: dark){${css('dark')}}${hasMono ? MONO_CSS : ''}${hasLive ? LIVE_CSS : ''}</style>`
 }
 

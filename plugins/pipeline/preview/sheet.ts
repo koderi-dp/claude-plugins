@@ -23,14 +23,14 @@ const band = (over: Partial<Band>): Band => ({ id: 'p72', title: 'Grid track int
 export const kitSheet = (W: number): string => {
   const out: string[] = []
 
-  out.push(label('Type · five sizes, three greys, four tones'))
+  out.push(label('Type · the sizes, three greys, four tones'))
   const sizes = Object.entries(SIZE)
   out.push(
     drawn(
       W,
       sizes.length * 24 + 4,
       sizes
-        .map(([name, size], i) => text(0, 18 + i * 24, `${name} ${size}`, { size, role: 'subtle' }) + text(64, 18 + i * 24, 'Grid track interaction', { size, weight: WEIGHT.regular }) + text(260, 18 + i * 24, 'medium', { size, weight: WEIGHT.medium }) + text(340, 18 + i * 24, 'semibold', { size, weight: WEIGHT.semibold }))
+        .map(([name, size], i) => text(0, 18 + i * 24, `${name} ${size}`, { size, role: 'subtle' }) + text(64, 18 + i * 24, 'Grid track interaction', { size, weight: WEIGHT.regular }) + text(310, 18 + i * 24, 'medium', { size, weight: WEIGHT.medium }) + text(410, 18 + i * 24, 'semibold', { size, weight: WEIGHT.semibold }))
         .join(''),
     ),
   )
@@ -167,7 +167,7 @@ export const kitSheet = (W: number): string => {
   out.push(block(W, SESSION_ROW_H, sessionRowSvg(W, { title: 'catalo', meta: 'idle', isLive: false, isStale: false, isDim: true })))
   out.push(block(W, SESSION_ROW_H, sessionRowSvg(W, { title: 'p14 · Export', meta: 'p14 · stale', isLive: true, isStale: true, isLast: true })))
 
-  out.push(label('Task rows · done, current with an agent, current in a fix round, blocked, pending'))
+  out.push(label('Task rows · done, current with an agent, current in a fix round, blocked, a second one in progress, pending'))
   const rows: TaskRow[] = [
     task({ n: 1, kind: 'done', eyebrow: '01 · COMPLETED', badge: 'Accepted', badgeKind: 'done', title: 'Grid line model and track-resize gesture', sub: 'Implemented by Opus 5.5 · 4m 34s · review skipped (taskReview off)' }),
     task({ n: 2, kind: 'current', eyebrow: '02 · CURRENT TASK', badge: '● Running', badgeKind: 'running', title: 'Canvas: drawn grid, draggable boundaries, keyboard and double-click', sub: 'Implementation · in progress', agent: { role: 'Implementer', model: 'Opus 5.5 · medium', activity: 'running npx prettier', calls: 18, tokens: 1_400_000, elapsedMs: 156_000 } }),
@@ -187,7 +187,8 @@ export const kitSheet = (W: number): string => {
       ],
     }),
     task({ n: 4, kind: 'blocked', eyebrow: '04 · BLOCKED', badge: 'Blocked', badgeKind: 'blocked', title: 'Keyboard step honours the minimum track size', sub: 'Blocked · lint failed twice' }),
-    task({ n: 5, kind: 'pending', eyebrow: '05 · PENDING', badge: 'Pending', badgeKind: 'pending', title: 'Documentation of the gesture' }),
+    task({ n: 5, kind: 'pending', eyebrow: '05 · IN PROGRESS', badge: 'Fix round 1 of 2', badgeKind: 'running', title: 'A second task in a fix round: a plain row, no agent' }),
+    task({ n: 6, kind: 'pending', eyebrow: '06 · PENDING', badge: 'Pending', badgeKind: 'pending', title: 'Documentation of the gesture' }),
   ]
   rows.forEach((r, i) => {
     const d = taskRowSvg(W, r, { isFirst: i === 0, isLast: i === rows.length - 1, isCompact: false })

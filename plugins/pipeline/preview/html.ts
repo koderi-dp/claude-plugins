@@ -5,7 +5,7 @@
 type Props = Record<string, unknown>
 type Node = unknown
 
-import { COLORS } from '../hooks/ui/tokens'
+import { cssOf } from '../hooks/ui/tokens'
 
 const CELL = 8
 export const DIM = 'var(--dim)'
@@ -111,14 +111,17 @@ export const ui = { Box, Text, Button, Svg, Input, Link }
 export const htmlOf = (tree: unknown): string => inner(tree)
 
 const vars = (scheme: 'light' | 'dark'): string =>
-  `--page:${scheme === 'dark' ? COLORS.background.dark : COLORS.muted.light};--pane:${COLORS.background[scheme]};--border:${COLORS.border[scheme]};--border-strong:${COLORS.input[scheme]};--fg:${COLORS.foreground[scheme]};--dim:${COLORS.mutedForeground[scheme]};--accent:${COLORS.primary[scheme]};--control:${COLORS.muted[scheme]}`
+  `--page:${cssOf('background', scheme)};--border:${cssOf('border', scheme)};--border-strong:${cssOf('input', scheme)};--fg:${cssOf('foreground', scheme)};--dim:${cssOf('mutedForeground', scheme)};--accent:${cssOf('primary', scheme)};--control:${cssOf('muted', scheme)}`
 
-/** The page's own styles: the app around the drawings, in the tokens' neutrals, light or dark with the browser's scheme. */
+/**
+ * The page's own styles. The page and the panel on it take the app's real background (a mid-dark grey, a warm
+ * off-white), not black or white, so the drawings' overlays show as they do in the app.
+ */
 export const PAGE_CSS = `
 :root{color-scheme:light dark;${vars('light')}}
 @media (prefers-color-scheme: dark){:root{${vars('dark')}}}
 body{margin:0;padding:24px;background:var(--page);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Inter,sans-serif;font-size:13px;line-height:20px}
-.pane{width:520px;padding:12px 16px;background:var(--pane);border:1px solid var(--border);border-radius:12px}
+.pane{width:520px;padding:12px 16px;background:var(--page);border:1px solid var(--border);border-radius:12px}
 .pane + .pane{margin-top:24px}
 .text{white-space:pre-wrap;min-width:0;overflow-wrap:anywhere}
 .svg{display:block;line-height:0;flex:none}

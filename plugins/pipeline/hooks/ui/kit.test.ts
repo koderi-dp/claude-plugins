@@ -4,7 +4,7 @@ import { agentCardSvg, bandSvg, captionSvg, separatorSvg, tabUnderlineSvg, heroS
 import type { Band, TaskRow } from '../status'
 import { BAND_COLORS } from '../status'
 import { BADGE_H, ICON_NAMES, TAB_UNDERLINE_H, badge, check, disc, divider, dot, fitText, frame, icon, progress, segments, separator, soft, stripeId, surface, tabUnderline, text, textWidth, xml } from './kit'
-import { ACCENT, ALL_COLORS, BLOCKED, COLORS, DONE, FAILED, MUTED, ROLES, STYLE, TONES, fillClass, strokeClass, styleFor, toneOf } from './tokens'
+import { ACCENT, ALL_COLORS, ALPHA, BLOCKED, COLORS, DONE, FAILED, MUTED, ROLES, STYLE, TONES, cssOf, fillClass, strokeClass, styleFor, toneOf } from './tokens'
 
 const HEX = /#[0-9a-fA-F]{3,8}\b/g
 const styleOf = (svg: string): string => /<style>.*?<\/style>/s.exec(svg)?.[0] ?? ''
@@ -14,13 +14,26 @@ test('tokens: every role has a light and a dark value, and the stylesheet carrie
   for (const role of ROLES) {
     expect(COLORS[role].light).toMatch(/^#[0-9a-f]{6}$/)
     expect(COLORS[role].dark).toMatch(/^#[0-9a-f]{6}$/)
-    expect(STYLE).toContain(`.${fillClass(role)}{fill:${COLORS[role].light}}`)
-    expect(STYLE).toContain(`.${strokeClass(role)}{stroke:${COLORS[role].light}}`)
+    expect(STYLE).toContain(`.${fillClass(role)}{fill:${COLORS[role].light}`)
+    expect(STYLE).toContain(`.${strokeClass(role)}{stroke:${COLORS[role].light}`)
   }
   const [light = '', dark = ''] = STYLE.split('@media (prefers-color-scheme: dark)')
   expect(light).toContain(`.t{fill:${COLORS.foreground.light}}`)
   expect(dark).toContain(`.t{fill:${COLORS.foreground.dark}}`)
   expect(dark).toContain(`.f-primary{fill:${COLORS.primary.dark}}`)
+  // Surfaces, borders and the track are overlays in both schemes, black on light and white on dark: no drawing paints an opaque ground.
+  for (const role of ['card', 'muted', 'border', 'input', 'primarySurface', 'primaryBorder'] as const) {
+    expect(ALPHA[role]!.light).toBeGreaterThan(0)
+    expect(ALPHA[role]!.dark).toBeLessThan(0.5)
+    expect(light).toContain(`.${fillClass(role)}{fill:${COLORS[role].light};fill-opacity:${ALPHA[role]!.light}}`)
+    expect(dark).toContain(`.${fillClass(role)}{fill:${COLORS[role].dark};fill-opacity:${ALPHA[role]!.dark}}`)
+    expect(dark).toContain(`.${strokeClass(role)}{stroke:${COLORS[role].dark};stroke-opacity:${ALPHA[role]!.dark}}`)
+  }
+  expect([COLORS.card.light, COLORS.card.dark, COLORS.border.light, COLORS.border.dark]).toEqual(['#000000', '#ffffff', '#000000', '#ffffff'])
+  // The text roles and the tones are opaque.
+  for (const role of ['foreground', 'mutedForeground', 'subtle', 'primary', 'success', 'warning', 'destructive'] as const) expect(ALPHA[role]).toBeUndefined()
+  expect(cssOf('border', 'dark')).toBe('rgba(255,255,255,0.11)')
+  expect(cssOf('foreground', 'dark')).toBe(COLORS.foreground.dark)
   // The live pulse, still under reduced motion.
   expect(STYLE).toContain('.live{animation:')
   expect(STYLE).toContain('prefers-reduced-motion: reduce){.live{animation:none}}')
@@ -157,6 +170,9 @@ test('no colour outside the tokens: every drawing paints by class, and the only 
     for (const m of bodyOf(svg).matchAll(/ (?:fill|stroke)="([^"]*)"/g)) expect(m[1] === 'none' || m[1]!.startsWith('url(#stripe-')).toBe(true)
     const style = styleOf(svg)
     for (const hex of style.match(HEX) ?? []) expect(ALL_COLORS).toContain(hex)
+    // No other way of naming a colour, and every alpha is a token's.
+    expect(style).not.toMatch(/rgb|hsl/)
+    for (const m of style.matchAll(/-opacity:([\d.]+)/g)) expect(Object.values(ALPHA).flatMap(a => [a.light, a.dark])).toContain(Number(m[1]))
     // Each class the body uses is defined, in both schemes.
     const used = new Set([...bodyOf(svg).matchAll(/class="([^"]*)"/g)].flatMap(m => (m[1] ?? '').split(' ')))
     for (const cls of used) expect(style.split(`.${cls}{`).length).toBeGreaterThanOrEqual(cls === 'live' || cls === 'mono' ? 2 : 3)

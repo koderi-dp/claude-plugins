@@ -297,10 +297,10 @@ export const itemRowSvg = (W: number, r: ItemRowDrawing): string =>
     isLast: r.isLast,
   })
 
-/** A merged row: a green ringed check, the id in the subtle grey, the title cut; the PR link stands beside it. */
+/** A merged row: a green ringed check, the id in the subtle grey (its slot as wide for `p31` as for `p33`, so titles line up), the title cut; the PR link stands beside it. */
 export const mergedRowSvg = (W: number, r: { id: string; title: string; isLast?: boolean }): string =>
   row(W, MERGED_ROW_H, {
-    leading: (x, cy) => ({ svg: check(x + 8, cy) + text(x + 24, cy + 4, r.id, { size: SIZE.sm, role: 'subtle' }), width: 24 + textWidth(r.id, SIZE.sm) }),
+    leading: (x, cy) => ({ svg: check(x + 8, cy) + text(x + 24, cy + 4, r.id, { size: SIZE.sm, role: 'subtle' }), width: 24 + Math.max(textWidth(r.id, SIZE.sm), [...r.id].length * SIZE.sm * 0.56) }),
     title: r.title,
     isLast: r.isLast,
   })
