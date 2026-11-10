@@ -34,6 +34,7 @@ export const DEFAULTS: Config = {
   afterMerge: ['docs/pipeline/BACKLOG.md'],
   notify: 'milestones',
   renameSession: true,
+  pushMain: true,
   taskReview: 'risky',
   superpowers: 'off',
 }
@@ -126,7 +127,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
       }
   }
 
-  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'superpowers'])
+  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'superpowers', 'pushMain'])
   const extra = Object.fromEntries(Object.entries(raw).filter(([k]) => !known.has(k)))
   const config: Config = {
     ...extra,
@@ -146,6 +147,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
     retain: retainOf(raw['retain'], problems),
     notify: oneOf('notify', ['off', 'milestones', 'all'] as const, DEFAULTS.notify),
     renameSession: bool('renameSession', DEFAULTS.renameSession),
+    pushMain: bool('pushMain', DEFAULTS.pushMain),
     taskReview: oneOf('taskReview', ['risky', 'always', 'off'] as const, DEFAULTS.taskReview),
     superpowers: oneOf('superpowers', ['off', 'on'] as const, DEFAULTS.superpowers),
   }
@@ -225,7 +227,7 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
   const make = found.makeTargets
   const npm = (name: string) => `npm run ${name}`
 
-  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'limits.parallel', 'runner', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'superpowers']) sources[key] = 'default'
+  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'limits.parallel', 'runner', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'superpowers', 'pushMain']) sources[key] = 'default'
 
   const fast = ['check:fast', 'lint:fast'].find(n => n in scripts)
   if (fast) {
