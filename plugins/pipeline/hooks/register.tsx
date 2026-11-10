@@ -32,7 +32,7 @@ const PANE = 'pipeline'
 const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
 const USAGE =
   'pipeline: status [id] | panel | config [key=value] | init | add <text> | next | run <id> | run all | migrate | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
-const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers']
+const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers', 'pushMain']
 const CONFIG_FILE = 'docs/pipeline/config.json'
 const BACKLOG_FILE = 'docs/pipeline/backlog.json'
 const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
@@ -56,6 +56,7 @@ const TOOL_DESCRIPTION =
   'Run, in order: `begin` { item } claims the item, makes its worktree and branch, records the base and answers the worktree to enter. `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
   '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
   '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. ' +
+  '`close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is (also from inside the item\'s worktree): the main checkout on mainBranch and pulled, the item merged, what config.retain lets go removed, docs/pipeline committed on mainBranch and pushed unless config.pushMain is false, the worktree and local branch removed (a worktree this session is inside is left and removed by a later begin or close). ' +
   '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?, final?, blockers?, pr?, branch?, worktree?, base? } } merges anything else into the ledger. ' +
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain says may go and deletes nothing. ' +
   'A file that does not parse is refused with its line and left alone.'
@@ -63,7 +64,7 @@ const TOOL_DESCRIPTION =
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
@@ -87,6 +88,8 @@ const TOOL_SCHEMA = {
     close: { type: 'object', description: 'For brief: closes the dispatch before this one: { tokens, minutes, result }.' },
     tokens: { type: 'number', description: 'For accept and gate: the tokens of the Agent result.' },
     minutes: { type: 'number', description: 'For accept: the minutes of the Agent result.' },
+    pr: { type: 'string', description: 'For close: the pull request, as #31, when the item does not carry it yet.' },
+    force: { type: 'boolean', description: 'For close: close although the branch tip is not on origin/mainBranch (a squash merge).' },
     fact: { type: 'string', description: 'For accept: one line a later implementer must know about working in this repository (a command\'s working spelling, a step that must come first); kept in docs/pipeline/facts.md and given to every brief.' },
     verdict: { type: 'string', description: 'For accept: how the task was approved. For gate: the final review\'s verdict.' },
     kind: { type: 'string', enum: ['implementer', 'fix', 'review', 'final'], description: 'For brief: which brief to render.' },
@@ -369,6 +372,8 @@ type ToolInput = {
   verdict?: string
   review?: string
   fact?: string
+  pr?: string
+  force?: boolean
 }
 
 class Refused extends Error {}
@@ -682,6 +687,8 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
       return beginAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
     case 'accept':
       return acceptAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+    case 'close':
+      return closeAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'gate':
       return gateAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'plan':
@@ -822,6 +829,8 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
     if (runningOf(await read($, children)).some(ch => ch.item === id)) throw new Refused(`${id} is run by a child session of this one`)
   }
   const mainBranch = c?.mainBranch ?? DEFAULTS.mainBranch
+  // What an earlier close had to leave behind (a worktree its session sat in) goes now.
+  await sweepMerged($, found, c, current)
   const ledger = await loadLedger($, found, id)
   const branch = typeof ledger?.branch === 'string' && ledger.branch ? ledger.branch : itemBranchOf(c?.branch ?? DEFAULTS.branch, id)
   const rel = typeof ledger?.worktree === 'string' && ledger.worktree ? slashes(ledger.worktree) : `.claude/worktrees/${id}`
@@ -933,6 +942,115 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
   await commitPaths($, wt, [`docs/pipeline/ledgers/${id}`], `${id}: final review record`, attribution)
   const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
   return `${id} · gate ${gate} · final ${verdict} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${/approved/i.test(verdict) ? 'open the PR' : 'the final review'}`
+}
+
+/** One git answer in the main checkout: the exit code and the first line of what it said. */
+async function gitMain($: EngineInterface, found: string, args: string[]): Promise<{ ok: boolean; said: string }> {
+  try {
+    const r = await $.process.run(['git', '-C', found, ...args], { cwd: found, timeoutMs: 120_000 })
+    return { ok: r.exitCode === 0, said: (r.stderr || r.stdout).trim().split('\n')[0] ?? '' }
+  } catch (err) {
+    return { ok: false, said: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Whether this session's working directory is inside the folder. */
+async function isInside($: EngineInterface, dir: string): Promise<boolean> {
+  try {
+    const cwd = `${slashes(await $.session.cwd())}/`
+    return cwd.startsWith(`${slashes(dir)}/`)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Removes what `cleanList` names for the merged items it is given, from the main checkout: tracked paths with
+ * `git rm`, untracked ones with `git clean`, a worktree with `git worktree remove`, a `branch:` line with
+ * `git branch -D`. A worktree this session is inside is left, and named in `kept`.
+ */
+async function removeCleaned($: EngineInterface, found: string, list: string[]): Promise<{ removed: number; kept: string[]; paths: string[] }> {
+  let removed = 0
+  const kept: string[] = []
+  const paths: string[] = []
+  for (const entry of list) {
+    if (entry.startsWith('branch:')) {
+      // A branch still checked out in a kept worktree cannot go; it goes with the worktree later.
+      if ((await gitMain($, found, ['branch', '-D', entry.slice('branch:'.length)])).ok) removed++
+      continue
+    }
+    const rel = entry.replace(/\/+$/, '')
+    if (rel.startsWith('.claude/worktrees/')) {
+      if (await isInside($, `${found}/${rel}`)) {
+        kept.push(rel)
+        continue
+      }
+      if ((await gitMain($, found, ['worktree', 'remove', '--force', rel])).ok) removed++
+      continue
+    }
+    const tracked = await gitMain($, found, ['rm', '-r', '-q', '--ignore-unmatch', '--', rel])
+    await gitMain($, found, ['clean', '-fdq', '--', rel])
+    if (tracked.ok) {
+      removed++
+      paths.push(rel)
+    }
+  }
+  return { removed, kept, paths }
+}
+
+/** The worktrees and local branches of items already merged, removed when this session is not inside them: what an earlier close had to leave. */
+async function sweepMerged($: EngineInterface, found: string, c: Config | null, b: Backlog): Promise<void> {
+  try {
+    const list = cleanList({ config: c, backlog: b, ...(await cleanInput($, found, b)) }).filter(x => x.startsWith('branch:') || x.startsWith('.claude/worktrees/'))
+    // Worktrees first, so their branches are free to delete.
+    await removeCleaned($, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
+  } catch {}
+}
+
+/**
+ * `close`: the whole Close in one call, run by the tool in the main checkout, so it works from a session that
+ * sits in the item's worktree and cannot leave it. Refused when the pull request is not on mainBranch yet.
+ */
+async function closeAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const cfg = normalizeConfig(c ?? DEFAULTS).config
+  const item = current.items.find(i => i.id === id)!
+  const ledger = await loadLedger($, found, id)
+  const branch = (typeof ledger?.branch === 'string' && ledger.branch) || item.branch || itemBranchOf(cfg.branch, id)
+  const main = cfg.mainBranch
+  const pr = e.pr?.trim() || item.pr || ledger?.pr || undefined
+
+  // The main checkout on mainBranch, with the merge in it.
+  const on = await gitOut($, found, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  if (on !== main) {
+    const co = await gitMain($, found, ['checkout', main])
+    if (!co.ok) throw new Refused(`the main checkout is on ${on ?? 'an unknown branch'} and git checkout ${main} failed: ${co.said}`)
+  }
+  await gitMain($, found, ['fetch', '-q', 'origin', main])
+  const pull = await gitMain($, found, ['merge', '--ff-only', `origin/${main}`])
+  if (!pull.ok) throw new Refused(`${main} in the main checkout could not be fast-forwarded to origin/${main}: ${pull.said}`)
+  if (item.status !== 'merged' && !e.force) {
+    const tip = (await gitOut($, found, ['rev-parse', '--verify', '-q', branch])) ?? (await gitOut($, found, ['rev-parse', '--verify', '-q', `origin/${branch}`]))
+    const isIn = tip !== null && (await gitMain($, found, ['merge-base', '--is-ancestor', tip, `origin/${main}`])).ok
+    if (!isIn) throw new Refused(`${branch} is not on origin/${main}: the pull request is not merged yet; after a squash merge pass "force": true`)
+  }
+
+  // Merged in the backlog, then what retain lets go.
+  if (item.status !== 'merged' || (pr && item.pr !== pr)) await runTool($, { action: 'update', id, set: { status: 'merged', ...(pr ? { pr } : {}) } })
+  const after = (await loadBacklog($, found)).value ?? current
+  const list = cleanList({ config: c, backlog: after, item: id, ...(await cleanInput($, found, after)) })
+  const { kept, paths: gone } = await removeCleaned($, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
+  if (ledger) await runTool($, { action: 'ledger', item: id, set: { resume: { task: ledger.resume?.task ?? ledger.tasks.length, state: 'closed', ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) }, ...(await recordLead($, ledger)) } })
+
+  // The record on mainBranch.
+  const attribution = typeof ledger?.['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
+  await gitMain($, found, ['add', '-A', '--', 'docs/pipeline'])
+  const commit = await gitMain($, found, ['commit', '-q', '-m', `${id}: close records`, ...(attribution.trim() ? ['-m', attribution.trim()] : []), '--', 'docs/pipeline', ...gone.filter(x => !x.startsWith('docs/pipeline/'))])
+  const pushed = cfg.pushMain === false ? 'not pushed (pushMain is off)' : (await gitMain($, found, ['push', '-q', 'origin', main])).ok ? 'pushed' : 'not pushed (git push failed: push it yourself)'
+  if (self.item === id) self.item = ''
+  const tasks = ledger?.tasks.length ?? 0
+  const next = after.items.find(i => i.status === 'ready')
+  const left = kept.length ? ` · worktree ${kept[0]} left, this session is in it: the next begin or close removes it` : ''
+  return `${id} merged${pr ? ` · PR ${pr}` : ''} · ${tasks} task${tasks === 1 ? '' : 's'} · records ${commit.ok ? 'committed' : 'unchanged'} on ${main} · ${pushed}${left} · next: ${next ? next.id : 'nothing ready'}`
 }
 
 /** `plan`: the checked plan becomes the ledger's tasks and resume block, and the item is building. */

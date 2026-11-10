@@ -13,7 +13,7 @@ const NOW = Date.parse('2026-11-05T10:00:00Z')
 const VALID_CONFIG = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: {}, merge: 'pr' }, null, 2) + '\n'
 
 /** A main checkout at /p/main, this session in its worktree, files in memory; records the writes and the plugin's state. */
-function world(on: On, seed: Record<string, string> = {}, options: { rename?: 'ok' | 'deny' } = {}) {
+function world(on: On, seed: Record<string, string> = {}, options: { rename?: 'ok' | 'deny'; cwd?: string } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
@@ -38,7 +38,7 @@ function world(on: On, seed: Record<string, string> = {}, options: { rename?: 'o
   })
   on('session.repo', () => ({ value: { root: MAIN, remote: null, internal: false, name: null } }) as never)
   on('session.root', () => ({ value: WORKTREE }))
-  on('session.cwd', () => ({ value: WORKTREE }))
+  on('session.cwd', () => ({ value: options.cwd ?? WORKTREE }))
   on('session.id', () => ({ value: 'self' }))
   on('env.get', () => ({ value: undefined }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
@@ -845,4 +845,67 @@ test('0.3.2: a brief names its report by the full path in the worktree', async (
   choreWorld(on)
   await call($, { action: 'plan', item: 'p1' })
   expect(files.get(`${WT}/docs/pipeline/ledgers/p1/task-1-brief.md`)).toContain(`\`${WT}/docs/pipeline/ledgers/p1/task-1-report.md\``)
+})
+
+// ---------- 0.3.4: close, from wherever the session is ----------
+
+/** A git that records every argv; `merged` says whether the branch tip is on origin/main, `current` is the main checkout's branch. */
+function closeWorld(on: On, opts: { merged?: boolean; current?: string; push?: number; branches?: string[] } = {}) {
+  const runs: string[][] = []
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    runs.push(argv)
+    const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    const sub = argv[3]
+    if (sub === 'rev-parse' && argv.includes('--abbrev-ref')) return { value: { ...ok, stdout: `${opts.current ?? 'main'}\n` } } as never
+    if (sub === 'rev-parse') return { value: { ...ok, stdout: 'feedbee\n' } } as never
+    if (sub === 'merge-base') return { value: { ...ok, exitCode: opts.merged === false ? 1 : 0 } } as never
+    if (sub === 'for-each-ref') return { value: { ...ok, stdout: (opts.branches ?? ['main', 'feat/p1']).join('\n') + '\n' } } as never
+    if (sub === 'push') return { value: { ...ok, exitCode: opts.push ?? 0 } } as never
+    return { value: ok } as never
+  })
+  return runs
+}
+const CLOSE_SEED = {
+  [CONFIG]: VALID_CONFIG,
+  [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'Login', status: 'review', pr: '#3', branch: 'feat/p1', ledger: 'docs/pipeline/ledgers/p1.json' }, { id: 'p2', title: 'Export', status: 'ready', spec: 'docs/pipeline/specs/p2.md' }] }),
+  [`${DIR}/ledgers/p1.json`]: JSON.stringify({ item: 'p1', branch: 'feat/p1', worktree: '.claude/worktrees/p1', attribution: 'Co-Authored-By: X', tasks: [{ n: 1, title: 'A', status: 'accepted', dispatches: [] }], rulings: [], blockers: [], tokens: 0 }),
+  [`${DIR}/specs/p2.md`]: '## What\n\nx\n',
+}
+
+test('close does the whole Close in the main checkout: pulled, merged, records committed and pushed, the branch removed', async ($, on) => {
+  const { files } = world(on, CLOSE_SEED)
+  const runs = closeWorld(on)
+  expect(text(await call($, { action: 'close', item: 'p1' }))).toBe('p1 merged · PR #3 · 1 task · records committed on main · pushed · next: p2')
+  expect(items(files)[0]).toMatchObject({ status: 'merged', pr: '#3' })
+  expect(runs).toContainEqual(['git', '-C', MAIN, 'merge', '--ff-only', 'origin/main'])
+  expect(runs).toContainEqual(['git', '-C', MAIN, 'merge-base', '--is-ancestor', 'feedbee', 'origin/main'])
+  expect(runs).toContainEqual(['git', '-C', MAIN, 'branch', '-D', 'feat/p1'])
+  expect(runs).toContainEqual(['git', '-C', MAIN, 'commit', '-q', '-m', 'p1: close records', '-m', 'Co-Authored-By: X', '--', 'docs/pipeline'])
+  expect(runs).toContainEqual(['git', '-C', MAIN, 'push', '-q', 'origin', 'main'])
+  // Every git call ran in the main checkout, whatever this session's directory is.
+  expect(runs.every(r => r[0] === 'git' && r[2] === MAIN)).toBe(true)
+  expect(JSON.parse(files.get(`${DIR}/ledgers/p1.json`)!).resume.state).toBe('closed')
+})
+
+test('close refuses a pull request that is not on main yet, unless forced; pushMain off leaves the commit local', async ($, on) => {
+  const { files } = world(on, CLOSE_SEED)
+  const runs = closeWorld(on, { merged: false })
+  expect(text(await call($, { action: 'close', item: 'p1' }))).toBe('refused: feat/p1 is not on origin/main: the pull request is not merged yet; after a squash merge pass "force": true')
+  expect(items(files)[0]).toMatchObject({ status: 'review' })
+  files.set(CONFIG, files.get(CONFIG)!.replace('"merge"', '"pushMain": false, "merge"'))
+  expect(text(await call($, { action: 'close', item: 'p1', force: true, pr: '#9' }))).toBe('p1 merged · PR #9 · 1 task · records committed on main · not pushed (pushMain is off) · next: p2')
+  expect(runs.some(r => r[3] === 'push')).toBe(false)
+})
+
+test('close from inside the item worktree leaves that worktree and says so; a main checkout on another branch is switched', async ($, on) => {
+  const { files } = world(on, { ...CLOSE_SEED, [`${MAIN}/.claude/worktrees`]: '', [`${MAIN}/.claude/worktrees/p1/README.md`]: 'x' }, { cwd: `${MAIN}/.claude/worktrees/p1` })
+  const runs = closeWorld(on, { current: 'feat/other' })
+  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: 'p1', kind: 'dir' }] : [] }) as never)
+  const line = text(await call($, { action: 'close', item: 'p1' }))
+  expect(line).toContain('p1 merged · PR #3')
+  expect(line).toContain('worktree .claude/worktrees/p1 left, this session is in it: the next begin or close removes it')
+  expect(runs).toContainEqual(['git', '-C', MAIN, 'checkout', 'main'])
+  expect(runs.some(r => r[3] === 'worktree' && r[4] === 'remove')).toBe(false)
+  void files
 })
