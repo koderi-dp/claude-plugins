@@ -5,7 +5,7 @@
 import type { EngineInterface, RenderElement } from 'claude-code'
 
 import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, TaskReview, TasksMode, View } from '../types'
-import { ACCENT, AGENT_CARD_H, BLOCKED, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TASK_BAR_H, agentCardSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, sessionRowSvg, taskBarSvg, taskRowSvg, totals } from './draw'
+import { ACCENT, AGENT_CARD_H, BLOCKED, CAPTION_H, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TAB_UNDERLINE_H, TASK_BAR_H, agentCardSvg, captionSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, separatorSvg, sessionRowSvg, tabUnderlineSvg, tabWidth, taskBarSvg, taskRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
 import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from './status'
@@ -28,6 +28,8 @@ export const HISTORY_SHOWN = 20
 
 const ACTIVE: ItemStatus[] = ['planning', 'building', 'review']
 const FINISHED_SHOWN = 3
+/** The command the footer names, at its right. */
+const FOOTER_COMMAND = '/pipeline status'
 const FILTERS: { filter: QueueFilter; label: string }[] = [
   { filter: 'inbox', label: 'Inbox' },
   { filter: 'ready', label: 'Ready' },
@@ -229,8 +231,9 @@ type Desk = { Box: Comp; Text: Comp; Button: Comp; Svg: Comp; Input: Comp; Link?
 /** The desktop: header, tabs, the view, footer. */
 function renderDesktop(ui: Ui, d: PanelInput): Element {
   const u = ui as unknown as Desk
-  const { Box, Text, Button } = u
+  const { Box, Text, Button, Svg } = u
   const items = d.backlog?.items ?? []
+  const footer = footerText(d.agents, d.signals, d.children)
   const W = Math.max(240, Math.min(900, (d.bodyColumns || 40) * 8 - 8))
   const counts = groupCounts(items)
   const tabs: { view: View; label: string }[] = [
@@ -253,19 +256,35 @@ function renderDesktop(ui: Ui, d: PanelInput): Element {
         </Text>
         <Text dimColor>{line([d.project, d.branch])}</Text>
       </Box>
-      <Box flexDirection="row" gap={2}>
-        {tabs.map(t => (
-          <Button key={`tab-${t.view}`} plain dimColor={d.panel.view !== t.view} label={t.label} onPress={() => d.onView(t.view)} />
-        ))}
-      </Box>
+      {tabsRow(u, tabs, d.panel.view, d.onView, W)}
       {notices.length ? <Box flexDirection="column">{notices}</Box> : null}
       {view}
-      <Box flexDirection="row" justifyContent="space-between">
-        <Text dimColor>{footerText(d.agents, d.signals, d.children)}</Text>
-        <Text dimColor mono>
-          /pipeline status
-        </Text>
+      <Svg key="caption-footer" source={captionSvg(W, footer, FOOTER_COMMAND, true)} alt={line([footer, FOOTER_COMMAND])} width={W} height={CAPTION_H} />
+    </Box>
+  )
+}
+
+/**
+ * The tabs: each a Button (a drawing cannot be pressed) over its own underline, a primary bar under the active one,
+ * and one hairline under the row. The underline is measured from the label and sits in the tab's own column, so it
+ * stays under its Button.
+ */
+function tabsRow(u: Desk, tabs: { view: View; label: string }[], active: View, onView: (view: View) => void, W: number): Element {
+  const { Box, Button, Svg } = u
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="row" gap={2}>
+        {tabs.map(t => {
+          const w = tabWidth(t.label)
+          return (
+            <Box key={`tab-box-${t.view}`} flexDirection="column" alignItems="flex-start">
+              <Button key={`tab-${t.view}`} plain dimColor={active !== t.view} label={t.label} onPress={() => onView(t.view)} />
+              <Svg source={tabUnderlineSvg(w, active === t.view)} alt="" width={w} height={TAB_UNDERLINE_H} />
+            </Box>
+          )
+        })}
       </Box>
+      <Svg source={separatorSvg(W)} alt="" width={W} height={1} />
     </Box>
   )
 }
@@ -360,10 +379,12 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
     hint: `${d.agents.filter(a => a.status === 'running').length} active agents`,
   }
   const drawn = heroSvg(W, hero)
-  const metrics: Metric[] = [
+  // Merged counts this week; the tile says Merged, the alt says the rest.
+  const metrics: (Metric & { alt?: string })[] = [
+    { value: items.filter(i => ACTIVE.includes(i.status)).length, label: 'Active' },
+    { value: ready.length, label: 'Ready' },
     { value: inbox.length, label: 'Inbox' },
-    { value: ready.length, label: 'Ready', color: ACCENT },
-    { value: merged.length, label: 'Merged this week', color: DONE },
+    { value: merged.length, label: 'Merged', color: DONE, alt: 'Merged this week' },
   ]
   const list = ready.length ? ready : inbox
   const toQueue = (id: string | null) => () => {
@@ -383,7 +404,7 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
     <Box flexDirection="column">
       <Svg source={drawn.source} alt={`${hero.state}: ${hero.headline}. ${hero.line}`} width={W} height={drawn.height} />
       <Box marginTop={1}>
-        <Svg source={metricsSvg(W, metrics)} alt={metrics.map(m => `${m.value} ${m.label}`).join(', ')} width={W} height={METRICS_H} />
+        <Svg source={metricsSvg(W, metrics)} alt={metrics.map(m => `${m.value} ${m.alt ?? m.label}`).join(', ')} width={W} height={METRICS_H} />
       </Box>
       {heading(u, ready.length ? 'Up next' : 'Needs specification', undefined, { key: 'goto-queue', label: 'View queue →', onPress: toQueue(null) })}
       {rows.length ? card(u, [...rows, ...(list.length > OVERVIEW_ROWS ? [<Text key="more-items" dimColor>{`and ${list.length - OVERVIEW_ROWS} more in the queue`}</Text>] : [])]) : <Text dimColor>Nothing waiting. Add work with /pipeline add.</Text>}
@@ -414,10 +435,10 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
     steps: stepsOf(active, ledger),
   }
   const drawn = heroSvg(W, hero)
+  const usage = `${fmtTime(t.time)} elapsed · ${fmtTokens(t.tokens)} tokens · ≈${fmtCost(t.cost)} cost`
   // The task bar and its legend: one segment per task.
   const segments = tasks.map(task => taskSegment(task, current))
   const legend = segmentLegend(segments)
-  const legendColor = (kind: (typeof legend)[number]['kind']) => (kind === 'accepted' ? DONE : kind === 'current' ? ACCENT : kind === 'blocked' ? BLOCKED : undefined)
   // One drawn row per task; without a ledger, the running agents' cards as before.
   const rows = taskRowsOf({ tasks, agents: d.agents, ledger, fixRounds: d.fixRounds, taskReview: d.taskReview, now: at })
   const taskRows = rows.map((r, i) => {
@@ -442,28 +463,9 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
   return (
     <Box flexDirection="column">
       <Svg source={drawn.source} alt={`${hero.state}: ${hero.headline}, ${done} of ${tasks.length} tasks accepted`} width={W} height={drawn.height} />
-      <Text dimColor tabular>
-        {`${fmtTime(t.time)} elapsed · ${fmtTokens(t.tokens)} tokens · ≈${fmtCost(t.cost)} cost`}
-      </Text>
-      <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
-        <Text dimColor>Task progress</Text>
-        <Text weight="semibold">{`${done} of ${tasks.length} accepted`}</Text>
-      </Box>
+      <Svg key="caption-usage" source={captionSvg(W, usage)} alt={usage} width={W} height={CAPTION_H} />
+      {heading(u, 'Tasks', `${done} of ${tasks.length} accepted`)}
       <Svg source={taskBarSvg(W, segments)} alt={`Task progress: ${legend.map(l => `${l.n} ${l.word}`).join(', ')}`} width={W} height={TASK_BAR_H} />
-      {!isCompact && tasks.length ? (
-        <Text dimColor>
-          {legend.map((l, i) => (
-            <Text key={`legend-${l.kind}`}>
-              {i ? ' · ' : ''}
-              <Text color={legendColor(l.kind)} weight="semibold">
-                {String(l.n)}
-              </Text>
-              {` ${l.word}`}
-            </Text>
-          ))}
-        </Text>
-      ) : null}
-      {heading(u, 'Tasks', 'Ordered execution')}
       {taskRows.length ? (
         <Box flexDirection="column">{taskRows}</Box>
       ) : (
@@ -478,7 +480,7 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
           <Box flexDirection="row">
             <Button key="activity-toggle" plain dimColor label={isActivityOpen ? 'Recent activity ⌃' : 'Recent activity ⌄'} onPress={() => d.onActivity?.()} />
           </Box>
-          {isActivityOpen ? activity.map((a, i) => <Text key={`activity-${i}`} color={MUTED}>{a}</Text>) : null}
+          {isActivityOpen ? card(u, activity.map((a, i) => <Text key={`activity-${i}`} color={MUTED}>{a}</Text>)) : null}
         </Box>
       ) : null}
       {heading(u, 'Up next', `${ready.length} ready · ${inbox.length} inbox`, { key: 'goto-queue', label: 'View queue →', onPress: () => d.onView('queue') })}
@@ -537,15 +539,20 @@ function siblingRows(u: Desk, d: PanelInput, W: number): Element | null {
   // A session silent for half an hour that runs nothing has ended without saying so: not listed. Before that it is faded.
   const shown = d.siblings.filter(x => d.now - Date.parse(x.seenAt) < 30 * 60_000 || x.agents.some(a => a.status === 'running'))
   if (!shown.length) return null
+  // A session with no item and no agent says nothing a row is worth: those are counted in one line.
+  const idle = shown.filter(x => siblingLabel(x).isIdle).length
+  const busy = shown.filter(x => !siblingLabel(x).isIdle)
+  const idleLine = idle ? `${idle} idle session${idle === 1 ? '' : 's'}` : ''
+  if (!busy.length) return <Box flexDirection="column">{heading(u, 'Other sessions', idleLine)}</Box>
   const rw = rowWidth(W, 0)
-  const rows = shown.map((s, n) => {
+  const rows = busy.map((s, n) => {
     const running = s.agents.filter(a => a.status === 'running').length
     const { title, meta, isIdle } = siblingLabel(s)
-    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title, meta, isLive: running > 0, isStale: s.isStale, isDim: isIdle, isLast: n === shown.length - 1 })} alt={line([title, meta])} width={rw} height={SESSION_ROW_H} />
+    return <Svg key={`sibling-${s.sessionId}`} source={sessionRowSvg(rw, { title, meta, isLive: running > 0, isStale: s.isStale, isDim: isIdle, isLast: n === busy.length - 1 })} alt={line([title, meta])} width={rw} height={SESSION_ROW_H} />
   })
   return (
     <Box flexDirection="column">
-      {heading(u, 'Other sessions', `${shown.length}`)}
+      {heading(u, 'Other sessions', line([`${busy.length}`, idleLine]))}
       {card(u, rows)}
     </Box>
   )

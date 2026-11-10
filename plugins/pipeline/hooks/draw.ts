@@ -1,44 +1,19 @@
-// The desktop drawings: SVG strings for the dashboard's hero, metric tiles, agent card and the bar above
-// the prompt. The text sizing and the pricing came from savvy-flow (MIT, LICENSE-savvy beside this plugin)
-// through superpowers-flow. Pure: strings in, strings out, no engine.
+// The desktop drawings: SVG strings for the dashboard's hero, metric tiles, rows, task list and the band above
+// the prompt, each composed from the kit (ui/kit.ts) with the tokens (ui/tokens.ts); no colour is written here.
+// The text sizing and the pricing came from savvy-flow (MIT, LICENSE-savvy beside this plugin) through
+// superpowers-flow. Pure: strings in, strings out, no engine.
 
 import type { AgentRun } from '../types'
 import type { Band, Segment, Step, TagKind, TaskRow } from './status'
-import { SEGMENT_COLORS, fmtDuration } from './status'
+import { fmtDuration } from './status'
+import type { IconName, Piece, Seg } from './ui/kit'
+import { BADGE_H, BAR_H, TAB_UNDERLINE_H, badge, check, disc, divider, dot, frame, icon, progress, segments, separator, soft, surface, tabUnderline, text, textWidth, wrapText } from './ui/kit'
+import type { Role, Tone } from './ui/tokens'
+import { ACCENT, BLOCKED, DONE, MUTED, RADIUS, SIZE, SPACE, WEIGHT, fillClass, toneOf } from './ui/tokens'
 
-// The mockup's colours: purple for what runs, green for what merged, amber for what is blocked or has no spec.
-export const ACCENT = '#af99ff'
-export const DONE = '#78dbac'
-export const BLOCKED = '#ebba79'
-export const MUTED = '#9796a3'
-export const FAILED = '#f68b91'
-/** The task list's frame: the current task's card border and the hairlines around the area. */
-export const CARD_BORDER = '#665184'
-export const LINE = '#303139'
-
-export const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
-
-export const xml = (s: string): string => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
-
-// CJK, fullwidth forms and emoji advance about 1em; at 0.56em a wide title was sized at half its width.
-const WIDE =
-  /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꥠ-꥿가-힣豈-﫿︰-﹏！-｠￠-￦\u{1F300}-\u{1FAFF}\u{20000}-\u{3FFFD}]/u
-
-// Rough advance of system UI text, in em; good enough to size a text's slot.
-const charEm = (ch: string): number => (WIDE.test(ch) ? 1 : /[\s.,:;'|!il1()[\]]/.test(ch) ? 0.3 : /[A-ZА-ЯЁmwшщжюМШЩЖЮ@%]/.test(ch) ? 0.72 : 0.56)
-
-export const textWidth = (s: string, size: number): number => [...s].reduce((w, ch) => w + charEm(ch) * size, 0)
-
-/** Cuts `s` to fit `maxW` pixels, with an ellipsis when it had to cut. */
-export const fitText = (s: string, size: number, maxW: number): string => {
-  if (textWidth(s, size) <= maxW) return s
-  let out = ''
-  for (const ch of s) {
-    if (textWidth(out + ch + '…', size) > maxW) break
-    out += ch
-  }
-  return out + '…'
-}
+// The names the rest of the plugin imports from here: the colours (the tokens' dark values) and the text measures.
+export { ACCENT, BLOCKED, CARD_BORDER, DONE, FAILED, FONT, LINE, MUTED } from './ui/tokens'
+export { fitText, textWidth, wrapText, xml } from './ui/kit'
 
 // ---------- money, tokens and time ----------
 
@@ -103,46 +78,32 @@ export const totals = (list: AgentRun[], at: number): Totals => {
 
 export const summaryOf = (t: Totals): string => `≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} tokens · ${fmtTime(t.time)}`
 
-// ---------- the frame ----------
+// ---------- the shared measures ----------
 
-const PANE_CSS = `<style>
-text{font-family:${FONT}}
-.t{fill:#1a1a19}.s{fill:#56554f}.m{fill:#83827c}.k{fill:#e6e5e0}.tile{fill:#f1f0eb;stroke:#e3e2dd}.hero{fill:#efedf7;stroke:#d9d4ee}.card{fill:#f1f0eb;stroke:#e3e2dd}.hair{fill:#e3e2dd}.chip{fill:#ece9f7;stroke:#d9d4ee}
-@media (prefers-color-scheme: dark){.t{fill:#f3f3f6}.s{fill:#bbbcc6}.m{fill:#7f828f}.k{fill:#3d394a}.tile{fill:#1c1d23;stroke:#2b2d36}.hero{fill:#231f33;stroke:#353045}.card{fill:#211e31;stroke:#443b67}.hair{fill:#292b33}.chip{fill:#282434;stroke:#39334f}}
-.live{animation:p 2.2s ease-in-out infinite}@keyframes p{50%{opacity:.45}}
-@media (prefers-reduced-motion: reduce){.live{animation:none}}
-</style>`
-
-const svg = (W: number, H: number, body: string): string => `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${PANE_CSS}${body}</svg>`
-
-const startText = (x: number, y: number): string => `x="${x}" y="${y}"`
-const endText = (x: number, y: number): string => `x="${x}" y="${y}" text-anchor="end"`
-
-/** Breaks a sentence into lines of at most `maxW` pixels, at most `max` of them, the last cut with an ellipsis. */
-export const wrapText = (s: string, size: number, maxW: number, max = 3): string[] => {
-  const lines: string[] = []
-  let current = ''
-  for (const word of s.split(/\s+/).filter(Boolean)) {
-    const next = current ? `${current} ${word}` : word
-    if (textWidth(next, size) <= maxW || !current) current = next
-    else {
-      lines.push(current)
-      current = word
-    }
-  }
-  if (current) lines.push(current)
-  if (lines.length <= max) return lines.map(l => fitText(l, size, maxW))
-  const kept = lines.slice(0, max)
-  kept[max - 1] = fitText(lines.slice(max - 1).join(' '), size, maxW)
-  return kept
-}
-
-/** A disc in a colour, pulsing when live. */
-const dot = (x: number, y: number, color: string, isLive: boolean, r = 3.5): string => `<circle${isLive ? ' class="live"' : ''} cx="${x}" cy="${y}" r="${r}" fill="${color}"/>`
-
-// ---------- the hero ----------
+/** A card's padding, and a row's. */
+const PAD = SPACE[4]
+const ROW_PAD = SPACE[3]
+/** The gap between a row's leading piece, its text and its trailing piece. */
+const ROW_GAP = 10
 
 export type Drawing = { source: string; height: number }
+
+// ---------- the tabs ----------
+
+export { TAB_UNDERLINE_H }
+/** The size the app draws a Button's label at, about; a tab's underline is measured with it. */
+const TAB_LABEL_SIZE = 13
+
+/** The width of the underline under a tab's label. */
+export const tabWidth = (label: string): number => Math.ceil(textWidth(label, TAB_LABEL_SIZE))
+
+/** The underline of one tab, as wide as its label: a primary bar when active, an empty drawing of the same size when not. */
+export const tabUnderlineSvg = (W: number, isActive: boolean): string => frame(W, TAB_UNDERLINE_H, tabUnderline(0, 0, W, isActive))
+
+/** The hairline under the row of tabs. */
+export const separatorSvg = (W: number): string => frame(W, 1, separator(0, 0, W))
+
+// ---------- the hero ----------
 
 export type Hero = {
   kind: 'idle' | 'running' | 'history'
@@ -159,57 +120,56 @@ export type Hero = {
   steps?: Step[]
 }
 
-const HERO_PAD = 18
-const STEP_COLOR: Record<Step['state'], string> = { done: DONE, current: ACCENT, pending: '' }
-const STEP_MARK: Record<Step['state'], string> = { done: '✓', current: '●', pending: '○' }
+const HERO_TONE: Record<Hero['kind'], Tone> = { idle: 'neutral', running: 'primary', history: 'success' }
+const STEP_ICON: Record<Step['state'], IconName> = { done: 'check', current: 'circle-dot', pending: 'circle' }
+const STEP_ROLE: Record<Step['state'], Role> = { done: 'success', current: 'primary', pending: 'subtle' }
+const STEP_ICON_W = 12
 
 /** The hero card: the state line with its dot, the headline, the sentence, then the idle foot or the running progress and steps. */
 export const heroSvg = (W: number, h: Hero): Drawing => {
-  const inner = W - HERO_PAD * 2
-  const color = h.kind === 'history' ? DONE : h.kind === 'running' ? ACCENT : MUTED
-  const lines = wrapText(h.line, 12.5, inner)
+  const inner = W - PAD * 2
+  const tone = HERO_TONE[h.kind]
   const parts: string[] = []
-  parts.push(dot(HERO_PAD + 4, 29, color, h.kind === 'running'))
-  parts.push(`<text ${startText(HERO_PAD + 14, 33)} font-size="11" font-weight="650" fill="${color}" letter-spacing="0.6">${xml(h.state)}</text>`)
-  const headSize = h.kind === 'running' ? 20 : 22
-  parts.push(`<text class="t" ${startText(HERO_PAD, 64)} font-size="${headSize}" font-weight="700" letter-spacing="-0.5">${xml(fitText(h.headline, headSize, inner))}</text>`)
-  let y = 86
-  for (const l of lines) {
-    parts.push(`<text class="s" ${startText(HERO_PAD, y)} font-size="12.5">${xml(l)}</text>`)
-    y += 19
+  parts.push(dot(PAD + 3.5, 26.5, tone, h.kind === 'running'))
+  parts.push(text(PAD + 14, 30, h.state, { size: SIZE.xs, weight: WEIGHT.semibold, role: tone, tracking: 0.6, maxW: inner - 14 }))
+  parts.push(text(PAD, 55, h.headline, { size: SIZE.lg, weight: WEIGHT.semibold, tracking: -0.2, maxW: inner }))
+  let y = 76
+  for (const l of wrapText(h.line, SIZE.base, inner)) {
+    parts.push(text(PAD, y, l, { role: 'mutedForeground' }))
+    y += 18
   }
+  // `bottom` is where the content ends; the card's padding follows it.
+  let bottom = y - 18 + 5
   if (h.progress) {
     const { done, total } = h.progress
-    const pct = total ? Math.round((Math.min(done, total) / total) * 100) : 0
-    y += 8
-    parts.push(`<text class="s" ${startText(HERO_PAD, y)} font-size="11.5">${done} of ${total} task${total === 1 ? '' : 's'} accepted</text>`)
-    parts.push(`<text class="t" ${endText(W - HERO_PAD, y)} font-size="11.5" font-weight="650" font-variant-numeric="tabular-nums">${pct}%</text>`)
-    y += 9
-    parts.push(`<rect class="k" x="${HERO_PAD}" y="${y}" width="${inner}" height="7" rx="3.5"/>`)
-    const fillW = Math.round((inner * pct) / 100)
-    if (fillW > 0) parts.push(`<rect x="${HERO_PAD}" y="${y}" width="${Math.max(7, fillW)}" height="7" rx="3.5" fill="${ACCENT}"/>`)
-    y += 29
+    const value = total ? Math.min(done, total) / total : 0
+    y = bottom + 20
+    parts.push(text(PAD, y, `${done} of ${total} task${total === 1 ? '' : 's'} accepted`, { size: SIZE.sm, role: 'mutedForeground' }))
+    parts.push(text(W - PAD, y, `${Math.round(value * 100)}%`, { size: SIZE.sm, weight: WEIGHT.semibold, anchor: 'end', isTabular: true }))
+    parts.push(progress(PAD, y + 8, inner, value, 'primary'))
+    bottom = y + 8 + BAR_H
   }
   if (h.steps?.length) {
-    const n = h.steps.length
+    const count = h.steps.length
+    y = bottom + 22
     h.steps.forEach((s, i) => {
-      const x = HERO_PAD + (inner * i) / (n - 1)
-      const anchor = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'
-      const fill = STEP_COLOR[s.state] ? `fill="${STEP_COLOR[s.state]}"` : 'class="m"'
-      parts.push(`<text x="${x}" y="${y}" text-anchor="${anchor}" font-size="10.5" font-weight="${s.state === 'pending' ? 500 : 650}" ${fill}>${STEP_MARK[s.state]} ${xml(s.name)}</text>`)
+      const groupW = STEP_ICON_W + 5 + textWidth(s.name, SIZE.sm)
+      const x = i === 0 ? PAD : i === count - 1 ? W - PAD - groupW - 2 : PAD + (inner * i) / (count - 1) - groupW / 2
+      const isEnd = count > 1 && i === count - 1
+      parts.push(icon(STEP_ICON[s.state], x, y - 10, STEP_ICON_W, STEP_ROLE[s.state]))
+      // The last step's name ends at the padding whatever its measured width.
+      parts.push(text(isEnd ? W - PAD : x + STEP_ICON_W + 5, y, s.name, { size: SIZE.sm, weight: s.state === 'pending' ? WEIGHT.regular : WEIGHT.medium, role: STEP_ROLE[s.state], ...(isEnd ? { anchor: 'end' as const } : {}) }))
     })
-    y += 12
+    bottom = y + 4
   }
   if (h.chip) {
-    y += 10
-    const chipW = Math.round(textWidth(h.chip, 11) + 20)
-    parts.push(`<rect class="k" x="${HERO_PAD}" y="${y}" width="${chipW}" height="26" rx="7"/>`)
-    parts.push(`<text class="t" ${startText(HERO_PAD + 10, y + 17)} font-size="11">${xml(h.chip)}</text>`)
-    if (h.hint) parts.push(`<text class="m" ${endText(W - HERO_PAD, y + 17)} font-size="11">${xml(h.hint)}</text>`)
-    y += 26
+    y = bottom + 14
+    parts.push(badge(PAD, y, h.chip, { tone: 'neutral', variant: 'outline' }).svg)
+    if (h.hint) parts.push(text(W - PAD, y + 12.5, h.hint, { size: SIZE.sm, role: 'subtle', anchor: 'end' }))
+    bottom = y + BADGE_H
   }
-  const height = y + HERO_PAD
-  return { source: svg(W, height, `<rect class="hero" x="0.5" y="0.5" width="${W - 1}" height="${height - 1}" rx="11"/>${parts.join('')}`), height }
+  const height = Math.round(bottom + PAD)
+  return { source: frame(W, height, surface(0, 0, W, height, { variant: 'primary' }) + parts.join('')), height }
 }
 
 // ---------- the metric tiles ----------
@@ -217,21 +177,23 @@ export const heroSvg = (W: number, h: Hero): Drawing => {
 export type Metric = { value: number | string; label: string; color?: string }
 export const METRICS_H = 62
 
-/** A row of compact tiles: the number, then a dot in the metric's colour and its label. */
+/** A row of tiles on the card surface: a small uppercase label over the number; the number in the metric's tone when it has a colour. */
 export const metricsSvg = (W: number, list: Metric[]): string => {
-  const gap = 8
-  const n = Math.max(1, list.length)
-  const tw = (W - gap * (n - 1)) / n
+  const gap = SPACE[2]
+  const count = Math.max(1, list.length)
+  const tw = (W - gap * (count - 1)) / count
   const body = list
     .map((m, i) => {
       const x = i * (tw + gap)
-      return `<rect class="tile" x="${x + 0.5}" y="0.5" width="${tw - 1}" height="${METRICS_H - 1}" rx="9"/>
-<text class="t" ${startText(x + 13, 27)} font-size="21" font-weight="680" letter-spacing="-0.6" font-variant-numeric="tabular-nums">${xml(String(m.value))}</text>
-<circle cx="${x + 16}" cy="${44}" r="3" fill="${m.color ?? '#8d889b'}"/>
-<text class="s" ${startText(x + 24, 48)} font-size="11">${xml(fitText(m.label, 11, tw - 36))}</text>`
+      const tone = toneOf(m.color)
+      return (
+        surface(x, 0, tw, METRICS_H) +
+        text(x + ROW_PAD, 22, m.label.toUpperCase(), { size: SIZE.xs, weight: WEIGHT.medium, role: 'mutedForeground', tracking: 0.6, maxW: tw - ROW_PAD * 2 }) +
+        text(x + ROW_PAD, 47, String(m.value), { size: SIZE.xl, weight: WEIGHT.semibold, tracking: -0.3, isTabular: true, maxW: tw - ROW_PAD * 2, ...(tone === 'neutral' ? {} : { role: tone }) })
+      )
     })
     .join('')
-  return svg(W, METRICS_H, body)
+  return frame(W, METRICS_H, body)
 }
 
 // ---------- the agent card ----------
@@ -249,29 +211,26 @@ export type AgentCard = {
   elapsedMs: number
 }
 export const AGENT_CARD_H = 118
-const CARD_PAD = 15
 
 /** One running agent: its role, model and effort, its status, activity, a thin bar of its time against the limit, calls, tokens and elapsed. */
 export const agentCardSvg = (W: number, c: AgentCard): string => {
-  const color = c.status === 'failed' ? FAILED : c.status === 'done' ? DONE : ACCENT
+  const tone: Tone = c.status === 'failed' ? 'destructive' : c.status === 'done' ? 'success' : 'primary'
   const word = c.status === 'running' ? 'Running' : c.status === 'failed' ? 'Failed' : 'Done'
-  const statusW = textWidth(word, 11) + 16
-  const inner = W - CARD_PAD * 2
+  const inner = W - PAD * 2
+  const status = badge(W - PAD, 14, word, { tone, anchor: 'end', dot: c.status === 'running' ? 'live' : 'still' })
+  const headW = inner - status.width - ROW_GAP
   const meta = [modelName(c.model), c.effort].filter(Boolean).join(' · ')
-  const barW = inner
-  const fillW = Math.round(barW * Math.min(1, Math.max(0, c.progress)))
-  return svg(
+  return frame(
     W,
     AGENT_CARD_H,
-    `<rect class="card" x="0.5" y="0.5" width="${W - 1}" height="${AGENT_CARD_H - 1}" rx="10"/>
-<text class="t" ${startText(CARD_PAD, 28)} font-size="13.5" font-weight="650">${xml(fitText(c.role, 13.5, inner - statusW - 8))}</text>
-<text class="m" ${startText(CARD_PAD, 44)} font-size="10.5">${xml(fitText(meta, 10.5, inner - statusW - 8))}</text>
-${dot(W - CARD_PAD - statusW + 4, 25, color, c.status === 'running')}
-<text ${endText(W - CARD_PAD, 29)} font-size="11" font-weight="620" fill="${color}">${xml(word)}</text>
-<text class="t" ${startText(CARD_PAD, 68)} font-size="12">${xml(fitText(c.activity || '—', 12, inner))}</text>
-<rect class="k" x="${CARD_PAD}" y="80" width="${barW}" height="5" rx="2.5"/>${fillW > 0 ? `<rect x="${CARD_PAD}" y="80" width="${Math.max(5, fillW)}" height="5" rx="2.5" fill="${color}"/>` : ''}
-<text class="m" ${startText(CARD_PAD, 103)} font-size="11">${c.calls} tool call${c.calls === 1 ? '' : 's'} · ${fmtTokens(c.tokens)} tokens</text>
-<text class="m" ${endText(W - CARD_PAD, 103)} font-size="11" font-variant-numeric="tabular-nums">${fmtTime(c.elapsedMs)}</text>`,
+    surface(0, 0, W, AGENT_CARD_H) +
+      text(PAD, 28, c.role, { size: SIZE.md, weight: WEIGHT.semibold, maxW: headW }) +
+      text(PAD, 44, meta, { size: SIZE.sm, role: 'subtle', maxW: headW }) +
+      status.svg +
+      text(PAD, 68, c.activity || '—', { maxW: inner }) +
+      progress(PAD, 79, inner, c.progress, tone) +
+      text(PAD, 103, `${c.calls} tool call${c.calls === 1 ? '' : 's'} · ${fmtTokens(c.tokens)} tokens`, { size: SIZE.sm, role: 'subtle' }) +
+      text(W - PAD, 103, fmtTime(c.elapsedMs), { size: SIZE.sm, role: 'subtle', anchor: 'end', isTabular: true }),
   )
 }
 
@@ -280,10 +239,38 @@ ${dot(W - CARD_PAD - statusW + 4, 25, color, c.status === 'running')}
 export const ROW_H = 54
 export const MERGED_ROW_H = 40
 export const SESSION_ROW_H = 36
-const ROW_PAD = 13
 
 /** The tag's colour per kind: purple for what runs, green for ready and merged, amber for blocked or no spec, grey otherwise. */
 export const TAG_COLOR: Record<TagKind, string> = { running: ACCENT, done: DONE, blocked: BLOCKED, ready: DONE, muted: MUTED }
+
+type RowSpec = {
+  /** The piece at the row's start, given its left edge and the row's middle. */
+  leading?: (x: number, cy: number) => Piece
+  title: string
+  titleRole?: Role
+  /** The line under the title. */
+  meta?: string
+  /** The piece at the row's end, given its right edge and the row's middle. */
+  trailing?: (right: number, cy: number) => Piece
+  isFaded?: boolean
+  /** The last row of its card draws no hairline under itself. */
+  isLast?: boolean | undefined
+}
+
+/** The one row layout: leading piece, the title cut to what is left (over its meta line), trailing piece, the hairline. */
+const row = (W: number, H: number, r: RowSpec): string => {
+  const cy = H / 2
+  const lead = r.leading?.(ROW_PAD, cy)
+  const trail = r.trailing?.(W - ROW_PAD, cy)
+  const textX = ROW_PAD + (lead ? lead.width + ROW_GAP : 0)
+  const textW = Math.max(0, W - ROW_PAD - (trail ? trail.width + ROW_GAP : 0) - textX)
+  const body =
+    (lead?.svg ?? '') +
+    text(textX, r.meta === undefined ? cy + 4 : cy - 4, r.title, { weight: WEIGHT.medium, role: r.titleRole ?? 'foreground', maxW: textW }) +
+    (r.meta === undefined ? '' : text(textX, cy + 12, r.meta, { size: SIZE.sm, role: 'subtle', maxW: textW })) +
+    (trail?.svg ?? '')
+  return frame(W, H, (r.isFaded ? `<g opacity="0.5">${body}</g>` : body) + (r.isLast ? '' : separator(0, H - 1, W)))
+}
 
 export type ItemRowDrawing = {
   id: string
@@ -295,168 +282,163 @@ export type ItemRowDrawing = {
   isLast?: boolean
 }
 
-const hairline = (W: number, H: number, isLast: boolean | undefined): string => (isLast ? '' : `<rect class="hair" x="0" y="${H - 1}" width="${W}" height="1"/>`)
+const TAG_TONE: Record<TagKind, Tone> = { running: 'primary', done: 'success', blocked: 'warning', ready: 'success', muted: 'neutral' }
 
 /**
- * A row of a list card, as the mockup's .item-row: the id in a bordered chip, the title cut with an ellipsis over
- * its meta line, and the status tag at the right. The chevron beside it is a Button, since a Button holds only text.
+ * A row of a list card: the id in an outlined badge, the title cut with an ellipsis over its meta line, and the
+ * status badge at the right. The chevron beside it is a Button, since a Button holds only text.
  */
-export const itemRowSvg = (W: number, r: ItemRowDrawing): string => {
-  const H = ROW_H
-  const idW = Math.max(39, Math.round(textWidth(r.id, 11) + 16))
-  const color = TAG_COLOR[r.tag.kind]
-  const tagW = Math.round(textWidth(r.tag.text, 10) + 14)
-  const tagX = W - ROW_PAD - tagW
-  const textX = ROW_PAD + idW + 12
-  const textW = Math.max(0, tagX - 10 - textX)
-  return svg(
-    W,
-    H,
-    `<rect class="chip" x="${ROW_PAD + 0.5}" y="14.5" width="${idW - 1}" height="25" rx="7"/>
-<text x="${ROW_PAD + idW / 2}" y="31" text-anchor="middle" font-size="11" font-weight="660" fill="${r.tag.kind === 'done' ? DONE : ACCENT}">${xml(r.id)}</text>
-<text class="t" ${startText(textX, 24)} font-size="12" font-weight="590">${xml(fitText(r.title, 12, textW))}</text>
-<text class="m" ${startText(textX, 40)} font-size="11">${xml(fitText(r.meta, 11, textW))}</text>
-<rect x="${tagX}" y="17" width="${tagW}" height="20" rx="6" fill="${color}" fill-opacity="0.14" stroke="${color}" stroke-opacity="0.4"/>
-<text x="${tagX + tagW / 2}" y="31" text-anchor="middle" font-size="10" font-weight="600" fill="${color}">${xml(r.tag.text)}</text>
-${hairline(W, H, r.isLast)}`,
-  )
-}
+export const itemRowSvg = (W: number, r: ItemRowDrawing): string =>
+  row(W, ROW_H, {
+    leading: (x, cy) => badge(x, cy - BADGE_H / 2, r.id, { tone: r.tag.kind === 'done' ? 'success' : 'primary', variant: 'outline', minW: 38 }),
+    title: r.title,
+    meta: r.meta,
+    trailing: (right, cy) => badge(right, cy - BADGE_H / 2, r.tag.text, { tone: TAG_TONE[r.tag.kind], anchor: 'end' }),
+    isLast: r.isLast,
+  })
 
-/** A merged row, as the mockup's .merged-row: a green check, the id in muted text, the title cut; the PR link stands beside it. */
-export const mergedRowSvg = (W: number, r: { id: string; title: string; isLast?: boolean }): string => {
-  const H = MERGED_ROW_H
-  const cx = ROW_PAD + 8
-  const idX = ROW_PAD + 24
-  const titleX = idX + textWidth(r.id, 11) + 10
-  return svg(
-    W,
-    H,
-    `<circle cx="${cx}" cy="20" r="7.5" fill="none" stroke="${DONE}" stroke-width="1.8"/>
-<path d="m${cx - 4} 20.5 3 3 5.5-6.5" fill="none" stroke="${DONE}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-<text class="m" ${startText(idX, 24)} font-size="11">${xml(r.id)}</text>
-<text class="t" ${startText(titleX, 24)} font-size="12" font-weight="520">${xml(fitText(r.title, 12, Math.max(0, W - ROW_PAD - titleX)))}</text>
-${hairline(W, H, r.isLast)}`,
-  )
-}
+/** A merged row: a green ringed check, the id in the subtle grey (its slot as wide for `p31` as for `p33`, so titles line up), the title cut; the PR link stands beside it. */
+export const mergedRowSvg = (W: number, r: { id: string; title: string; isLast?: boolean }): string =>
+  row(W, MERGED_ROW_H, {
+    leading: (x, cy) => ({ svg: check(x + 8, cy) + text(x + 24, cy + 4, r.id, { size: SIZE.sm, role: 'subtle' }), width: 24 + Math.max(textWidth(r.id, SIZE.sm), [...r.id].length * SIZE.sm * 0.56) }),
+    title: r.title,
+    isLast: r.isLast,
+  })
 
-/** Another session's row: a dot (purple while an agent runs), its title cut, then `p12 · 2 agents · stale` at the right; a stale one is faded, an idle one's title is in the muted colour. */
+/** Another session's row: a dot (purple while an agent runs), its title cut, then `p12 · 2 agents · stale` at the right; a stale one is faded, an idle one's title is in the subtle grey. */
 export const sessionRowSvg = (W: number, r: { title: string; meta: string; isLive: boolean; isStale: boolean; isDim?: boolean; isLast?: boolean }): string => {
-  const H = SESSION_ROW_H
-  const metaW = textWidth(r.meta, 11)
-  const titleX = ROW_PAD + 16
-  const titleW = Math.max(0, W - ROW_PAD - metaW - 12 - titleX)
-  return svg(
+  const isLive = r.isLive && !r.isStale
+  return row(W, SESSION_ROW_H, {
+    leading: (x, cy) => ({ svg: dot(x + 3.5, cy, isLive ? 'primary' : 'neutral', isLive), width: 7 }),
+    title: r.title,
+    titleRole: r.isDim ? 'subtle' : 'foreground',
+    trailing: (right, cy) => ({ svg: text(right, cy + 4, r.meta, { size: SIZE.sm, role: 'subtle', anchor: 'end' }), width: textWidth(r.meta, SIZE.sm) }),
+    isFaded: r.isStale,
+    isLast: r.isLast,
+  })
+}
+
+// ---------- a caption line ----------
+
+export const CAPTION_H = 20
+
+/** A line of small text between drawings: the usage line under the hero, the footer; `right` stands at the far edge, in mono when asked. */
+export const captionSvg = (W: number, left: string, right = '', isRightMono = false): string => {
+  // A mono character advances about 0.62 em whatever it is.
+  const rightW = right ? (isRightMono ? [...right].length * SIZE.sm * 0.62 : textWidth(right, SIZE.sm)) + ROW_GAP : 0
+  return frame(
     W,
-    H,
-    `<g${r.isStale ? ' opacity="0.5"' : ''}>${dot(ROW_PAD + 4, 18, r.isLive && !r.isStale ? ACCENT : MUTED, r.isLive && !r.isStale)}
-<text class="${r.isDim ? 'm' : 't'}" ${startText(titleX, 22)} font-size="12" font-weight="590">${xml(fitText(r.title, 12, titleW))}</text>
-<text class="m" ${endText(W - ROW_PAD, 22)} font-size="11">${xml(r.meta)}</text></g>
-${hairline(W, H, r.isLast)}`,
+    CAPTION_H,
+    text(0, 14, left, { size: SIZE.sm, role: 'mutedForeground', isTabular: true, maxW: W - rightW }) + (right ? text(W, 14, right, { size: SIZE.sm, role: 'subtle', anchor: 'end', isMono: isRightMono }) : ''),
   )
 }
 
 // ---------- the task list of the running Overview ----------
 
-export const TASK_BAR_H = 6
+export const TASK_BAR_H = BAR_H
 const TASK_BAR_GAP = 5
 
-/** The segmented task bar: one rounded segment per task, green accepted, striped purple current, grey pending, amber blocked. */
-export const taskBarSvg = (W: number, segments: Segment[]): string => {
-  const n = Math.max(1, segments.length)
-  const each = (W - TASK_BAR_GAP * (n - 1)) / n
-  const fill = (s: Segment) => (s === 'accepted' ? DONE : s === 'current' ? 'url(#task-stripe)' : s === 'blocked' ? BLOCKED : '#3b3b46')
-  const defs = `<defs><pattern id="task-stripe" width="12" height="${TASK_BAR_H}" patternUnits="userSpaceOnUse"><rect width="12" height="${TASK_BAR_H}" fill="#584c74"/><rect width="4.2" height="${TASK_BAR_H}" fill="#aa91fb"/></pattern></defs>`
-  const list = segments.length ? segments : (['pending'] as Segment[])
-  const rects = list.map((s, i) => `<rect x="${i * (each + TASK_BAR_GAP)}" y="0" width="${each}" height="${TASK_BAR_H}" rx="3" fill="${fill(s)}"/>`).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${TASK_BAR_H}" viewBox="0 0 ${W} ${TASK_BAR_H}">${defs}${rects}</svg>`
-}
+/** How a task's segment is painted: green accepted, purple in progress, amber blocked, the empty track pending. */
+const segOf = (s: Segment, current: Tone, isStriped: boolean): Seg => (s === 'accepted' ? { tone: 'success' } : s === 'current' ? { tone: current, isStriped } : s === 'blocked' ? { tone: 'warning' } : { tone: 'track' })
+
+/** The segmented task bar: one rounded segment per task, green accepted, striped purple current, the track pending, amber blocked. */
+export const taskBarSvg = (W: number, list: Segment[]): string =>
+  frame(
+    W,
+    TASK_BAR_H,
+    segments(
+      0,
+      0,
+      W,
+      list.map(s => segOf(s, 'primary', true)),
+      { gap: TASK_BAR_GAP },
+    ),
+  )
 
 const RAIL_X = 12
 const MARK_R = 11.5
 const TASK_X = 36
 const CARD_X = 28
-const CARD_PAD_T = 13
-const EYEBROW: Record<TaskRow['kind'], string> = { done: '#83d9ac', current: '#b7a5f8', pending: '#9492a1', blocked: BLOCKED }
-const TITLE: Record<TaskRow['kind'], string> = { done: '#d6d6df', current: '#eae9f0', pending: '#a6a5af', blocked: '#eae9f0' }
-const BADGE: Record<TaskRow['badgeKind'], { fill: string; text: string }> = { done: { fill: '#23392f', text: '#86deb0' }, running: { fill: '#332945', text: '#cbb8ff' }, pending: { fill: '#2a2a31', text: '#a5a3ae' }, blocked: { fill: '#3a2f22', text: BLOCKED } }
-const HISTORY: Record<TaskRow['history'][number]['kind'], string> = { done: '#8bdab2', blocked: BLOCKED, muted: '#a3a1b0' }
+const CARD_PAD = SPACE[3]
+const KIND_ROLE: Record<TaskRow['kind'], Role> = { done: 'success', current: 'primary', pending: 'subtle', blocked: 'warning' }
+const BADGE_TONE: Record<TaskRow['badgeKind'], Tone> = { done: 'success', running: 'primary', pending: 'neutral', blocked: 'warning' }
+const HISTORY_ROLE: Record<TaskRow['history'][number]['kind'], Role> = { done: 'success', blocked: 'warning', muted: 'mutedForeground' }
+/** The badge's text may open with a dot glyph; the badge draws its own, pulsing. */
+const LIVE_MARK = '● '
 
-/** The marker on the rail: a check in a green disc, a purple ring with a dot, the number in a grey ring, or an amber cross. */
+/** The marker on the rail: a check in a green disc, a purple ring with a pulsing dot, the number in a plain ring, or an amber cross. */
 const marker = (r: TaskRow, cy: number): string => {
-  const ring = (fill: string, stroke: string) => `<circle cx="${RAIL_X}" cy="${cy}" r="${MARK_R}" fill="${fill}" stroke="${stroke}"/>`
-  const glyph = (text: string, color: string, size: number) => `<text x="${RAIL_X}" y="${cy + size * 0.36}" text-anchor="middle" font-size="${size}" font-weight="650" fill="${color}">${text}</text>`
   switch (r.kind) {
     case 'done':
-      return ring('#203c31', '#3a7355') + glyph('✓', DONE, 12)
+      return disc(RAIL_X, cy, MARK_R, 'success') + icon('check', RAIL_X - 6, cy - 6, 12, 'success')
     case 'current':
-      return ring('#30273f', '#a492ec') + `<circle class="live" cx="${RAIL_X}" cy="${cy}" r="4" fill="#ccbaff"/>`
+      return disc(RAIL_X, cy, MARK_R, 'primary', true) + dot(RAIL_X, cy, 'primary', true, { r: 4 })
     case 'blocked':
-      return ring('#3a2f22', BLOCKED) + glyph('✕', BLOCKED, 11)
+      return disc(RAIL_X, cy, MARK_R, 'warning', true) + icon('x', RAIL_X - 6, cy - 6, 12, 'warning')
     default:
-      return ring('#1b1c22', '#565663') + glyph(String(r.n).padStart(2, '0'), '#aaa8b3', 10)
+      return disc(RAIL_X, cy, MARK_R, 'plain') + text(RAIL_X, cy + 3.5, String(r.n).padStart(2, '0'), { size: SIZE.xs, weight: WEIGHT.semibold, role: 'subtle', anchor: 'middle', isTabular: true })
   }
 }
 
 /**
- * One task of the list as the mockup draws it: the rail with its marker, the eyebrow and the badge, the title (two
- * lines at most) and the sub-line; the current task in a bordered card that holds the agent block (role, model,
- * Active, the activity strip, the metrics) or the lead line with its history rows. Compact keeps the eyebrow, the
- * badge, the title and the current task's activity strip.
+ * One task of the list: the rail with its marker, the eyebrow and the badge, the title (two lines at most) and the
+ * sub-line; the current task in the purple-tinted card that holds the agent block (role, model, Active, the activity
+ * strip, the metrics) or the lead line with its history rows. Compact keeps the eyebrow, the badge, the title and
+ * the current task's activity strip.
  */
 export const taskRowSvg = (W: number, r: TaskRow, o: { isFirst: boolean; isLast: boolean; isCompact: boolean }): Drawing => {
   const isCard = r.kind === 'current'
-  const pad = isCard ? CARD_PAD_T : 0
+  const pad = isCard ? CARD_PAD : 0
   const x0 = isCard ? CARD_X + pad : TASK_X
   const right = isCard ? W - 1 - pad : W - 2
   const contentW = right - x0
   const parts: string[] = []
-  let y = (isCard ? 2 + pad : 12) + 10
+  let y = (isCard ? 2 + pad : 12) + 11
   const cy = y - 4
   // The heading: the eyebrow left, the badge right.
-  parts.push(`<text ${startText(x0, y)} font-size="10" font-weight="650" letter-spacing="0.6" fill="${EYEBROW[r.kind]}">${xml(r.eyebrow)}</text>`)
-  const badge = BADGE[r.badgeKind]
-  const badgeW = textWidth(r.badge, 9) + 12 + r.badge.length * 0.3
-  parts.push(`<rect x="${right - badgeW}" y="${y - 12}" width="${badgeW}" height="17" rx="5" fill="${badge.fill}"/>`)
-  parts.push(`<text ${endText(right - 6, y)} font-size="9" font-weight="700" letter-spacing="0.3" fill="${badge.text}">${xml(r.badge)}</text>`)
+  const isLive = r.badge.startsWith(LIVE_MARK)
+  const tag = badge(right, y - 13, isLive ? r.badge.slice(LIVE_MARK.length) : r.badge, { tone: BADGE_TONE[r.badgeKind], anchor: 'end', ...(isLive ? { dot: 'live' as const } : {}) })
+  parts.push(text(x0, y, r.eyebrow, { size: SIZE.xs, weight: WEIGHT.semibold, role: KIND_ROLE[r.kind], tracking: 0.6, maxW: contentW - tag.width - ROW_GAP }))
+  parts.push(tag.svg)
   // The title, then the sub-line.
-  const lines = wrapText(r.title, 12, contentW, 2)
-  lines.forEach((l, i) => {
-    y += i === 0 ? 22 : 18
-    parts.push(`<text ${startText(x0, y)} font-size="12" font-weight="620" fill="${TITLE[r.kind]}">${xml(l)}</text>`)
+  wrapText(r.title, SIZE.base, contentW, 2).forEach((l, i) => {
+    y += i === 0 ? 22 : 17
+    parts.push(text(x0, y, l, { weight: WEIGHT.medium, role: r.kind === 'pending' ? 'mutedForeground' : 'foreground' }))
   })
   if (!o.isCompact && r.sub) {
     y += 17
-    parts.push(`<text ${startText(x0, y)} font-size="10.5" fill="#898696">${xml(fitText(r.sub, 10.5, contentW))}</text>`)
+    parts.push(text(x0, y, r.sub, { size: SIZE.sm, role: 'subtle', maxW: contentW }))
   }
   const strip = (activity: string) => {
-    parts.push(`<rect x="${x0}" y="${y}" width="${contentW}" height="34" rx="7" fill="#1a1922" stroke="#322c3f"/>`)
-    parts.push(`<text ${startText(x0 + 10, y + 21)} font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="12" fill="#b19cf5">›_</text>`)
-    parts.push(`<text ${startText(x0 + 34, y + 21)} font-size="11" fill="#dad2ec">${xml(fitText(activity, 11, contentW - 44))}</text>`)
-    y += 34
+    parts.push(surface(x0, y, contentW, 32, { radius: RADIUS.md }))
+    parts.push(icon('terminal', x0 + 10, y + 9, 14, 'primary'))
+    parts.push(text(x0 + 32, y + 20, activity, { size: SIZE.sm, maxW: contentW - 42 }))
+    y += 32
   }
   if (isCard && !o.isCompact && (r.agent || r.lead)) {
-    y += 14
-    parts.push(`<rect x="${x0}" y="${y}" width="${contentW}" height="1" fill="#3a3446"/>`)
-    y += 12
+    y += 13
+    parts.push(separator(x0, y, contentW))
+    y += 13
     if (r.agent) {
-      parts.push(`<rect x="${x0}" y="${y}" width="28" height="28" rx="8" fill="#39304d"/>`)
-      parts.push(`<text x="${x0 + 14}" y="${y + 19}" text-anchor="middle" font-size="14" fill="#c4adff">⌘</text>`)
-      parts.push(`<text ${startText(x0 + 36, y + 12)} font-size="11" font-weight="700" fill="#eae9f0">${xml(r.agent.role)}</text>`)
-      parts.push(`<text ${startText(x0 + 36, y + 25)} font-size="10" fill="#9691a6">${xml(r.agent.model)}</text>`)
-      parts.push(`<text ${endText(right, y + 18)} font-size="10" fill="#c5b4fb"><tspan class="live">●</tspan> Active</text>`)
+      const activeW = textWidth('Active', SIZE.sm)
+      parts.push(soft(x0, y, 28, 28, 'primary'))
+      parts.push(icon('bot', x0 + 6, y + 6, 16, 'primary'))
+      parts.push(text(x0 + 38, y + 12, r.agent.role, { size: SIZE.sm, weight: WEIGHT.semibold, maxW: contentW - 38 - activeW - 24 }))
+      parts.push(text(x0 + 38, y + 25, r.agent.model, { size: SIZE.xs, role: 'subtle', maxW: contentW - 38 - activeW - 24 }))
+      parts.push(dot(right - activeW - 6, y + 14, 'primary', true, { r: 3 }))
+      parts.push(text(right, y + 18, 'Active', { size: SIZE.sm, role: 'primary', anchor: 'end' }))
       y += 38
       strip(r.agent.activity)
       y += 11
-      const metrics = `${r.agent.calls} tool calls · ${fmtTokens(r.agent.tokens)} tokens · ${fmtDuration(r.agent.elapsedMs)} elapsed`
-      parts.push(`<text ${startText(x0, y + 8)} font-size="10" fill="#9c99a9">${xml(fitText(metrics, 10, contentW))}</text>`)
+      parts.push(text(x0, y + 8, `${r.agent.calls} tool calls · ${fmtTokens(r.agent.tokens)} tokens · ${fmtDuration(r.agent.elapsedMs)} elapsed`, { size: SIZE.sm, role: 'subtle', maxW: contentW }))
       y += 12
     } else {
-      parts.push(`<text ${startText(x0, y + 10)} font-size="11" font-weight="600" fill="${ACCENT}">${xml(fitText(r.lead ?? '', 11, contentW))}</text>`)
+      parts.push(text(x0, y + 10, r.lead ?? '', { size: SIZE.sm, weight: WEIGHT.medium, role: 'primary', maxW: contentW }))
       y += 18
       for (const h of r.history) {
         y += 6
-        parts.push(`<rect x="${x0}" y="${y}" width="${contentW}" height="28" rx="7" fill="#202126" stroke="#303037"/>`)
-        parts.push(`<text ${startText(x0 + 10, y + 18)} font-size="10.5" fill="${HISTORY[h.kind]}">${xml(fitText(h.text, 10.5, contentW - 20))}</text>`)
+        parts.push(surface(x0, y, contentW, 28, { radius: RADIUS.md }))
+        parts.push(text(x0 + 10, y + 18, h.text, { size: SIZE.sm, role: HISTORY_ROLE[h.kind], maxW: contentW - 20 }))
         y += 28
       }
     }
@@ -466,9 +448,11 @@ export const taskRowSvg = (W: number, r: TaskRow, o: { isFirst: boolean; isLast:
   }
   y += isCard ? pad + 1 : o.isCompact ? 10 : 15
   const H = isCard ? y + 6 : y
-  const rail = `<rect x="${RAIL_X - 0.5}" y="${o.isFirst ? cy : 0}" width="1" height="${(o.isLast ? cy : H) - (o.isFirst ? cy : 0)}" fill="#34353f"/>`
-  const card = isCard ? `<rect x="${CARD_X + 0.5}" y="2.5" width="${W - 2 - CARD_X}" height="${H - 9}" rx="10" fill="#221e2d" stroke="${CARD_BORDER}"/>` : ''
-  return { source: svg(W, H, `${rail}${card}${marker(r, cy)}${parts.join('')}`), height: H }
+  // The rail stops at the marker's edge on both sides: the marker's fill is faint, the line would show through it.
+  const above = o.isFirst ? '' : `<rect x="${RAIL_X - 0.5}" y="0" width="1" height="${cy - MARK_R}" class="${fillClass('border')}"/>`
+  const below = o.isLast ? '' : `<rect x="${RAIL_X - 0.5}" y="${cy + MARK_R}" width="1" height="${H - cy - MARK_R}" class="${fillClass('border')}"/>`
+  const card = isCard ? surface(CARD_X, 2, W - 1 - CARD_X, H - 8, { variant: 'primary' }) : ''
+  return { source: frame(W, H, `${above}${below}${card}${marker(r, cy)}${parts.join('')}`), height: H }
 }
 
 // ---------- the band above the prompt ----------
@@ -478,81 +462,67 @@ export const BAND_COMPACT_H = 28
 /** The segmented bar's width: narrower on a narrow band. */
 const segmentsWidth = (W: number): number => (W < 400 ? 84 : 145)
 
-const BAND_CSS = `<style>
-text{font-family:${FONT}}
-.t{fill:#1f1f1f}.s{fill:#56554f}.m{fill:#83827c}.bg{fill:#f4f3ef;stroke:#dcdad3}.sep{fill:#cfcdc6}
-@media (prefers-color-scheme: dark){.t{fill:#f0eff2}.s{fill:#a4a2ac}.m{fill:#a5a1af}.bg{fill:#25242a;stroke:#494153}.sep{fill:#43404a}}
-.live{animation:p 2.2s ease-in-out infinite}@keyframes p{50%{opacity:.45}}
-@media (prefers-reduced-motion: reduce){.live{animation:none}}
-</style>`
-
 /**
- * The band as one SVG. Two lines: the dot, the id, the title (what is left, cut with an ellipsis), the state tag, a
- * separator and the task count; then the segmented bar, the activity line and the clock at the right. Compact: one
+ * The band as one SVG. Two lines: the dot, the id, the title (what is left, cut with an ellipsis), the state badge, a
+ * divider and the task count; then the segmented bar, the activity line and the clock at the right. Compact: one
  * line of dot, id, title, count and clock. Everything is measured against `W`, so nothing runs past the edge.
  */
 export const bandSvg = (b: Band, W: number, isCompact = false): string => {
   const H = isCompact ? BAND_COMPACT_H : BAND_H
   const isLive = /^(PLANNING|BUILDING|REVIEW)$/.test(b.state)
-  const y1 = isCompact ? 18 : 20
-  const pad = 13
-  const parts: string[] = []
-  parts.push(`<rect class="bg" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="9"/>`)
-  parts.push(`<rect x="0" y="6" width="2" height="${H - 12}" fill="${b.color}"/>`)
-  parts.push(`<circle${isLive ? ' class="live"' : ''} cx="${pad + 3.5}" cy="${y1 - 4}" r="3.5" fill="${b.color}"/>`)
+  const tone = toneOf(b.color)
+  const y1 = isCompact ? 18 : 21
+  const pad = ROW_PAD
+  const parts: string[] = [surface(0, 0, W, H), dot(pad + 3.5, y1 - 4, tone, isLive)]
   const idX = pad + 16
-  const idW = textWidth(b.id, 11)
-  // The right side, measured from the edge: the clock (compact) or the count, the separator and the state tag.
+  const idW = textWidth(b.id, SIZE.sm)
+  // The right side, measured from the edge: the clock (compact) or the count, the divider and the state badge.
   let right = W - pad
   if (isCompact && b.clock) {
-    const w = textWidth(b.clock, 11)
-    parts.push(`<text class="m" ${endText(right, y1)} font-size="11" font-variant-numeric="tabular-nums">${xml(b.clock)}</text>`)
-    right -= w + 12
+    parts.push(text(right, y1, b.clock, { size: SIZE.sm, role: 'subtle', anchor: 'end', isTabular: true }))
+    right -= textWidth(b.clock, SIZE.sm) + 12
   }
   if (b.count) {
-    const w = textWidth(b.count, 11)
-    parts.push(`<text ${endText(right, y1)} font-size="11" font-weight="600" font-variant-numeric="tabular-nums" fill="${isCompact ? b.color : ''}" class="${isCompact ? '' : 't'}">${xml(b.count)}</text>`)
-    right -= w + 10
+    parts.push(text(right, y1, b.count, { size: SIZE.sm, weight: WEIGHT.medium, role: isCompact ? tone : 'foreground', anchor: 'end', isTabular: true }))
+    right -= textWidth(b.count, SIZE.sm) + 10
   }
   if (!isCompact && b.state) {
-    const w = textWidth(b.state, 9) + 14 + b.state.length * 0.6
-    // At a narrow width the tag would sit on the id: it goes, as in compact mode, and the title keeps the room.
-    if (right - 10 - w >= idX + idW + 24) {
-      parts.push(`<rect class="sep" x="${right - 1}" y="${y1 - 11}" width="1" height="13"/>`)
-      right -= 10
-      parts.push(`<rect x="${right - w}" y="${y1 - 12}" width="${w}" height="17" rx="5" fill="${b.color}" fill-opacity="0.12" stroke="${b.color}" stroke-opacity="0.3"/>`)
-      parts.push(`<text ${endText(right - 7, y1)} font-size="9" font-weight="700" letter-spacing="0.6" fill="${b.color}">${xml(b.state)}</text>`)
-      right -= w + 10
+    const tag = badge(right - 10, y1 - 13, b.state, { tone, anchor: 'end', tracking: 0.5 })
+    // At a narrow width the badge would sit on the id: it goes, as in compact mode, and the title keeps the room.
+    if (right - 10 - tag.width >= idX + idW + 24) {
+      parts.push(divider(right - 1, y1 - 10, 12))
+      parts.push(tag.svg)
+      right -= 10 + tag.width + 10
     }
   }
-  parts.push(`<text class="s" ${startText(idX, y1)} font-size="11" font-weight="650" font-variant-numeric="tabular-nums">${xml(b.id)}</text>`)
+  parts.push(text(idX, y1, b.id, { size: SIZE.sm, weight: WEIGHT.semibold, role: 'mutedForeground', isTabular: true }))
   const titleX = idX + idW + 9
   const titleW = right - titleX
-  if (titleW > 24) parts.push(`<text class="t" ${startText(titleX, y1)} font-size="12" font-weight="${isCompact ? 590 : 650}">${xml(fitText(b.title, 12, titleW))}</text>`)
+  if (titleW > 24) parts.push(text(titleX, y1, b.title, { weight: isCompact ? WEIGHT.medium : WEIGHT.semibold, maxW: titleW }))
   if (!isCompact) {
-    const y2 = 44
-    const segX = idX
+    const y2 = 43
     const segW = segmentsWidth(W)
-    const n = Math.max(1, b.segments.length)
-    const gap = 4
-    const each = (segW - gap * (n - 1)) / n
-    b.segments.forEach((seg, i) => parts.push(`<rect x="${segX + i * (each + gap)}" y="${y2 - 8}" width="${each}" height="5" rx="2.5" fill="${seg === 'current' ? b.color : SEGMENT_COLORS[seg]}"/>`))
-    if (!b.segments.length) parts.push(`<rect x="${segX}" y="${y2 - 8}" width="${segW}" height="5" rx="2.5" fill="${SEGMENT_COLORS.pending}"/>`)
-    const clockW = textWidth(b.clock, 11)
-    parts.push(`<text class="m" ${endText(W - pad, y2)} font-size="11" font-variant-numeric="tabular-nums">${xml(b.clock)}</text>`)
-    const actX = segX + segW + 13
-    const actW = W - pad - clockW - 13 - actX
-    if (actW > 24) parts.push(`<text class="s" ${startText(actX, y2)} font-size="11">${xml(fitText(b.activity, 11, actW))}</text>`)
+    parts.push(
+      segments(
+        idX,
+        y2 - 7,
+        segW,
+        b.segments.map(s => segOf(s, tone, false)),
+      ),
+    )
+    parts.push(text(W - pad, y2, b.clock, { size: SIZE.sm, role: 'subtle', anchor: 'end', isTabular: true }))
+    const actX = idX + segW + 12
+    const actW = W - pad - textWidth(b.clock, SIZE.sm) - 12 - actX
+    if (actW > 24) parts.push(text(actX, y2, b.activity, { size: SIZE.sm, role: 'mutedForeground', maxW: actW }))
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${BAND_CSS}${parts.join('')}</svg>`
+  return frame(W, H, parts.join(''))
 }
 
 /** The idle strip: one line in the band's frame, a hollow dot in the muted colour and the idle line cut to the width. */
-export const idleStripSvg = (text: string, W: number): string => {
-  const H = BAND_COMPACT_H
-  const pad = 13
+export const idleStripSvg = (line: string, W: number): string => {
+  const pad = ROW_PAD
   const textX = pad + 16
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${BAND_CSS}<rect class="bg" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="9"/><circle cx="${pad + 3.5}" cy="14" r="3" fill="none" stroke="${MUTED}" stroke-width="1.5"/><text class="s" ${startText(textX, 18)} font-size="11">${xml(fitText(text, 11, W - textX - pad))}</text></svg>`
+  return frame(W, BAND_COMPACT_H, surface(0, 0, W, BAND_COMPACT_H) + dot(pad + 3.5, 14, 'neutral', false, { isHollow: true }) + text(textX, 18, line, { size: SIZE.sm, role: 'mutedForeground', maxW: W - textX - pad }))
 }
 
 /** The terminal's idle row: `○ pipeline · idle · 28 inbox · next: p2 …`, cut to `cols` columns with an ellipsis. */

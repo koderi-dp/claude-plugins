@@ -14,5 +14,5 @@
     "rootDir": "..",
     "outDir": "./out/build"
   },
-  "include": ["./env.d.ts", "./fixtures.ts", "./html.ts", "./render.ts"]
+  "include": ["./env.d.ts", "./fixtures.ts", "./html.ts", "./render.ts", "./sheet.ts"]
 }

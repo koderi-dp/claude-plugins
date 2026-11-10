@@ -11,6 +11,7 @@ import type { Ui } from '../hooks/pane'
 import { bandOf, idleLine } from '../hooks/status'
 import { STATES } from './fixtures'
 import { PAGE_CSS, Fragment, h, htmlOf, ui } from './html'
+import { kitSheet } from './sheet'
 
 // The globals the compiled JSX calls.
 ;(globalThis as Record<string, unknown>)['h'] = h
@@ -42,3 +43,13 @@ for (const [name, make] of Object.entries(STATES)) {
   writeFileSync(join(OUT, `${name}.html`), page)
   console.log(`wrote ${join(OUT, `${name}.html`)}`)
 }
+
+// The component sheet: every primitive and every drawing, each tone and state.
+writeFileSync(
+  join(OUT, 'kit.html'),
+  `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Pipeline preview · kit</title><style>${PAGE_CSS}</style></head>
+<body><p class="label">Kit · every primitive and component</p><div class="pane sheet">${kitSheet(520)}</div></body></html>
+`,
+)
+console.log(`wrote ${join(OUT, 'kit.html')}`)

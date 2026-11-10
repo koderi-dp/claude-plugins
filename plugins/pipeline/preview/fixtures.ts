@@ -155,7 +155,9 @@ export const history = (): PanelInput => base(catalo(), { panel: { ...PANEL, vie
 /** The running state with the Recent activity list open. */
 export const runningOpen = (): PanelInput => {
   const d = running()
-  return { ...d, panel: { ...d.panel, isActivityOpen: true } }
+  const busy: Sibling = { sessionId: 'busy', title: 'p12 · App themes per user', cwd: '/home/user/catalo-3', branch: 'feat/p12', item: 'p12', seenAt: iso(NOW - 5000), agents: [], signals: [], isStale: false }
+  const idleOne: Sibling = { ...staleSibling, sessionId: 'i1', isStale: false, seenAt: iso(NOW - 5000) }
+  return { ...d, siblings: [busy, idleOne, { ...idleOne, sessionId: 'i2' }], panel: { ...d.panel, isActivityOpen: true } }
 }
 
 /** The running state under `tasks: compact`. */

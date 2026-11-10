@@ -12,11 +12,13 @@ tsc -p plugins/pipeline/preview && node plugins/pipeline/preview/out/build/previ
 node plugins/pipeline/preview/shoot.mjs
 ```
 
-The pages and screenshots land in `plugins/pipeline/preview/out/` (ignored by git): `<state>.html` and
-`<state>.png`. Under the running and fix-round panels the band above the prompt is drawn too; under the idle
+The pages and screenshots land in `plugins/pipeline/preview/out/` (ignored by git): `<state>.html`,
+`<state>.png` (dark) and `<state>-light.png` (light). Under the running and fix-round panels the band above the prompt is drawn too; under the idle
 panel, the idle strip.
 
 - `fixtures.ts`: the `PanelInput` states.
+- `sheet.ts`: the `kit` page: every primitive of `hooks/ui/kit.ts` and every drawing of `hooks/draw.ts`, each tone and
+  state, on one sheet. It is the reference for the look: check a new section against it.
 - `html.ts`: the element table (Box, Text, Button, Svg, Input, Link) as HTML, and the `h` factory the compiled JSX calls.
 - `render.ts`: the script; `env.d.ts` and `tsconfig.json` let `tsc` compile the pure modules outside the engine.
-- `shoot.mjs`: the Playwright screenshots, dark colour scheme, device scale 2.
+- `shoot.mjs`: the Playwright screenshots, each page in the dark and the light colour scheme, device scale 2.

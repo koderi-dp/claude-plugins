@@ -5,8 +5,10 @@
 type Props = Record<string, unknown>
 type Node = unknown
 
+import { cssOf } from '../hooks/ui/tokens'
+
 const CELL = 8
-export const DIM = '#8d8c9a'
+export const DIM = 'var(--dim)'
 
 export const escape = (s: string): string => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
 
@@ -32,7 +34,7 @@ const px = (v: unknown): string | undefined => (typeof v === 'number' ? `${v * C
 
 export function Box(p: Props): El {
   const dir = (p['flexDirection'] as string | undefined) ?? 'row'
-  const border = p['borderStyle'] ? `1px solid ${p['borderDimColor'] ? '#34353f' : '#565663'}` : undefined
+  const border = p['borderStyle'] ? `1px solid var(${p['borderDimColor'] ? '--border' : '--border-strong'})` : undefined
   return el(
     `<div class="box"${style([
       ['display', 'flex'],
@@ -74,7 +76,7 @@ export function Text(p: Props): El {
 export function Button(p: Props): El {
   const plain = !!p['plain']
   return el(
-    `<button type="button" class="${plain ? 'plain' : 'button'}"${style([['color', p['dimColor'] ? DIM : plain ? '#b6a1f8' : undefined]])}>${escape(String(p['label'] ?? ''))}${p['hotkey'] ? `<kbd>${escape(String(p['hotkey']))}</kbd>` : ''}</button>`,
+    `<button type="button" class="${plain ? 'plain' : 'button'}"${style([['color', p['dimColor'] ? DIM : plain ? 'var(--accent)' : undefined]])}>${escape(String(p['label'] ?? ''))}${p['hotkey'] ? `<kbd>${escape(String(p['hotkey']))}</kbd>` : ''}</button>`,
   )
 }
 
@@ -108,21 +110,32 @@ export const ui = { Box, Text, Button, Svg, Input, Link }
 /** The HTML text of a rendered tree. */
 export const htmlOf = (tree: unknown): string => inner(tree)
 
+const vars = (scheme: 'light' | 'dark'): string =>
+  `--page:${cssOf('background', scheme)};--border:${cssOf('border', scheme)};--border-strong:${cssOf('input', scheme)};--fg:${cssOf('foreground', scheme)};--dim:${cssOf('mutedForeground', scheme)};--accent:${cssOf('primary', scheme)};--control:${cssOf('muted', scheme)}`
+
+/**
+ * The page's own styles. The page and the panel on it take the app's real background (a mid-dark grey, a warm
+ * off-white), not black or white, so the drawings' overlays show as they do in the app.
+ */
 export const PAGE_CSS = `
-:root{color-scheme:dark}
-body{margin:0;padding:24px;background:#15161b;color:#eae9f0;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Inter,sans-serif;font-size:13px;line-height:20px}
-.pane{width:520px;padding:12px 16px;background:#191a20;border:1px solid #2a2b33;border-radius:12px}
+:root{color-scheme:light dark;${vars('light')}}
+@media (prefers-color-scheme: dark){:root{${vars('dark')}}}
+body{margin:0;padding:24px;background:var(--page);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Inter,sans-serif;font-size:13px;line-height:20px}
+.pane{width:520px;padding:12px 16px;background:var(--page);border:1px solid var(--border);border-radius:12px}
 .pane + .pane{margin-top:24px}
 .text{white-space:pre-wrap;min-width:0;overflow-wrap:anywhere}
 .svg{display:block;line-height:0;flex:none}
 .svg svg{display:block}
-button{font:inherit;cursor:default;color:inherit;background:#2a2a33;border:1px solid #3a3a45;border-radius:6px;padding:0 8px;line-height:20px}
+button{font:inherit;cursor:default;color:inherit;background:var(--control);border:1px solid var(--border);border-radius:6px;padding:0 8px;line-height:20px}
 button.plain{background:transparent;border:0;padding:0}
-kbd{margin-left:6px;font-size:10px;color:#8d8c9a}
+kbd{margin-left:6px;font-size:10px;color:var(--dim)}
 .input{display:flex;flex:1;gap:8px;align-items:center}
-.input input{flex:1;font:inherit;color:#eae9f0;background:#1f2027;border:1px solid #34353f;border-radius:6px;padding:2px 8px;line-height:20px}
-.submit{font-size:11px;color:#8d8c9a}
-a{color:#b6a1f8;text-decoration:none}
-.label{margin:0 0 8px;font-size:11px;color:#8d8c9a;text-transform:uppercase;letter-spacing:1px}
+.input input{flex:1;font:inherit;color:var(--fg);background:var(--control);border:1px solid var(--border);border-radius:6px;padding:2px 8px;line-height:20px}
+.submit{font-size:11px;color:var(--dim)}
+a{color:var(--accent);text-decoration:none}
+.label{margin:0 0 8px;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
 .caption{margin-top:32px}
+.sheet .label{margin-top:20px}
+.sheet .label:first-child{margin-top:0}
+.sheet > .svg{margin-bottom:8px}
 `
