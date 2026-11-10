@@ -214,11 +214,14 @@ export function stepsOf(item: Item | null, ledger: Ledger | null): Step[] {
   return names.map((name, i) => ({ name, state: i < current ? 'done' : i === current ? 'current' : 'pending' }))
 }
 
-/** The task an agent works on: the ledger's running or fix task, else the resume block's. */
+/**
+ * The one task an agent works on: the resume block's task when it names one that is not accepted, else the first
+ * task that is running or in a fix round. A ledger may hold several such tasks at once; only this one is current.
+ */
 export function currentTask(ledger: Ledger | null): TaskRecord | undefined {
   if (!ledger) return undefined
   const tasks = ledger.tasks ?? []
-  return tasks.find(t => t.status === 'running' || t.status === 'fix') ?? tasks.find(t => t.n === ledger.resume?.task)
+  return tasks.find(t => t.n === ledger.resume?.task && t.status !== 'accepted') ?? tasks.find(t => t.status === 'running' || t.status === 'fix')
 }
 
 const ROLES: Role[] = ['implementer', 'reviewer', 'final', 'escalate']
@@ -403,7 +406,12 @@ export function taskRowsOf(d: TaskRowsInput): TaskRow[] {
     if (task.status === 'blocked') {
       return { n: task.n, kind: 'blocked', eyebrow: `${pad2(task.n)} · BLOCKED`, badge: 'Blocked', badgeKind: 'blocked', title, sub: task.review?.verdict || undefined, history: [] }
     }
-    const isCurrent = task.status === 'running' || task.status === 'fix' || task.n === current?.n
+    const isCurrent = task.n === current?.n
+    const fixBadge = () => `Fix round ${Math.max(1, attemptsOf(task, d.fixRounds).filter(a => a.label.startsWith('Fix ')).length)} of ${d.fixRounds}`
+    // A second task the ledger marks running or in a fix round: a plain row with its own badge, no card and no agent.
+    if (!isCurrent && (task.status === 'running' || task.status === 'fix')) {
+      return { n: task.n, kind: 'pending', eyebrow: `${pad2(task.n)} · IN PROGRESS`, badge: task.status === 'fix' ? fixBadge() : 'In progress', badgeKind: 'running', title, history: [] }
+    }
     if (!isCurrent) {
       const eyebrow = sawCurrent && !sawNext ? 'NEXT TASK' : 'PENDING'
       if (sawCurrent) sawNext = true
@@ -413,7 +421,7 @@ export function taskRowsOf(d: TaskRowsInput): TaskRow[] {
     const attempts = attemptsOf(task, d.fixRounds)
     const role = agent ? roleOf(agent, d.ledger) : undefined
     const isReview = role?.role === 'reviewer' || role?.role === 'final'
-    const badge = task.status === 'fix' ? `Fix round ${Math.max(1, attempts.filter(a => a.label.startsWith('Fix ')).length)} of ${d.fixRounds}` : isReview ? 'In review' : '● Running'
+    const badge = task.status === 'fix' ? fixBadge() : isReview ? 'In review' : '● Running'
     const lastRole = (task.dispatches ?? []).at(-1)?.role
     const sub = task.status === 'fix' ? currentLine(task, undefined, d.ledger, d.fixRounds, d.now) : `${roleWord(role?.role ?? lastRole ?? 'implementer')} · in progress`
     const row: TaskRow = { n: task.n, kind: 'current', eyebrow: `${pad2(task.n)} · CURRENT TASK`, badge, badgeKind: 'running', title, sub, history: [] }
@@ -501,8 +509,8 @@ export type Band = {
   tasks: { title: string; segment: Segment }[]
 }
 
-/** A task's segment of the bar: accepted, blocked, current (running, in a fix round, or the resume block's task), else pending. */
-export const taskSegment = (t: TaskRecord, current: Pick<TaskRecord, 'n'> | undefined): Segment => (t.status === 'accepted' ? 'accepted' : t.status === 'blocked' ? 'blocked' : t.status === 'running' || t.status === 'fix' || t.n === current?.n ? 'current' : 'pending')
+/** A task's segment of the bar: accepted, blocked, current (the one current task; without one, a task that is running or in a fix round), else pending. */
+export const taskSegment = (t: TaskRecord, current: Pick<TaskRecord, 'n'> | undefined): Segment => (t.status === 'accepted' ? 'accepted' : t.status === 'blocked' ? 'blocked' : (current ? t.n === current.n : t.status === 'running' || t.status === 'fix') ? 'current' : 'pending')
 
 /** `1 accepted · 1 in progress · 1 pending`, with `n blocked` when any is; the legend under the task bar. */
 export function segmentLegend(segments: Segment[]): { n: number; word: string; kind: Segment }[] {

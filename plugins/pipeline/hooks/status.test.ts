@@ -207,7 +207,7 @@ test('stepsOf marks Plan, Build, Review and Merge from the status and the ledger
   expect(stepsOf(null, null).map(s => s.name)).toEqual(['Plan', 'Build', 'Review', 'Merge'])
 })
 
-test('currentTask is the running or fix task, else the resume block\'s', () => {
+test('currentTask is the resume block\'s task when it is not accepted, else the first running or fix task', () => {
   expect(currentTask(LEDGER)?.n).toBe(3)
   expect(currentTask({ ...LEDGER, tasks: LEDGER.tasks.map(t => (t.n === 3 ? { ...t, status: 'pending' as const } : t)) })?.n).toBe(3)
   expect(currentTask({ ...LEDGER, resume: undefined, tasks: LEDGER.tasks.filter(t => t.n !== 3) })).toBe(undefined)
@@ -441,6 +441,39 @@ test('taskRowsOf: in a fix round with no agent, the current task reads Fix round
     { text: 'Fix 1 of 2 · Sonnet 5.5 · in progress', kind: 'muted' },
   ])
   expect(rows[2]).toEqual({ n: 3, kind: 'blocked', eyebrow: '03 · BLOCKED', badge: 'Blocked', badgeKind: 'blocked', title: 'The Page tab follows the drag live', sub: 'blocked: the schema is undecided', history: [] })
+})
+
+test('two tasks in a fix round at once: exactly one is current, the resume block\'s when it is not accepted, else the first; only it carries the agent, and the bar counts one in progress', () => {
+  const fixOf = (t: TaskRecord): TaskRecord => ({ ...t, status: 'fix', dispatches: [dispatch('implementer', 'claude-sonnet-5-5', 3), dispatch('reviewer', 'claude-opus-5-5', 1, 'FIX REQUIRED: no test'), dispatch('implementer', 'claude-sonnet-5-5', 0, '')] })
+  const accepted = (t: TaskRecord): TaskRecord => ({ ...t, status: 'accepted' })
+  // Tasks 1 and 4 in a fix round, 2 and 3 accepted, as a real ledger had it.
+  const tasks: TaskRecord[] = [fixOf(TASKS[0]!), accepted(TASKS[1]!), accepted(TASKS[2]!), fixOf(TASKS[3]!)]
+  const agent = running('Implement task 4', 'claude-sonnet-5-5', NOW - 60_000)
+  // The resume block names task 4: it is the current one.
+  const ledger = taskLedger(tasks, { task: 4, state: 'fix round 1 dispatched', at: new Date(NOW - 60_000).toISOString() })
+  expect(currentTask(ledger)?.n).toBe(4)
+  const rows = taskRowsOf({ tasks, agents: [agent], ledger, fixRounds: 2, taskReview: 'off', now: NOW })
+  expect(rows.map(r => r.kind)).toEqual(['pending', 'done', 'done', 'current'])
+  expect(rows.filter(r => r.agent)).toHaveLength(1)
+  expect(rows[3]).toMatchObject({ eyebrow: '04 · CURRENT TASK', badge: 'Fix round 1 of 2', badgeKind: 'running' })
+  expect(rows[3]!.agent?.role).toBe('Implementer')
+  // The other task in a fix round: a plain row with its own badge, no agent, no lead line, no trail.
+  expect(rows[0]).toEqual({ n: 1, kind: 'pending', eyebrow: '01 · IN PROGRESS', badge: 'Fix round 1 of 2', badgeKind: 'running', title: TASKS[0]!.title, history: [] })
+  const segments = tasks.map(t => taskSegment(t, currentTask(ledger)))
+  expect(segments).toEqual(['pending', 'accepted', 'accepted', 'current'])
+  expect(segmentLegend(segments).map(l => `${l.n} ${l.word}`)).toEqual(['2 accepted', '1 in progress', '1 pending'])
+  // No resume block, or one that names an accepted task: the first task in progress is the current one.
+  for (const resume of [undefined, { task: 2, state: 'task 2 dispatched', at: '' }]) {
+    const other = taskLedger(tasks, resume)
+    expect(currentTask(other)?.n).toBe(1)
+    const again = taskRowsOf({ tasks, agents: [agent], ledger: other, fixRounds: 2, taskReview: 'off', now: NOW })
+    expect(again.map(r => r.kind)).toEqual(['current', 'done', 'done', 'pending'])
+    expect(again.filter(r => r.agent).map(r => r.n)).toEqual([1])
+    expect(again[3]).toMatchObject({ eyebrow: '04 · IN PROGRESS', badge: 'Fix round 1 of 2' })
+  }
+  // A second task merely running reads In progress.
+  const two = [{ ...TASKS[0]!, status: 'running' as const }, TASKS[1]!]
+  expect(taskRowsOf({ tasks: two, agents: [], ledger: taskLedger(two, { task: 2, state: 'task 2 dispatched', at: '' }), fixRounds: 2, now: NOW })[0]).toMatchObject({ kind: 'pending', badge: 'In progress', eyebrow: '01 · IN PROGRESS' })
 })
 
 test('taskRowsOf: a current task with no dispatch and no agent lists its own finished agents under the lead line, not an earlier task\'s', () => {
