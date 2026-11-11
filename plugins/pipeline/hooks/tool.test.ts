@@ -884,7 +884,10 @@ test('close does the whole Close in the main checkout: pulled, merged, records c
   expect(runs).toContainEqual(['git', '-C', MAIN, 'commit', '-q', '-m', 'p1: close records', '-m', 'Co-Authored-By: X', '--', 'docs/pipeline'])
   expect(runs).toContainEqual(['git', '-C', MAIN, 'push', '-q', 'origin', 'main'])
   // Every git call ran in the main checkout, whatever this session's directory is.
-  expect(runs.every(r => r[0] === 'git' && r[2] === MAIN)).toBe(true)
+  // Around them, the repository lock: taken first, released last.
+  expect(runs[0]).toEqual(['mkdir', `${MAIN}/.git/pipeline.lock`])
+  expect(runs.at(-1)).toEqual(['rmdir', `${MAIN}/.git/pipeline.lock`])
+  expect(runs.slice(1, -1).every(r => r[0] === 'git' && r[2] === MAIN)).toBe(true)
   expect(JSON.parse(files.get(`${DIR}/ledgers/p1.json`)!).resume.state).toBe('closed')
 })
 
@@ -929,4 +932,58 @@ test('0.3.5: ledger given text for resume keeps it as the state; a wrong shape i
   expect(JSON.parse(files.get(file)!).resume).toMatchObject({ task: 1, state: 'ok' })
   await call($, { action: 'ledger', item: 'p1', set: { note: null } })
   expect('note' in JSON.parse(files.get(file)!)).toBe(false)
+})
+
+// ---------- 0.3.6: every write goes through the tool, one at a time ----------
+
+/** A world whose `mkdir` of the lock fails while `held` is true, as when another session holds it. */
+function lockWorld(on: On, state: { held: boolean }, files: Map<string, string>) {
+  const runs: string[][] = []
+  const LOCK = `${MAIN}/.git/pipeline.lock`
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    runs.push(argv)
+    const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    if (argv[0] === 'mkdir') {
+      if (state.held || files.has(LOCK)) return { value: { ...ok, exitCode: 1, stderr: 'File exists' } } as never
+      files.set(LOCK, '')
+      return { value: ok } as never
+    }
+    if (argv[0] === 'rmdir') {
+      files.delete(LOCK)
+      return { value: ok } as never
+    }
+    return { value: ok } as never
+  })
+  return { runs, LOCK }
+}
+
+test('a write takes the repository lock and releases it, also when it is refused; reads take none', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: VALID_CONFIG })
+  const { runs, LOCK } = lockWorld(on, { held: false }, files)
+  await call($, { action: 'add', item: ITEM })
+  expect(runs).toEqual([['mkdir', LOCK], ['rmdir', LOCK]])
+  expect(text(await call($, { action: 'update', id: 'p9', set: { status: 'ready' } }))).toBe('refused: no item p9')
+  expect(runs.length).toBe(4)
+  expect(files.has(LOCK)).toBe(false)
+  await call($, { action: 'status' })
+  await call($, { action: 'signals' })
+  expect(runs.length).toBe(4)
+})
+
+test('a write waits while another session holds the lock, and goes on when it is released', async ($, on) => {
+  const { files, clock } = world(on, { [CONFIG]: VALID_CONFIG })
+  const state = { held: true }
+  files.set(`${MAIN}/.git/pipeline.lock`, '')
+  const { runs } = lockWorld(on, state, files)
+  const pending = call($, { action: 'add', item: ITEM })
+  await clock.advance(600)
+  expect(files.has(BACKLOG)).toBe(false)
+  // The other session finishes: its lock folder goes.
+  state.held = false
+  files.delete(`${MAIN}/.git/pipeline.lock`)
+  await clock.advance(300)
+  expect(text(await pending)).toBe('added p1 · inbox · no spec')
+  expect(runs.filter(r => r[0] === 'mkdir').length).toBeGreaterThan(2)
+  expect(files.has(`${MAIN}/.git/pipeline.lock`)).toBe(false)
 })

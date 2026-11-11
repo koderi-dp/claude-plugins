@@ -24,7 +24,7 @@ import { SEGMENT_COLORS, bandOf, idleLine, sessionName, specWhat, statusText, ta
 import type { Band } from './status'
 import type { StatusInput } from './status'
 import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
-import { STALE_MS, deadAgents, isProtected, mergeSignals, normalizeCommand, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
+import { STALE_MS, deadAgents, isProtected, mergeSignals, normalizeCommand, toolFileNote, toolFileOf, toolFileWrittenBy, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
 import type { Call } from './watch'
 
 const TOOL = 'mcp__pipeline__pipeline'
@@ -224,6 +224,8 @@ const self = {
   // The items this session was named after, so an item renames it once, and the name waiting for the turn's end.
   // The item this session runs: the last one it started, planned, briefed or wrote a ledger for.
   item: '',
+  // How deep this session is inside its own locked actions: only the outermost takes the repository's lock.
+  lockDepth: 0,
   // The lead's own model use since the ledger last recorded it: fresh tokens and the share read from cache.
   lead: { tokens: 0, cached: 0 },
   // What a redraw would read from disk again and again, kept for a few seconds.
@@ -553,7 +555,64 @@ async function markDelivered($: EngineInterface): Promise<void> {
   await heartbeat($, true)
 }
 
+/** The actions that change the backlog or a ledger: each runs alone across every session on the repository. */
+const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'start', 'stop', 'init', 'migrate-apply'])
+const LOCK_WAIT_MS = 250
+const LOCK_TRIES = 120
+
+const pause = ($: EngineInterface, ms: number) => new Promise<void>(resolve => void $.clock.after(ms, () => resolve()))
+
+/**
+ * Runs `work` holding the repository's pipeline lock: a folder under .git that only one `mkdir` can create, so two
+ * sessions never read and write the backlog at once. It waits for another holder up to thirty seconds, then takes
+ * the lock over (its holder died). Where there is no repository, or no `mkdir`, the work runs unlocked, as before.
+ */
+async function withLock<T>($: EngineInterface, found: string, work: () => Promise<T>): Promise<T> {
+  if (self.lockDepth > 0 || !self.hasRepo) return work()
+  const dir = `${found}/.git/pipeline.lock`
+  const make = async (): Promise<'held' | 'busy' | 'none'> => {
+    try {
+      const r = await $.process.run(['mkdir', dir], { cwd: found, timeoutMs: 10_000 })
+      if (r.exitCode === 0) return 'held'
+      return (await $.fs.exists(dir)) ? 'busy' : 'none'
+    } catch {
+      return 'none'
+    }
+  }
+  let state = await make()
+  for (let i = 0; state === 'busy' && i < LOCK_TRIES; i++) {
+    await pause($, LOCK_WAIT_MS)
+    state = await make()
+  }
+  if (state === 'busy') {
+    // Thirty seconds: no action holds it that long, so its holder is gone.
+    try {
+      await $.process.run(['rmdir', dir], { cwd: found, timeoutMs: 10_000 })
+    } catch {}
+    state = await make()
+  }
+  self.lockDepth++
+  try {
+    return await work()
+  } finally {
+    self.lockDepth--
+    if (state === 'held') {
+      try {
+        await $.process.run(['rmdir', dir], { cwd: found, timeoutMs: 10_000 })
+      } catch {}
+    }
+  }
+}
+
 async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
+  if (LOCKED_ACTIONS.has(e.action) && self.lockDepth === 0) {
+    const root = await resolveRoot($)
+    return withLock($, root, () => runToolNow($, e))
+  }
+  return runToolNow($, e)
+}
+
+async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
   const found = await resolveRoot($)
   const { config: c, backlog: loaded, error } = await loadAll($, found)
   const p = paths(found)
@@ -829,7 +888,9 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
     throw new Refused(`${id} is ${item.status}${why && !why.ready ? `: ${why.reason}` : ''}, not ready`)
   }
   // An item another live session runs is not taken over: two sessions asking for the next item get two items.
+  // The live file is read now, under the lock, so a claim made a moment ago by another session is seen.
   if (isActive && self.item !== id && !isChild) {
+    await heartbeat($, true)
     const other = (await read($, siblings)).find(x => !x.isStale && x.item === id)
     if (other) throw new Refused(`${id} is run by another session (${other.title}); pick the next item`)
     if (runningOf(await read($, children)).some(ch => ch.item === id)) throw new Refused(`${id} is run by a child session of this one`)
@@ -2013,8 +2074,16 @@ export const register: Register = (on, options) => {
   // activity line, and for a shell command whether it failed. The main session's passes.
   on('tool.call', async ($, e, next) => {
     const agentId = e.agentId
-    if (!agentId) return next(e)
     const call = e as unknown as Call
+    // The files only the tool writes: an edit or a shell write by anyone, the lead included, is refused and pointed
+    // at the action that does it, so every write is checked, locked and followed by the generated view.
+    try {
+      if (await read($, config)) {
+        const file = EDIT_TOOLS.has(e.tool) ? toolFileOf(pathOf(call) ?? '') : e.tool === 'Bash' ? toolFileWrittenBy(String((call as Record<string, unknown>)['command'] ?? '')) : undefined
+        if (file) return { deny: toolFileNote(file) }
+      }
+    } catch {}
+    if (!agentId) return next(e)
     try {
       if (EDIT_TOOLS.has(e.tool)) {
         const path = pathOf(call)

@@ -75,6 +75,10 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 
 Other sessions on the same repository (a second terminal, a desktop window, a child) write the same live file, and the panel lists them under Other sessions with their item and running agents; one that has not heartbeat for three minutes shows dim, and its entry goes once the watchdog has reported its agents dead.
 
+## Several sessions, one backlog
+
+Only the tool writes `backlog.json`, `BACKLOG.md`, `facts.md` and the ledgers. An edit of one of them, or a shell command that writes one, is refused for the lead and for subagents alike and pointed at the action that does it; reading them and `git` on them pass. Every writing action takes a lock shared by all sessions on the repository (a folder under `.git` only one session can create), re-reads the file, changes it and releases the lock, so two sessions never overwrite each other and two sessions asking for the next item get two different items. A session waits up to thirty seconds for another's lock, then takes it over. Specs, plans, `rules.md` and `config.json` stay ordinary files.
+
 ## The watchdog
 
 The mod follows every subagent of the session and keeps a live file (`.git/pipeline-live.json`, never committed). It cannot stop an agent itself: a signal reaches the lead through the tool's `signals` (or `get`) on its next turn, and as a push notification per `notify`. Between items under `run all` it schedules a wake-up every `silentMinutes` where the host offers one.

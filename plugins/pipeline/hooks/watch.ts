@@ -218,6 +218,42 @@ export function normalizePath(path: string): string {
 
 const WORKTREE_PREFIX = /^\.claude\/worktrees\/[^/]+\//
 
+const TOOL_FILE = /(?:^|\/)docs\/pipeline\/(?:backlog\.json|BACKLOG\.md|facts\.md|ledgers\/[^/]+\.json)$/
+const WRITES = /(?:>>?|\bsed\s+(?:-[a-zA-Z]*i|--in-place)|\btee\b|\bmv\b|\bcp\b|\brm\b|\btruncate\b|\bdd\b|\binstall\b|write_text|\.write\(|open\([^)]*['"][wa]|writeFile|\bprettier\b[^|;&]*--write|\bjq\b[^|;&]*\bsponge\b)/
+
+/** The pipeline file a path names when only the tool may write it (the backlog, its generated view, the facts, a ledger), else nothing. */
+export function toolFileOf(path: string): string | undefined {
+  const p = normalizePath(path)
+  const m = TOOL_FILE.exec(p)
+  return m ? m[0].replace(/^\//, '') : undefined
+}
+
+/**
+ * The tool-written pipeline file a shell command would change, when it names one and writes (a redirect, sed -i,
+ * tee, mv, cp, rm, a script's write…); nothing for a read, and nothing for git, which the lead uses on these files.
+ */
+export function toolFileWrittenBy(command: string): string | undefined {
+  const named = /docs\/pipeline\/(?:backlog\.json|BACKLOG\.md|facts\.md|ledgers\/[^/\s'"`;|&)]+\.json)/.exec(command)
+  if (!named) return undefined
+  // Each simple command of the line on its own: `git add docs/pipeline/backlog.json && echo ok > log` writes no tool file.
+  for (const part of command.split(/&&|\|\||;|\n/)) {
+    if (!part.includes('docs/pipeline/')) continue
+    if (/^\s*git\s/.test(part)) continue
+    if (WRITES.test(part)) return named[0]
+  }
+  return undefined
+}
+
+/** What a refused write is told: which action writes that file. */
+export function toolFileNote(file: string): string {
+  const how = /ledgers\//.test(file)
+    ? 'the ledger action (text for resume is its state, null removes a key), or begin, plan, brief, accept, gate and close'
+    : /facts\.md$/.test(file)
+      ? 'accept with a fact'
+      : 'add, update, move, remove, park and unpark (BACKLOG.md is regenerated on every write)'
+  return `pipeline: ${file} is written only by the pipeline tool, so every write is checked and locked. Use mcp__pipeline__pipeline: ${how}.`
+}
+
 /** Whether a path matches a glob: `**` crosses directories, `*` and `?` stay within one segment. */
 export function matchesGlob(path: string, glob: string): boolean {
   const p = slashes(path).replace(/\/+$/, '')

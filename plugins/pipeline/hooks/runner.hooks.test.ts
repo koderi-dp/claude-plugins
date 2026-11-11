@@ -104,8 +104,10 @@ function world(on: On, seed: Record<string, string> = {}, options: { worktreeAdd
   on('classic.UserPromptSubmit', () => ({}) as never)
   on('process.run', (_$, e) => {
     const argv = [...(e as { argv: readonly string[] }).argv]
-    runs.push(argv)
     const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    // The repository lock of a write (mkdir and rmdir of .git/pipeline.lock) is not what these tests record.
+    if (argv[0] === 'mkdir' || argv[0] === 'rmdir') return { value: ok } as never
+    runs.push(argv)
     if (argv[0] === 'git' && argv[1] === 'worktree') {
       const mode = options.worktreeAdd ?? 'ok'
       if (mode === 'fail') return { value: { ...ok, exitCode: 128, stderr: 'fatal: not a git repository' } } as never

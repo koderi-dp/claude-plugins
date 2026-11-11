@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { AgentRun, Signal } from '../types'
-import { activityOf, deadAgents, isProtected, matchesGlob, mergeSignals, normalizeCommand, normalizePath, onCall, onComplete, onResult, onSpawn, onStep, onTouch, signals } from './watch'
+import { activityOf, toolFileNote, toolFileOf, toolFileWrittenBy, deadAgents, isProtected, matchesGlob, mergeSignals, normalizeCommand, normalizePath, onCall, onComplete, onResult, onSpawn, onStep, onTouch, signals } from './watch'
 
 const LIMITS = { fixRounds: 3, silentMinutes: 10, taskMinutes: 45, itemTokens: 4_000_000 }
 const T0 = Date.parse('2026-11-05T10:00:00Z')
@@ -239,4 +239,23 @@ test('isProtected sees through .., a relative path and a worktree under .claude/
   // Escaping every root: matched as resolved, so only an anchored-anywhere glob would hit.
   expect(isProtected('/p/main/../other/.github/workflows/ci.yml', globs, ['/p/main'])).toBe(false)
   expect(isProtected('/p/main/../other/package-lock.json', ['**/package-lock.json'], ['/p/main'])).toBe(true)
+})
+
+test('0.3.6: the files only the tool writes, by path and by shell command', () => {
+  expect(toolFileOf('/p/main/docs/pipeline/backlog.json')).toBe('docs/pipeline/backlog.json')
+  expect(toolFileOf('docs/pipeline/ledgers/p80.json')).toBe('docs/pipeline/ledgers/p80.json')
+  expect(toolFileOf('/p/main/.claude/worktrees/p1/../../../docs/pipeline/BACKLOG.md')).toBe('docs/pipeline/BACKLOG.md')
+  expect(toolFileOf('docs/pipeline/facts.md')).toBe('docs/pipeline/facts.md')
+  // What the lead writes by hand stays its own: specs, plans, briefs and reports, the rules, the config.
+  for (const p of ['docs/pipeline/specs/p1.md', 'docs/pipeline/plans/p1.md', 'docs/pipeline/ledgers/p1/task-1-report.md', 'docs/pipeline/rules.md', 'docs/pipeline/config.json', 'src/backlog.json']) expect(toolFileOf(p)).toBeUndefined()
+  expect(toolFileWrittenBy('cat docs/pipeline/backlog.json | head -20')).toBeUndefined()
+  expect(toolFileWrittenBy('git add docs/pipeline/backlog.json && git commit -q -m x')).toBeUndefined()
+  expect(toolFileWrittenBy('git add docs/pipeline/backlog.json && echo done > /tmp/log')).toBeUndefined()
+  expect(toolFileWrittenBy("sed -i 's/ready/inbox/' docs/pipeline/backlog.json")).toBe('docs/pipeline/backlog.json')
+  expect(toolFileWrittenBy('jq .x docs/pipeline/ledgers/p80.json > docs/pipeline/ledgers/p80.json')).toBe('docs/pipeline/ledgers/p80.json')
+  expect(toolFileWrittenBy("python3 -c \"open('docs/pipeline/backlog.json','w').write(x)\"")).toBe('docs/pipeline/backlog.json')
+  expect(toolFileWrittenBy('npx prettier --write docs/pipeline/ledgers/p80.json')).toBe('docs/pipeline/ledgers/p80.json')
+  expect(toolFileWrittenBy('rm docs/pipeline/BACKLOG.md')).toBe('docs/pipeline/BACKLOG.md')
+  expect(toolFileNote('docs/pipeline/ledgers/p80.json')).toContain('the ledger action')
+  expect(toolFileNote('docs/pipeline/backlog.json')).toContain('add, update, move')
 })

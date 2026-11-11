@@ -396,3 +396,23 @@ test('a long tool call is a sign of life: silent is not raised while or right af
   expect(String(raised[0]!['detail'])).toContain('no step or tool call for 10 min')
   expect(String(raised[0]!['detail'])).toContain('running npm run build')
 })
+
+test('0.3.6: nobody edits the files the tool writes: the lead and a subagent are refused, by edit and by shell write, and pointed at the action; reads and git pass', async ($, on) => {
+  const { passed } = world(on, { [CONFIG]: config() })
+  await start($)
+  await spawn($, 'Implement Task 1')
+  const backlog = `${MAIN}/docs/pipeline/backlog.json`
+  const ledger = `${WORKTREE}/docs/pipeline/ledgers/p80.json`
+  // The lead, with no agentId.
+  expect(await $.tool.call({ tool: 'Edit', file_path: backlog, old_string: 'a', new_string: 'b' } as never)).toMatchObject({ deny: expect.stringContaining('docs/pipeline/backlog.json is written only by the pipeline tool') })
+  expect(await $.tool.call({ tool: 'Write', file_path: ledger, content: '{}' } as never)).toMatchObject({ deny: expect.stringContaining('the ledger action') })
+  expect(await $.tool.call({ tool: 'Bash', command: `python3 -c "open('docs/pipeline/backlog.json','w').write('x')"` } as never)).toMatchObject({ deny: expect.stringContaining('add, update, move') })
+  // A subagent the same.
+  expect(await $.tool.call({ tool: 'Edit', file_path: backlog, old_string: 'a', new_string: 'b', agentId: 'agent-t1' } as never)).toMatchObject({ deny: expect.stringContaining('written only by the pipeline tool') })
+  expect(passed).toEqual([])
+  // Reading, git, and the files written by hand pass.
+  expect(await $.tool.call({ tool: 'Read', file_path: backlog } as never)).toMatchObject({ result: 'ok' })
+  expect(await $.tool.call({ tool: 'Bash', command: 'git add docs/pipeline/backlog.json' } as never)).toMatchObject({ result: 'ok' })
+  expect(await $.tool.call({ tool: 'Bash', command: 'cat docs/pipeline/ledgers/p80.json' } as never)).toMatchObject({ result: 'ok' })
+  expect(await $.tool.call({ tool: 'Write', file_path: `${WORKTREE}/docs/pipeline/plans/p80.md`, content: '# x' } as never)).toMatchObject({ result: 'ok' })
+})
