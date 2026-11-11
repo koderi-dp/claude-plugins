@@ -62,7 +62,7 @@ const text = (r: unknown) => String((r as { result: unknown }).result)
 const call = ($: { tool: { call: (e: never) => Promise<unknown> } }, input: Record<string, unknown>) => $.tool.call({ tool: TOOL, ...input } as never)
 const json = async ($: { tool: { call: (e: never) => Promise<unknown> } }, input: Record<string, unknown>) => JSON.parse(text(await call($, input))) as Record<string, any>
 
-type GhState = { me: string; issues: Issue[]; fail?: boolean; missing?: boolean; labels?: string[]; git?: (argv: string[]) => string; onEdit?: (i: Issue) => void }
+type GhState = { me: string; issues: Issue[]; checks?: { name: string; bucket: string }[] | null; fail?: boolean; missing?: boolean; labels?: string[]; git?: (argv: string[]) => string; onEdit?: (i: Issue) => void }
 
 /** gh's JSON for one issue, as `gh issue list --json` prints it. */
 const raw = (i: Issue) => ({
@@ -96,6 +96,11 @@ function ghWorld(on: On, state: GhState) {
       return at < 0 ? undefined : argv[at + 1]
     }
     if (a === 'api' && b === 'user') return ok(`${state.me}\n`)
+    if (a === 'pr' && b === 'checks') {
+      if (state.checks === null || state.checks === undefined) return { value: { exitCode: 1, stdout: '', stderr: "no checks reported on the 'feat/2' branch", isStdoutTruncated: false, isStderrTruncated: false } } as never
+      return ok(JSON.stringify(state.checks))
+    }
+    if (a === 'pr' && b === 'merge') return ok()
     if (a === 'issue' && b === 'list') return ok(JSON.stringify(state.issues.filter(i => i.state === 'open' && i.labels.includes(flag('--label')!)).map(raw)))
     if (a === 'issue' && b === 'view') {
       const i = issue(argv[3]!)
@@ -602,6 +607,44 @@ test('close after the PR merged: labels gone, issue closed, worktree removed, no
   expect(runs.some(r => r[0] === 'git' && r.includes('push'))).toBe(false)
   expect(JSON.parse(files.get(ITEMS)!).items['2']).toBeUndefined()
   expect(JSON.parse(files.get(LEDGER2)!).resume.state).toBe('closed')
+})
+
+/** The item 2 in review with PR #5, as the close test seeds it; spawn (the CI watch) is recorded with the runs. */
+function mergeWorld(on: On, checks: GhState['checks']) {
+  const { files } = world(on, {
+    [CONFIG]: CONFIG_GH,
+    [ITEMS]: JSON.stringify({ items: { '2': { status: 'review', branch: 'feat/2', pr: '#5', ledger: '.git/pipeline/2/ledger.json' } }, pending: [] }),
+    [LEDGER2]: JSON.stringify({ item: '2', branch: 'feat/2', worktree: '.claude/worktrees/2', tasks: [{ n: 1, title: 'A', status: 'accepted', dispatches: [] }], rulings: [], blockers: [], tokens: 0 }),
+    [`${MAIN}/.claude/worktrees`]: '',
+  })
+  const { runs, gh } = runWorld(on, { checks, issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] })] })
+  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
+  on('process.spawn', async function* (_$, e) {
+    runs.push([...(e as unknown as { argv: readonly string[] }).argv])
+    yield { stream: 'stdout', text: 'All checks were successful\n' } as never
+    return { value: { code: 0, signal: null } } as never
+  })
+  return { files, runs, gh }
+}
+
+test('merge waits for the checks, merges with gh and closes the item in one call', async ($, on) => {
+  const { files, runs, gh } = mergeWorld(on, [{ name: 'test', bucket: 'pass' }])
+  expect(text(await call($, { action: 'merge', item: '2' }))).toBe('2 merged · PR #5 · 1 task · issue closed · next: nothing ready · CI green')
+  const order = runs.filter(r => r[0] === 'gh' && r[1] === 'pr').map(r => r.slice(1).join(' '))
+  expect(order).toEqual(['pr checks 5 --watch', 'pr checks 5 --json name,bucket', 'pr merge 5 --merge'])
+  expect(runs.some(r => r.includes('--auto'))).toBe(false)
+  expect(gh.issues[0]!.state).toBe('closed')
+  expect(JSON.parse(files.get(ITEMS)!).items['2']).toBeUndefined()
+})
+
+test('merge with red checks names them and merges nothing; a repository with no checks merges', async ($, on) => {
+  const red = mergeWorld(on, [{ name: 'test', bucket: 'fail' }, { name: 'lint', bucket: 'pass' }])
+  expect(text(await call($, { action: 'merge', item: '2' }))).toBe('2 · CI red · test · PR #5 not merged · one fix wave, then merge again')
+  expect(red.runs.some(r => r[1] === 'pr' && r[2] === 'merge')).toBe(false)
+  expect(red.gh.issues[0]!.state).toBe('open')
+  red.gh.checks = null
+  expect(text(await call($, { action: 'merge', item: '2' }))).toContain('2 merged · PR #5')
+  expect(text(await call($, { action: 'merge', item: '2' }))).toContain('no item 2')
 })
 
 test('across begin, plan, brief, accept, gate and close no write lands under docs/pipeline and no git commit is issued', async ($, on) => {

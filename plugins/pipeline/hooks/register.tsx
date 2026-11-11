@@ -61,7 +61,7 @@ const TOOL_DESCRIPTION =
   'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set }, `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
   'Run, in order: `begin` { item } claims the item, makes its worktree and branch, records the base and answers the worktree to enter. `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
   '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
-  '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. ' +
+  '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. `merge` { item, pr? } ends an item whose PR is open: it waits for the PR\'s checks itself however long they take, merges with config.mergeMethod through gh (no auto-merge setting needed) and runs close; red checks answer their names, for a fix wave and another merge. ' +
   '`close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is (also from inside the item\'s worktree): the main checkout on mainBranch and pulled, the item merged, what config.retain lets go removed, docs/pipeline committed on mainBranch and pushed unless config.pushMain is false, the worktree and local branch removed (a worktree this session is inside is left and removed by a later begin or close). ' +
   '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate? }, blockers?: [text], pr?, branch?, worktree?, base?, <any other key>?: value | null } } merges anything else into the ledger: text for resume is taken as its state, a wrong shape is refused and nothing is written, and null removes one of the other keys. ' +
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain says may go and deletes nothing. ' +
@@ -71,7 +71,7 @@ const TOOL_DESCRIPTION =
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
@@ -1154,6 +1154,8 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       return closeAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'gate':
       return gateAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+    case 'merge':
+      return mergeAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'plan':
       return planAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'brief':
@@ -1454,6 +1456,41 @@ async function runLong($: EngineInterface, argv: string[], cwd: string): Promise
     if (r.done) return { code: r.value?.code ?? null, out }
     out = (out + r.value.text).slice(-20_000)
   }
+}
+
+/**
+ * `merge`: the end of an item whose PR is open, in one call. The tool waits for the PR's checks itself (no time limit),
+ * merges with the configured method through gh, then closes the item. Red checks answer their names and nothing is
+ * merged. Not under the lock while it waits: CI may take longer than another session should wait for it.
+ */
+async function mergeAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const cfg = normalizeConfig(c ?? DEFAULTS).config
+  const item = current.items.find(i => i.id === id)!
+  const ledger = await loadLedger($, found, id)
+  const pr = e.pr?.trim() || item.pr || ledger?.pr || ''
+  const n = Number(/(\d+)\/?$/.exec(pr)?.[1])
+  if (!n) throw new Refused(`merge needs the pull request: pass "pr": "#31" (${id} carries none)`)
+  const yourself = `merge it yourself (gh pr merge ${n} --${cfg.mergeMethod}), then close`
+  const long: Run = async argv => {
+    try {
+      const r = await runLong($, argv, found)
+      return { exitCode: r.code ?? 1, stdout: r.out, stderr: r.out }
+    } catch {
+      return null
+    }
+  }
+  const waited = await tracker.watchChecks(long, n)
+  if (!waited.ok) throw new Refused(`${waited.error} · or ${yourself}`)
+  const run = ghRun($, found)
+  const state = await tracker.checks(run, n)
+  if (!state.ok) throw new Refused(`${state.error} · or ${yourself}`)
+  if (state.value.state === 'red') return `${id} · CI red · ${state.value.failing.join(', ')} · PR #${n} not merged · one fix wave, then merge again`
+  if (state.value.state === 'pending') return `${id} · CI still running on PR #${n} · merge again`
+  const merged = await tracker.mergePr(run, n, cfg.mergeMethod)
+  if (!merged.ok) throw new Refused(`PR #${n} could not be merged: ${merged.error}`)
+  // A squash leaves the branch tip off mainBranch, so close is told the merge happened.
+  const closed = await runTool($, { action: 'close', item: id, pr: pr.startsWith('#') || /^https?:/.test(pr) ? pr : `#${n}`, ...(cfg.mergeMethod === 'squash' || e.force ? { force: true } : {}) })
+  return `${closed} · CI ${state.value.state === 'none' ? 'none' : 'green'}`
 }
 
 /**

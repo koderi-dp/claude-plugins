@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { NO_AUTH, NO_GH, close, comment, create, edit, editComment, ensureLabels, list, me, read, setBody } from './tracker'
+import { NO_AUTH, NO_GH, close, comment, create, edit, editComment, ensureLabels, list, me, read, setBody, checks, mergePr, watchChecks } from './tracker'
 import type { Run } from './tracker'
 
 type Answer = { exitCode?: number; stdout?: string; stderr?: string } | null
@@ -87,4 +87,20 @@ test('failures: no gh, not logged in, another error, bad output', async () => {
 test('an issue with no author, an empty body and no comments maps to empty values', async () => {
   const { run } = fake({ 'gh issue view': { stdout: JSON.stringify({ number: 5, title: 'T', body: '', author: null, labels: [], assignees: [], state: 'CLOSED', url: 'u', createdAt: 'c', comments: [] }) } })
   expect(await read(run, 5)).toEqual({ ok: true, value: { number: 5, title: 'T', body: '', author: '', labels: [], assignees: [], state: 'closed', url: 'u', createdAt: 'c', comments: [] } })
+})
+
+test('checks: none reported, running, failed by name, all through; mergePr never uses --auto', async () => {
+  const of = (stdout: string, exitCode = 0, stderr = '') => checks(fake({ 'gh pr checks': { stdout, exitCode, stderr } }).run, 96)
+  expect(await of('', 1, "no checks reported on the 'feat/75' branch")).toEqual({ ok: true, value: { state: 'none', failing: [] } })
+  expect(await of('[]')).toEqual({ ok: true, value: { state: 'none', failing: [] } })
+  expect(await of(JSON.stringify([{ name: 'test', bucket: 'pass' }, { name: 'lint', bucket: 'pending' }]), 8)).toEqual({ ok: true, value: { state: 'pending', failing: [] } })
+  expect(await of(JSON.stringify([{ name: 'test', bucket: 'fail' }, { name: 'lint', bucket: 'pass' }, { name: 'e2e', bucket: 'cancel' }]), 1)).toEqual({ ok: true, value: { state: 'red', failing: ['test', 'e2e'] } })
+  expect(await of(JSON.stringify([{ name: 'test', bucket: 'pass' }, { name: 'docs', bucket: 'skipping' }]))).toEqual({ ok: true, value: { state: 'green', failing: [] } })
+  expect(await checks(fake({ 'gh pr checks': null }).run, 96)).toEqual({ ok: false, error: NO_GH })
+  const { run, calls } = fake({ 'gh pr merge': { stdout: '' }, 'gh pr checks': { stdout: '', exitCode: 1 } })
+  expect(await watchChecks(run, 96)).toEqual({ ok: true, value: true })
+  expect(calls[0]).toEqual(['gh', 'pr', 'checks', '96', '--watch'])
+  await mergePr(run, 96, 'merge')
+  await mergePr(run, 96, 'squash')
+  expect(calls.slice(1)).toEqual([['gh', 'pr', 'merge', '96', '--merge'], ['gh', 'pr', 'merge', '96', '--squash']])
 })

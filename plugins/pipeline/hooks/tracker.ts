@@ -141,6 +141,45 @@ export async function close(run: Run, number: number): Promise<Result<true>> {
   return r.ok ? { ok: true, value: true } : r
 }
 
+export type Checks = { state: 'green' | 'red' | 'pending' | 'none'; failing: string[] }
+
+/**
+ * Waits until every check of a pull request has finished. `run` must have no time limit of its own: CI takes as long
+ * as it takes. A failing check is not an error here; only gh missing or not logged in is.
+ */
+export async function watchChecks(run: Run, pr: number): Promise<Result<true>> {
+  const r = await run(['gh', 'pr', 'checks', String(pr), '--watch'])
+  if (r === null) return { ok: false, error: NO_GH }
+  if (r.exitCode !== 0 && AUTH.test(`${r.stderr}\n${r.stdout}`)) return { ok: false, error: NO_AUTH }
+  return { ok: true, value: true }
+}
+
+/** Where a pull request's checks stand: none reported, one still running, one failed or cancelled (named), or all through. */
+export async function checks(run: Run, pr: number): Promise<Result<Checks>> {
+  const args = ['pr', 'checks', String(pr), '--json', 'name,bucket']
+  const r = await run(['gh', ...args])
+  if (r === null) return { ok: false, error: NO_GH }
+  // gh exits non-zero for a failing or pending check and still prints the list.
+  const raw = parse(r.stdout)
+  if (Array.isArray(raw)) {
+    const rows = raw.map(c => (c && typeof c === 'object' ? (c as Record<string, unknown>) : {})).map(c => ({ name: str(c['name']), bucket: str(c['bucket']) }))
+    if (!rows.length) return { ok: true, value: { state: 'none', failing: [] } }
+    const failing = rows.filter(c => c.bucket === 'fail' || c.bucket === 'cancel').map(c => c.name)
+    if (failing.length) return { ok: true, value: { state: 'red', failing } }
+    return { ok: true, value: { state: rows.some(c => c.bucket === 'pending') ? 'pending' : 'green', failing: [] } }
+  }
+  if (/no checks reported/i.test(r.stderr)) return { ok: true, value: { state: 'none', failing: [] } }
+  if (AUTH.test(r.stderr)) return { ok: false, error: NO_AUTH }
+  if (r.exitCode !== 0) return { ok: false, error: `gh: ${r.stderr.split('\n')[0]!.trim()}` }
+  return unexpected(args)
+}
+
+/** Merges a pull request now, with a merge commit or squashed. Never `--auto`: that needs a repository setting. */
+export async function mergePr(run: Run, pr: number, method: 'merge' | 'squash'): Promise<Result<true>> {
+  const r = await gh(run, ['pr', 'merge', String(pr), method === 'squash' ? '--squash' : '--merge'])
+  return r.ok ? { ok: true, value: true } : r
+}
+
 /** Creates each label; --force makes an existing one no error. Stops at the first failure. */
 export async function ensureLabels(run: Run, names: string[]): Promise<Result<true>> {
   for (const name of names) {

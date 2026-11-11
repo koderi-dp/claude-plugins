@@ -106,7 +106,7 @@ The limits of this mode: issues have no order of their own, so the oldest ready 
 | `models` | sonnet medium, opus high, opus xhigh, opus high | `implementer`, `reviewer`, `final`, `escalate`, each `{ model, effort }` |
 | `limits` | `fixRounds` 3, `silentMinutes` 10, `taskMinutes` 45, `itemTokens` 4000000, `parallel` 1 | What the watchdog and the run skill enforce; `parallel` is how many child sessions `run all` keeps going under `runner: session` |
 | `runner` | `subagent` | `subagent` runs an item in your session with subagents; `session` runs each item in a headless child session of its own (below) |
-| `merge` | `pr` | `auto` merges on green CI with no open Critical or Important finding; `pr` stops at an open PR. The lead merges with `gh pr merge` itself, so `auto` needs no auto-merge setting on GitHub and works on a private repository |
+| `merge` | `pr` | `auto` merges on green CI with no open Critical or Important finding; `pr` stops at an open PR. Under `auto` the tool's `merge` action waits for the checks, merges with `gh pr merge` and closes the item, so it needs no auto-merge setting on GitHub and works on a private repository; it needs the `gh` CLI logged in |
 | `mergeMethod` | `merge` | `merge` (a merge commit) or `squash` |
 | `stop` | six conditions | Free text the run skill reads: when it blocks the item and asks instead of deciding |
 | `afterMerge` | `["docs/pipeline/BACKLOG.md"]` | Paths to regenerate, commands to run or skills to invoke after a merge |
@@ -154,6 +154,7 @@ Every tool answer stays in the lead's conversation and is read again on every la
 | `brief` | One line with the Agent call: `p12 · task 2/5 · Agent subagent_type pipeline:implementer model sonnet effort medium · prompt: Read docs/pipeline/ledgers/p12/task-2-brief.md and follow it.` |
 | `accept` | One line: `p12 · task 2 accepted · 2/5 · a1b2c3d..c0de111 · pushed · next: brief task 3` |
 | `gate` | One line: `p12 · gate green · final approved · pushed · next: open the PR`, or the red gate's last lines |
+| `merge` | One line, after CI: the `close` line with `· CI green`, or `p12 · CI red · test, lint · PR #31 not merged · one fix wave, then merge again` |
 | `close` | One line: `p12 merged · PR #31 · 6 tasks · records committed on main · pushed · next: p13` |
 
 `plan` and `accept` end their line with the next Agent call, so the lead never asks for a brief in a normal run. `gate` runs to the end however long the gate takes. A subagent that runs the same failing command a fourth time is told so directly and the command is not run. `docs/pipeline/facts.md` keeps up to twelve one-line facts runs learned about working in the repository (a command's working spelling, a step that must come first); every implementer brief carries them, and an implementer reports a new one in its closing line.
