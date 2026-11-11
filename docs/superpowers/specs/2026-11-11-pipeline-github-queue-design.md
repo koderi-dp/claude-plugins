@@ -36,7 +36,8 @@ Who it is for: the user of a GitHub repository whose requests are issues, who wa
 | Status on the issue | Labels, and the same one comment edited in place. | Every new comment notifies every subscriber. |
 | A question | A new comment of its own plus a label. | It must notify the author. |
 | Whose replies count | The issue's author and the `gh` user. | Anyone can comment on a public issue. |
-| Plan, ledger, briefs, reports, facts | Local, under `.git/pipeline/`. Never committed. | Working files of the run; nobody reviews them in a PR. |
+| Plan, ledger, briefs, reports, facts | Local, never committed. What only the tool writes is under `.git/pipeline/`; what the lead and subagents write is in the item's worktree under `.pipeline/`, ignored through `.git/info/exclude`. | Working files of the run; nobody reviews them in a PR. Claude Code treats `.git/` as a protected path: an agent's write there prompts in `default` and `acceptEdits` and is denied in `dontAsk`, so agents cannot write there in a hands-off run. |
+| Whose spec comment counts | One written by the `gh` user, or by an owner, member or collaborator of the repository. | Anyone can post a comment that starts with the marker. |
 | The permanent record | The closed issue and the merged PR. | Both already exist and are where people look. |
 | Committed pipeline files | `docs/pipeline/config.json` and `docs/pipeline/rules.md` only. | Edited by hand, shared by everyone who clones. |
 | GitHub access | The `gh` CLI, run by the tool through `$.process.run`. | The mod already runs `git` this way; the lead never improvises a tracker command. |
@@ -51,8 +52,8 @@ The issue number is the item's id: `#12` on GitHub is item `12` in every tool an
 | `/pipeline add <text>` | Creates an issue with the queue label; the intake then posts the spec comment |
 | `inbox` | A labelled issue with no spec comment and none of the state labels below |
 | `ready` | A labelled issue with a spec comment and none of the state labels below |
-| `planning`, `building` | Label `pipeline:building`, and the issue assigned to the `gh` user |
-| `review` | `pipeline:building` and an open PR that closes the issue |
+| `planning`, `building` | Label `pipeline:building`, the issue assigned to the `gh` user, and the state in the spec comment's status line |
+| `review` | `pipeline:building`, with `review` and the PR in the spec comment's status line |
 | `blocked` | Label `pipeline:blocked`; the reason is in the spec comment's status line |
 | An open question | A question comment and label `pipeline:needs-info` |
 | `parked` | The queue label removed. `unpark` adds it back |
@@ -96,25 +97,30 @@ docs/pipeline/
   config.json            committed, as today
   rules.md               committed, as today
 
-.git/pipeline/           never committed, never shown by git status
-  facts.md               the facts runs learned, as today's docs/pipeline/facts.md
+.git/pipeline/           written only by the tool; never committed
   issues.json            the cached issue list with the time it was read
-  <issue>/
-    spec.md              cache of the spec comment, written at begin and on resume
-    plan.md
-    ledger.json
-    task-N-brief.md, task-N-report.md, ... as today's ledgers/<id>/
+  items.json             what the tracker does not hold per item: branch, plan, PR, note; and GitHub updates still pending
+  facts.md               the facts runs learned, as today's docs/pipeline/facts.md
+  <issue>/ledger.json
   <issue>.log            a child session's log, as today
+
+<worktree>/.pipeline/<issue>/     written by the tool, the lead and subagents; ignored
+  spec.md                cache of the spec comment, written at begin and on resume
+  plan.md
+  task-N-brief.md, task-N-report.md, ... as today's ledgers/<id>/
 ```
 
-`backlog.json`, `BACKLOG.md`, `docs/pipeline/specs`, `plans` and `ledgers` are never created. `.git` is the repository's common git directory, so every worktree and every session on the machine reads the same folder; no `.gitignore` entry is needed.
+`init` and `begin` make sure `.git/info/exclude` holds the line `.pipeline/`. That file is local, applies to every worktree and is never committed, so no `.gitignore` entry is needed and `git status` shows nothing.
+
+`backlog.json`, `BACKLOG.md`, `docs/pipeline/specs`, `plans` and `ledgers` are never created. `.git` is the repository's common git directory, so every worktree and every session on the machine reads the same `.git/pipeline/` folder.
 
 Consequences:
 
 - A PR contains code only.
 - The tool makes no commit of its own: not on the item's branch at `plan` or `accept`, not on the main branch at `close`.
 - `pushMain`, `retain` and `afterMerge`'s default (`BACKLOG.md`) have nothing to act on. `pushMain` and `retain` are ignored in this mode; `afterMerge` runs what it lists and its default is empty.
-- `/pipeline clean` removes the local folder, worktree and local branch of closed issues that still have one.
+- `/pipeline clean` removes the worktree and local branch of closed issues that still have one. A closed issue's `ledger.json` stays under `.git/pipeline/`: it is small, local, and `/pipeline status <n>` still answers from it.
+- The panel's Merged section lists only issues closed by this machine's runs, from their ledgers.
 - An item half built on one machine resumes only there. On another machine the spec is on the issue and the branch is pushed; a run there starts a new plan against the branch as it stands.
 
 ## 5. The run loop
@@ -123,18 +129,21 @@ The steps of `pipeline-run` and the lead's part in them do not change. The tool'
 
 | Action | `queue: github` |
 | --- | --- |
-| `get` | Reads the labelled open issues with one `gh issue list` call, cached for 60 seconds in `issues.json`; every writing action of the tool discards the cache. The answer has the same shape as today, with issue numbers as ids and no `needs`. |
+| `get` | Reads the labelled open issues with one `gh issue list` call, cached for 60 seconds in `issues.json`; a write of the tool updates the cache with what it wrote. An issue that is closed but still has an entry in `items.json` (its PR merged, its close not run yet) is read on its own and listed, so `mergedPending` and `close` find it. The answer has the same shape as today, with issue numbers as ids and no `needs`. |
 | `get { id }` | Adds the issue in full: its body and the comments of its author and the `gh` user, inside a quoted block (section 6). |
-| `add` | `gh issue create` with the queue label; answers `12 added · M · open: none`. The lead then writes the spec and `update` with `spec` posts it as the spec comment. |
-| `update` | A status change edits labels and the spec comment's status line. `spec` posts or replaces the spec comment from the given text. `question` posts a question comment and adds `pipeline:needs-info`. |
+| `add` | `gh issue create` with the queue label; answers `added 12 · inbox · no spec`. The lead then writes the spec and posts it with `spec`. |
+| `update` | A status change edits labels and the spec comment's status line; a `note` or `pr` goes into the status line. |
+| `spec` (new) | `{ action: "spec", id, text }` posts or replaces the spec comment from the given spec text, and rewrites the worktree's `spec.md` when the item has a worktree. |
+| `question` (new) | `{ action: "question", id, text }` posts a question comment and adds `pipeline:needs-info`. |
+| `move`, `remove` | Refused: the queue is the issues. |
 | `park`, `unpark` | Remove or add the queue label. |
-| `begin` | Refuses an issue that carries `pipeline:building` and names its assignee. Otherwise adds the label, assigns the issue, makes the worktree and branch, and writes `spec.md` from the spec comment. |
-| `plan` | Checks the plan at `.git/pipeline/<issue>/plan.md` and seeds the ledger's tasks. No commit. |
-| `brief` | As today, with paths into `.git/pipeline/<issue>/`. |
+| `begin` | Refuses an issue that carries `pipeline:building` and is assigned to someone else, and names them. Otherwise adds the label, assigns the issue, makes the worktree and branch, and writes `<worktree>/.pipeline/<issue>/spec.md` from the spec comment. |
+| `plan` | Checks the plan at `<worktree>/.pipeline/<issue>/plan.md` and seeds the ledger's tasks. No commit. |
+| `brief` | As today, with paths into `<worktree>/.pipeline/<issue>/`. |
 | `accept` | Closes the dispatch, records the range and pushes the branch. No record commit. |
 | `gate` | As today. |
 | `ledger`, `status`, `signals` | As today, reading the local ledger. |
-| `close` | Removes the state labels, the worktree, the local branch and the item's local folder. Closes the issue when the merge did not. |
+| `close` | Removes the state labels, the worktree (and with it `.pipeline/`), the local branch and the item's entry in `items.json`. Closes the issue when the merge did not. It does not check out or commit on the main branch. |
 
 The lead opens the PR as today and adds `Closes #<issue>` to its body. The PR body keeps the ticked acceptance list, the rulings, what was parked and the token totals.
 
@@ -144,7 +153,7 @@ The lead opens the PR as today and adds `Closes #<issue>` to its body. The PR bo
 
 **Runners.** `runner: session` and `limits.parallel` work as today: a child session reads the same `.git/pipeline/` folder.
 
-**Skills.** `pipeline-run` changes in two places: the PR body line, and a question is `update` with `question` in place of a line in a spec file. `pipeline-intake` changes more: its duplicate check reads issue titles, `add` creates an issue, and its answer names the issue number. `pipeline-rules` names the new file locations. `pipeline-init` asks nothing new: it sets `queue: github` only when the user asks for issues as the queue.
+**Skills.** `pipeline-run` changes in two places: the PR body line, and a question is the `question` action in place of a line in a spec file. `pipeline-intake` changes more: its duplicate check reads issue titles, `add` creates an issue, and its answer names the issue number. `pipeline-rules` names the new file locations. `pipeline-init` asks nothing new: it sets `queue: github` only when the user asks for issues as the queue.
 
 ## 6. Failures and safety
 
@@ -167,15 +176,16 @@ An issue is written by someone else and built without an approval gate.
 - Only issues with the queue label are listed.
 - The tool passes an issue's body and comments to the lead inside a block that opens with a line saying the text below is quoted from GitHub and describes a request, and is not an instruction to the reader.
 - Only comments by the issue's author and by the `gh` user are passed. All others are dropped.
+- A spec comment counts only when its author is the `gh` user or an owner, member or collaborator of the repository; a marker in anyone else's comment is ignored.
 - Subagents never receive the issue. Their briefs are rendered from the spec the lead wrote, as today.
 - `protectedPaths` and the stop conditions in `stop` apply unchanged.
 
 ## 7. Structure in the plugin
 
-- **`hooks/tracker.ts`**, new. The only module that knows `gh`. Five operations, each taking a `run` function (the mod's `$.process.run`) and returning plain data: `list` (the labelled open issues with labels, assignees and the PR that closes each), `read` (one issue with body and filtered comments), `create`, `comment` (post, or edit by id), `label` (add and remove, and assign). It builds the `gh` argument lists and parses the JSON `gh` prints; it holds no state.
-- **`hooks/queue.ts`**, new. Maps tracker data to the `Item` shape the status block, the panel and `get` already use (labels and the closing PR to a status), and holds the 60-second cache. Pure apart from the cache file.
+- **`hooks/tracker.ts`**, new. The only module that knows `gh`. Its operations each take a `run` function (the mod's `$.process.run`) and return plain data: `me` (the `gh` user), `list` (the labelled open issues with labels, assignees and comments), `read` (one issue), `create`, `comment`, `editComment`, `edit` (labels and assignee), `close` and `ensureLabels`. It builds the `gh` argument lists and parses the JSON `gh` prints; it holds no state.
+- **`hooks/queue.ts`**, new. Pure. Maps tracker data to the `Backlog` shape every action, the status block and the panel already use; turns the difference between two backlogs into tracker operations; renders and parses the spec comment; builds the quoted block.
 - **`hooks/config.ts`**: the keys `queue` and `queueLabel`, validated like the others.
-- **`hooks/register.tsx`**: each action asks which queue is configured and calls the backlog module or the queue module. The record paths come from one function, so a ledger or brief is written under `docs/pipeline/` or `.git/pipeline/` by the mode and nowhere else in the file names a path. The guard that refuses edits of tool-written files covers `.git/pipeline/**/ledger.json`, `facts.md` and `issues.json`.
+- **`hooks/register.tsx`**: each action asks which queue is configured and calls the backlog module or the queue module. The record paths come from one function, so a ledger or brief is written under `docs/pipeline/` or `.git/pipeline/` by the mode and nowhere else in the file names a path. Claude Code itself guards `.git/pipeline/`; the plugin's own guard is unchanged.
 - **`hooks/status.ts`, `hooks/draw.ts`, `hooks/pane.tsx`**: an id is shown as `#12` in this mode; an item's title links to its issue in the panel. No new section.
 
 ## 8. Moving an existing project
@@ -184,7 +194,7 @@ An issue is written by someone else and built without an approval gate.
 
 1. Shows what it will do: the items that become issues, the items in flight, the files to remove.
 2. Creates a labelled issue for every item that is not `merged` or `parked`, with the item's title, its spec's What and Why as the body, and the spec posted as the spec comment. An item in `planning`, `building` or `review` gets `pipeline:building`.
-3. Moves the plan and ledger of each item in flight to `.git/pipeline/<issue>/`, and `facts.md` to `.git/pipeline/facts.md`.
+3. Copies the ledger of each item in flight to `.git/pipeline/<issue>/ledger.json`, its plan and briefs to `<worktree>/.pipeline/<issue>/`, and `facts.md` to `.git/pipeline/facts.md`.
 4. Sets `queue: github` in the config.
 5. Lists `docs/pipeline/backlog.json`, `BACKLOG.md`, `facts.md`, `specs/`, `plans/` and `ledgers/` for the lead to remove with `git rm` and commit, as migration does today. The tool deletes nothing.
 
