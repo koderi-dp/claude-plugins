@@ -12,7 +12,9 @@ export type Op =
   | { kind: 'edit'; id: string; add: string[]; remove: string[]; assign?: string }
   | { kind: 'status'; id: string; state: string; detail: string }
   | { kind: 'close'; id: string }
-export type Extras = { items: Record<string, Partial<Item>>; pending: Op[] }
+/** A worktree and branch a close had to leave (its session sat in the worktree), removed by a later begin or clean. */
+export type Leftover = { id: string; worktree: string; branch: string }
+export type Extras = { items: Record<string, Partial<Item>>; pending: Op[]; leftover?: Leftover[] }
 export const EMPTY_EXTRAS: Extras = { items: {}, pending: [] }
 
 const ACTIVE: string[] = ['planning', 'building', 'review']
@@ -215,7 +217,7 @@ export function applyOps(issues: Issue[], ops: Op[], _label: string, me: string)
   })
 }
 
-/** What the issues cannot hold for the items in flight: their status and the fields the tool set; pending carries over. */
+/** What the issues cannot hold for the items in flight: their status and the fields the tool set; pending and leftover carry over. */
 export function extrasOf(after: Backlog, previous: Extras): Extras {
   const items: Record<string, Partial<Item>> = {}
   for (const item of after.items) {
@@ -227,7 +229,7 @@ export function extrasOf(after: Backlog, previous: Extras): Extras {
     }
     items[item.id] = kept
   }
-  return { items, pending: previous.pending }
+  return { items, pending: previous.pending, ...(previous.leftover ? { leftover: previous.leftover } : {}) }
 }
 
 /** The issue's body and the comments of its author and the gh user, quoted and marked as data. */

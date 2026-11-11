@@ -13,7 +13,7 @@ import * as tracker from './tracker'
 import { QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
 import { EMPTY_EXTRAS, applyOps, extrasOf, labelsOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
-import type { Extras, Op } from './queue'
+import type { Extras, Leftover, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
 import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
 import { PLAN_FORMAT } from './templates'
@@ -96,7 +96,7 @@ const TOOL_SCHEMA = {
     tokens: { type: 'number', description: 'For accept and gate: the tokens of the Agent result.' },
     minutes: { type: 'number', description: 'For accept: the minutes of the Agent result.' },
     pr: { type: 'string', description: 'For close: the pull request, as #31, when the item does not carry it yet.' },
-    force: { type: 'boolean', description: 'For close: close although the branch tip is not on origin/mainBranch (a squash merge).' },
+    force: { type: 'boolean', description: 'For close: close although the branch tip is not on origin/mainBranch (a squash merge). For begin with queue: github: take over here an issue another machine is building.' },
     fact: { type: 'string', description: 'For accept: one line a later implementer must know about working in this repository (a command\'s working spelling, a step that must come first); kept in docs/pipeline/facts.md and given to every brief.' },
     verdict: { type: 'string', description: 'For accept: how the task was approved. For gate: the final review\'s verdict.' },
     kind: { type: 'string', enum: ['implementer', 'fix', 'review', 'final'], description: 'For brief: which brief to render.' },
@@ -380,7 +380,8 @@ async function readExtras($: EngineInterface, found: string): Promise<Loaded<Ext
   const v = loaded.value
   const items = v && v.items && typeof v.items === 'object' && !Array.isArray(v.items) ? v.items : {}
   const pending = v && Array.isArray(v.pending) ? v.pending : []
-  return { value: v ? { items, pending } : { ...EMPTY_EXTRAS, items: {}, pending: [] }, error: null }
+  const leftover = (v && Array.isArray(v.leftover) ? v.leftover : []).filter(l => l && typeof l.id === 'string' && typeof l.worktree === 'string' && typeof l.branch === 'string')
+  return { value: v ? { items, pending, ...(leftover.length ? { leftover } : {}) } : { ...EMPTY_EXTRAS, items: {}, pending: [] }, error: null }
 }
 
 async function extrasOrRefuse($: EngineInterface, found: string): Promise<Extras> {
@@ -1055,12 +1056,15 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
   if (e.action === 'clean') {
     if (error) throw new Refused(error)
     const id = typeof e.item === 'string' ? e.item : e.item?.id ?? e.id
-    if (id !== undefined) {
+    // queue: github: what a close had to leave, for a closed issue the backlog no longer holds.
+    const left = isGithub(c) ? await leftoverLines($, found, id) : []
+    if (id !== undefined && !left.length) {
       const item = loaded?.items.find(i => i.id === id)
       if (!item) throw new Refused(`no item ${id}`)
       if (item.status !== 'merged') throw new Refused(`${id} is ${item.status}, not merged`)
     }
-    const list = cleanList({ config: c, backlog: loaded, ...(id !== undefined ? { item: id } : {}), ...(isGithub(c) ? { queue: 'github' as const } : {}), ...(await cleanInput($, found, loaded)) })
+    const listed = cleanList({ config: c, backlog: loaded, ...(id !== undefined ? { item: id } : {}), ...(isGithub(c) ? { queue: 'github' as const } : {}), ...(await cleanInput($, found, loaded)) })
+    const list = [...listed, ...left.filter(x => !listed.includes(x))]
     return list.length ? list.join('\n') : 'nothing to clean'
   }
   if (e.action === 'migrate') {
@@ -1120,7 +1124,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       return ledgerLine(merged)
     }
     case 'begin':
-      return beginAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
+      return beginAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'accept':
       return acceptAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'close':
@@ -1284,7 +1288,7 @@ async function recordLead($: EngineInterface, ledger: Ledger | null): Promise<Re
  * `begin`: the item is this session's. The claim check, the worktree on the item's branch (made here, reused when
  * there), the base, the status and the ledger in one call; the answer names the worktree to enter and what is next.
  */
-async function beginAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string): Promise<string> {
+async function beginAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput = { action: 'begin' }): Promise<string> {
   const item = current.items.find(i => i.id === id)!
   const isChild = await isChildSession($)
   const isActive = (ACTIVE_STATUSES as readonly string[]).includes(item.status)
@@ -1314,8 +1318,11 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
   let seen: string[] = []
   if (gh) {
     const fresh = await readIssue($, found, id)
-    const other = fresh.assignees.find(a => a !== self.me)
-    if (fresh.labels.includes(labelsOf(labelOf(c)).building) && other) throw new Refused(`${id} is being built by @${other}; pick the next item`)
+    // Building with no ledger on this machine: another machine runs it, of another user or of this one (same login).
+    if (fresh.labels.includes(labelsOf(labelOf(c)).building) && !ledger && e.force !== true) {
+      const other = fresh.assignees.find(a => a !== self.me)
+      throw new Refused(`${id} is being built ${other ? `elsewhere (by @${other})` : 'on another machine of yours'} · to take it over here: begin with "force": true`)
+    }
     const spec = specCommentOf(fresh, self.me)
     if (!spec) throw new Refused(`${id} has no spec comment: post one with spec`)
     specMd = parseSpecComment(spec.body).specMd
@@ -1337,15 +1344,23 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
   if (!gh) await record()
   if (status !== item.status) await runTool($, { action: 'update', id, set: { status } })
   if (gh) {
-    // Two machines that labelled the issue in the same second: the one that sees a new assignee besides itself lets go.
+    // Two machines that labelled the issue in the same second: of the assignees new since the first read and this
+    // user, the login that sorts first keeps the claim. The others let go without touching a label or the status:
+    // their worktree, their assignment and their entry in items.json go, and the winner's claim stands.
     if (status !== item.status) {
       const after = await readIssue($, found, id)
-      const other = after.assignees.find(a => a !== self.me && !seen.includes(a))
-      if (other) {
+      const rivals = after.assignees.filter(a => a !== self.me && !seen.includes(a))
+      const winner = [...rivals, self.me].sort()[0]
+      if (rivals.length && winner !== self.me) {
         await gitMain($, found, ['worktree', 'remove', '--force', wt])
-        await runTool($, { action: 'update', id, set: { status: item.status } })
+        const off = await tracker.edit(ghRun($, found), Number(id), { unassign: self.me })
+        if (off.ok) await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, assignees: i.assignees.filter(a => a !== self.me) } : i)))
+        const extras = await extrasOrRefuse($, found)
+        const { [id]: _gone, ...items } = extras.items
+        await writeExtras($, found, { ...extras, items })
+        await loadBacklog($, found)
         if (self.item === id) self.item = ''
-        throw new Refused(`${id} is being built by @${other}; pick the next item`)
+        throw new Refused(`${id} is being built by @${winner}; pick the next item`)
       }
     }
     // Recorded once the item is in flight, so its entry in items.json keeps the ledger's link.
@@ -1516,6 +1531,37 @@ async function sweepMerged($: EngineInterface, found: string, c: Config | null, 
     // Worktrees first, so their branches are free to delete.
     await removeCleaned($, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
   } catch {}
+  if (isGithub(c)) await sweepLeftover($, found)
+}
+
+/**
+ * queue: github. A closed issue is not in the backlog, so the worktree a close had to leave is kept in items.json:
+ * each one this session is not inside is removed, then its branch, and its entry dropped.
+ */
+async function sweepLeftover($: EngineInterface, found: string): Promise<void> {
+  try {
+    const extras = await extrasOrRefuse($, found)
+    const left = extras.leftover ?? []
+    if (!left.length) return
+    const kept: Leftover[] = []
+    for (const l of left) {
+      const dir = worktreePath(found, { ...emptyLedger(l.id), worktree: l.worktree })
+      if (await isInside($, dir)) {
+        kept.push(l)
+        continue
+      }
+      await gitMain($, found, ['worktree', 'remove', '--force', l.worktree])
+      if (l.branch) await gitMain($, found, ['branch', '-D', l.branch])
+    }
+    const { leftover: _was, ...rest } = extras
+    await writeExtras($, found, { ...rest, ...(kept.length ? { leftover: kept } : {}) })
+  } catch {}
+}
+
+/** queue: github: the worktrees and branches a close had to leave, as `clean` lists them; for one item when `id` is given. */
+async function leftoverLines($: EngineInterface, found: string, id: string | undefined): Promise<string[]> {
+  const ex = await readExtras($, found)
+  return (ex.value?.leftover ?? []).filter(l => id === undefined || l.id === id).flatMap(l => [l.worktree.replace(/\/+$/, ''), ...(l.branch ? [`branch:${l.branch}`] : [])])
 }
 
 /**
@@ -1564,6 +1610,11 @@ async function closeAction($: EngineInterface, found: string, c: Config | null, 
   const { kept, paths: gone } = await removeCleaned($, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
   if (!gh) await closed()
   if (gh) {
+    if (kept.length) {
+      const extras = await extrasOrRefuse($, found)
+      const leftover = [...(extras.leftover ?? []).filter(l => l.id !== id), { id, worktree: kept[0]!, branch }]
+      await writeExtras($, found, { ...extras, leftover })
+    }
     if (self.item === id) self.item = ''
     const tasks = ledger?.tasks.length ?? 0
     const next = after.items.find(i => i.status === 'ready')

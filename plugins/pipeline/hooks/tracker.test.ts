@@ -50,6 +50,8 @@ test('edit sends only the flags it was given, and none means no call', async () 
   expect(calls[0]).toEqual(['gh', 'issue', 'edit', '12', '--add-label', 'pipeline:building', '--remove-label', 'pipeline:blocked,pipeline:needs-info', '--add-assignee', 'me'])
   expect(await edit(run, 12, {})).toEqual({ ok: true, value: true })
   expect(calls.length).toBe(1)
+  await edit(run, 12, { unassign: 'me' })
+  expect(calls[1]).toEqual(['gh', 'issue', 'edit', '12', '--remove-assignee', 'me'])
 })
 
 test('editComment patches by id; ensureLabels creates each with --force', async () => {

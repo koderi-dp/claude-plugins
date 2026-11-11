@@ -117,12 +117,13 @@ export async function editComment(run: Run, id: string, body: string): Promise<R
   return r.ok ? { ok: true, value: true } : r
 }
 
-/** Adds and removes labels and adds an assignee; a change that names nothing makes no call. */
-export async function edit(run: Run, number: number, change: { add?: string[]; remove?: string[]; assign?: string }): Promise<Result<true>> {
+/** Adds and removes labels, adds an assignee and takes one off; a change that names nothing makes no call. */
+export async function edit(run: Run, number: number, change: { add?: string[]; remove?: string[]; assign?: string; unassign?: string }): Promise<Result<true>> {
   const flags: string[] = []
   if (change.add?.length) flags.push('--add-label', change.add.join(','))
   if (change.remove?.length) flags.push('--remove-label', change.remove.join(','))
   if (change.assign) flags.push('--add-assignee', change.assign)
+  if (change.unassign) flags.push('--remove-assignee', change.unassign)
   if (!flags.length) return { ok: true, value: true }
   const r = await gh(run, ['issue', 'edit', String(number), ...flags])
   return r.ok ? { ok: true, value: true } : r

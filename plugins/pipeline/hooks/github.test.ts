@@ -20,7 +20,7 @@ const VALID_CONFIG = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'f
 const CONFIG_GH = JSON.stringify({ ...JSON.parse(VALID_CONFIG), queue: 'github' }, null, 2) + '\n'
 
 /** A main checkout at /p/main, this session in its worktree, files in memory; records the writes and the plugin's state. */
-function world(on: On, seed: Record<string, string> = {}) {
+function world(on: On, seed: Record<string, string> = {}, where = { cwd: WORKTREE }) {
   const clock = mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
@@ -38,7 +38,7 @@ function world(on: On, seed: Record<string, string> = {}) {
   })
   on('session.repo', () => ({ value: { root: MAIN, remote: null, internal: false, name: null } }) as never)
   on('session.root', () => ({ value: WORKTREE }))
-  on('session.cwd', () => ({ value: WORKTREE }))
+  on('session.cwd', () => ({ value: where.cwd }))
   on('session.id', () => ({ value: 'self' }))
   on('env.get', () => ({ value: undefined }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
@@ -125,6 +125,8 @@ function ghWorld(on: On, state: GhState) {
       i.labels = [...i.labels.filter(l => !remove.includes(l)), ...add.filter(l => !i.labels.includes(l))]
       const who = flag('--add-assignee')
       if (who && !i.assignees.includes(who)) i.assignees.push(who)
+      const off = flag('--remove-assignee')
+      if (off) i.assignees = i.assignees.filter(a => a !== off)
       state.onEdit?.(i)
       return ok()
     }
@@ -440,7 +442,7 @@ test('begin labels and assigns the issue, writes the spec cache in the worktree 
 test("begin refuses an issue another user's machine is building", async ($, on) => {
   const { files } = world(on, { [CONFIG]: CONFIG_GH })
   const { runs } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['zoe'], comments: [specComment('200', 'building')] })] })
-  expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 is being built by @zoe; pick the next item')
+  expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 is being built elsewhere (by @zoe) · to take it over here: begin with "force": true')
   expect(runs.some(r => r.includes('worktree'))).toBe(false)
   expect(files.has(LEDGER2)).toBe(false)
 })
@@ -453,13 +455,47 @@ test('begin refuses an issue with no spec comment', async ($, on) => {
   expect(files.has(LEDGER2)).toBe(false)
 })
 
-test('begin that loses the race to another machine removes its worktree, takes the label off and refuses', async ($, on) => {
+/** Another user labels and assigns the issue in the same second as this machine. */
+const racer = (login: string) => (i: Issue) => void (i.labels.includes('pipeline:building') && !i.assignees.includes(login) && i.assignees.push(login))
+
+test('begin that loses the race lets go: its worktree removed, its user unassigned, no label touched, refused', async ($, on) => {
   const { files } = world(on, { [CONFIG]: CONFIG_GH })
-  const { runs } = runWorld(on, { onEdit: i => void (i.labels.includes('pipeline:building') && !i.assignees.includes('zoe') && i.assignees.push('zoe')) })
-  expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 is being built by @zoe; pick the next item')
+  const { runs, gh } = runWorld(on, { onEdit: racer('aaa') })
+  expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 is being built by @aaa; pick the next item')
   expect(runs).toContainEqual(['git', '-C', MAIN, 'worktree', 'remove', '--force', WT2])
-  expect(has(runs, ['gh', 'issue', 'edit', '2', '--remove-label', 'pipeline:building'])).toBe(true)
+  expect(has(runs, ['gh', 'issue', 'edit', '2', '--remove-assignee', 'me'])).toBe(true)
+  expect(runs.some(r => r[0] === 'gh' && r.includes('--remove-label'))).toBe(false)
+  expect(gh.issues[0]!.labels).toContain('pipeline:building')
+  expect(gh.issues[0]!.assignees).toEqual(['aaa'])
+  expect(JSON.parse(files.get(ITEMS)!).items['2']).toBeUndefined()
   expect(files.has(LEDGER2)).toBe(false)
+})
+
+test('begin that wins the race keeps the claim: the login that sorts first keeps it', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const { runs } = runWorld(on, { onEdit: racer('zoe') })
+  expect(text(await call($, { action: 'begin', item: '2' }))).toContain('2 · planning · branch feat/2')
+  expect(runs.some(r => r.includes('--remove-assignee') || r.includes('remove'))).toBe(false)
+  expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ worktree: '.claude/worktrees/2' })
+})
+
+test('begin refuses an issue building on another machine of the same user unless forced', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'building')] })] })
+  expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 is being built on another machine of yours · to take it over here: begin with "force": true')
+  expect(files.has(LEDGER2)).toBe(false)
+  expect(text(await call($, { action: 'begin', item: '2', force: true }))).toContain('2 · building · branch feat/2')
+  expect(files.get(`${WT2}/.pipeline/2/spec.md`)).toContain('## Acceptance')
+})
+
+test('begin resumes an issue with a local ledger although a teammate was added as a second assignee', async ($, on) => {
+  world(on, {
+    [CONFIG]: CONFIG_GH,
+    [ITEMS]: JSON.stringify({ items: { '2': { status: 'building', branch: 'feat/2', ledger: '.git/pipeline/2/ledger.json' } }, pending: [] }),
+    [LEDGER2]: JSON.stringify({ item: '2', branch: 'feat/2', worktree: '.claude/worktrees/2', base: 'aaa1111', tasks: [], rulings: [], blockers: [], tokens: 0 }),
+  })
+  runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me', 'zoe'], comments: [specComment('200', 'building')] })] })
+  expect(text(await call($, { action: 'begin', item: '2' }))).toContain('2 · building · branch feat/2')
 })
 
 test('plan reads the worktree plan, seeds the ledger under .git/pipeline and commits nothing', async ($, on) => {
@@ -550,4 +586,26 @@ test('get full leaves out an afterMerge entry under docs/pipeline, which has not
   world(on, { [CONFIG]: JSON.stringify({ ...JSON.parse(CONFIG_GH), afterMerge: ['docs/pipeline/BACKLOG.md', 'npm run release-notes'] }) })
   ghWorld(on, { me: 'me', issues: [] })
   expect((await json($, { action: 'get', full: true }))['config'].afterMerge).toEqual(['npm run release-notes'])
+})
+
+test('a worktree close had to leave is recorded, listed by clean, and swept by a later begin from outside it', async ($, on) => {
+  const where = { cwd: `${WT2}` }
+  const { files } = world(on, {
+    [CONFIG]: CONFIG_GH,
+    [ITEMS]: JSON.stringify({ items: { '2': { status: 'review', branch: 'feat/2', pr: '#5', ledger: '.git/pipeline/2/ledger.json' } }, pending: [] }),
+    [LEDGER2]: JSON.stringify({ item: '2', branch: 'feat/2', worktree: '.claude/worktrees/2', tasks: [{ n: 1, title: 'A', status: 'accepted', dispatches: [] }], rulings: [], blockers: [], tokens: 0 }),
+    [`${MAIN}/.claude/worktrees`]: '',
+  }, where)
+  const { runs } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] }), issueOf(3, 'Import', { comments: [specComment('300')] })] })
+  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
+  expect(text(await call($, { action: 'close', item: '2' }))).toBe('2 merged · PR #5 · 1 task · issue closed · worktree .claude/worktrees/2 left, this session is in it: the next begin or close removes it · next: 3')
+  expect(runs.some(r => r.includes('worktree') && r.includes('remove'))).toBe(false)
+  expect(JSON.parse(files.get(ITEMS)!).leftover).toEqual([{ id: '2', worktree: '.claude/worktrees/2', branch: 'feat/2' }])
+  expect(text(await call($, { action: 'clean' }))).toBe('.claude/worktrees/2\nbranch:feat/2')
+  where.cwd = WORKTREE
+  const before = runs.length
+  expect(text(await call($, { action: 'begin', item: '3' }))).toContain('3 · planning')
+  expect(runs.slice(before)).toContainEqual(['git', '-C', MAIN, 'worktree', 'remove', '--force', '.claude/worktrees/2'])
+  expect(runs.slice(before)).toContainEqual(['git', '-C', MAIN, 'branch', '-D', 'feat/2'])
+  expect(JSON.parse(files.get(ITEMS)!).leftover ?? []).toEqual([])
 })
