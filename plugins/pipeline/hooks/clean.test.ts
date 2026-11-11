@@ -90,3 +90,10 @@ test('namesId wants the id as its own token', async () => {
   expect(namesId('2026-10-31-p120-other', 'p12')).toBe(false)
   expect(namesId('P12_search', 'p12')).toBe(true)
 })
+
+test('under queue github only the worktree and the branch of a merged item are listed', () => {
+  const merged = { config: config({ plans: false }), backlog, item: 'p1', listing, planPaths, worktrees: ['p1'], branches: ['feat/p1'] }
+  // The same input under queue file lists the records too.
+  expect(cleanList(merged)).toEqual(['docs/pipeline/ledgers/p1/', 'docs/pipeline/plans/p1.md', '.superpowers/sdd/2026-10-30-p1-login/', '.claude/worktrees/p1/', 'branch:feat/p1'])
+  expect(cleanList({ ...merged, queue: 'github' })).toEqual(['.claude/worktrees/p1', 'branch:feat/p1'])
+})

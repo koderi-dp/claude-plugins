@@ -8,6 +8,7 @@ import { compactSignal, itemState, ledgerLine, slimGet } from './answers'
 import { cleanList, planOf } from './clean'
 import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, places, serialize } from './files'
+import type { Places } from './files'
 import * as tracker from './tracker'
 import { QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
@@ -332,6 +333,19 @@ type IssueCache = { at: number; me: string; issues: Issue[] }
 const isGithub = (c: Config | null): boolean => normalizeConfig(c ?? DEFAULTS).config.queue === 'github'
 const labelOf = (c: Config | null): string => normalizeConfig(c ?? DEFAULTS).config.queueLabel
 
+/** Where an item's records live in the configured queue mode: with queue: file, the docs/pipeline paths as before. Every record path in this file comes from here. */
+const placesOf = (found: string, c: Config | null): Places => places(found, isGithub(c) ? 'github' : 'file')
+
+/** A path under the main checkout as the checkout names it (`docs/pipeline/ledgers/p1.json`, `.git/pipeline/12/ledger.json`). */
+const relOf = (found: string, path: string): string => (path.startsWith(`${found}/`) ? path.slice(found.length + 1) : path)
+
+/** Makes sure .git/info/exclude ignores `.pipeline/`, the records' folder in every worktree; local, never committed. */
+async function ensureExclude($: EngineInterface, found: string): Promise<void> {
+  const exclude = places(found, 'github').exclude
+  const had = (await readText($, exclude)) ?? ''
+  if (!had.split('\n').some(l => l.trim() === '.pipeline/')) await $.fs.write(exclude, `${had}${had && !had.endsWith('\n') ? '\n' : ''}.pipeline/\n`)
+}
+
 /** The tracker's `run`: the argv through `$.process.run` in the main checkout; a thrown error (no gh) answers null. */
 const ghRun = ($: EngineInterface, found: string): Run => async argv => {
   try {
@@ -584,6 +598,14 @@ async function unparkIssue($: EngineInterface, found: string, c: Config | null, 
   return `${id} · ${await issueState($, found, id, 'inbox')}`
 }
 
+/** One issue read fresh from GitHub (not the cache), written into the cache so the backlog mapped next is true; refused when gh fails. */
+async function readIssue($: EngineInterface, found: string, id: string): Promise<Issue> {
+  const r = await tracker.read(ghRun($, found), Number(id))
+  if (!r.ok) throw new Refused(r.error)
+  await editCache($, found, issues => [...issues.filter(i => i.number !== r.value.number), r.value])
+  return r.value
+}
+
 /** `init` with queue: github: gh must answer for this repository; the config, the labels and the exclude line, no backlog. */
 async function initGithub($: EngineInterface, found: string, c: Config | null, error: string | null): Promise<string> {
   const p = paths(found)
@@ -605,9 +627,7 @@ async function initGithub($: EngineInterface, found: string, c: Config | null, e
   const names = [L.queue, L.building, L.blocked, L.needsInfo]
   const labelled = await tracker.ensureLabels(run, names)
   if (!labelled.ok) throw new Refused(labelled.error)
-  const exclude = places(found, 'github').exclude
-  const had = (await readText($, exclude)) ?? ''
-  if (!had.split('\n').some(l => l.trim() === '.pipeline/')) await $.fs.write(exclude, `${had}${had && !had.endsWith('\n') ? '\n' : ''}.pipeline/\n`)
+  await ensureExclude($, found)
   await update($, fileError, () => null)
   const head = hasConfig ? `exists: ${CONFIG_FILE}` : `wrote ${CONFIG_FILE}`
   return `${head} · labels ${names.join(', ')}${hasConfig ? '' : ` · commit ${CONFIG_FILE} on ${next.mainBranch}`}`
@@ -701,11 +721,10 @@ async function nowIso($: EngineInterface): Promise<string> {
   return new Date(await $.clock.now()).toISOString()
 }
 
-const ledgerFile = (id: string) => `docs/pipeline/ledgers/${id}.json`
-
-/** The ledger of an item as it is on disk: missing gives null, bad JSON gives the error with its line. */
+/** The ledger of an item as it is on disk, where the queue mode keeps it: missing gives null, bad JSON gives the error with its line. */
 async function readLedger($: EngineInterface, found: string, id: string): Promise<Loaded<Ledger>> {
-  return loadJson<Ledger>($, paths(found).ledger(id), ledgerFile(id))
+  const file = placesOf(found, await read($, config)).ledger(id)
+  return loadJson<Ledger>($, file, relOf(found, file))
 }
 
 /**
@@ -772,10 +791,13 @@ async function listDir($: EngineInterface, dir: string): Promise<string[]> {
   }
 }
 
-/** The listing `cleanList` wants: the known parents, the superpowers pointers, the worktree names, the local branches and the merged items' ledger branches. */
+/** The listing `cleanList` wants: the known parents, the superpowers pointers, the worktree names, the local branches and the merged items' ledger branches. With queue: github the records are not in the repository: only the worktrees. */
 async function cleanInput($: EngineInterface, found: string, b: Backlog | null): Promise<{ listing: string[]; planPaths: Record<string, string>; worktrees: string[]; branches: string[]; ledgerBranches: Record<string, string> }> {
+  const gh = isGithub(await read($, config))
+  const ledgers = relOf(found, paths(found).ledgers)
+  const plans = relOf(found, paths(found).plans)
   const listing: string[] = []
-  for (const parent of ['docs/pipeline/ledgers', 'docs/pipeline/plans', '.superpowers/sdd', '.claude/worktrees']) {
+  for (const parent of gh ? ['.claude/worktrees'] : [ledgers, plans, '.superpowers/sdd', '.claude/worktrees']) {
     for (const name of await listDir($, `${found}/${parent}`)) listing.push(`${parent}/${name}`)
   }
   const planPaths: Record<string, string> = {}
@@ -789,10 +811,10 @@ async function cleanInput($: EngineInterface, found: string, b: Backlog | null):
     if (texts.length) planPaths[dir] = texts.join('\n')
   }
   // A plan kept outside docs/pipeline/plans is listed when it is there.
-  for (const item of b?.items ?? []) {
+  for (const item of gh ? [] : b?.items ?? []) {
     if (item.status !== 'merged') continue
     const plan = planOf(item)
-    if (!plan.startsWith('docs/pipeline/plans/') && (await readText($, `${found}/${plan}`)) !== null) listing.push(plan)
+    if (!plan.startsWith(`${plans}/`) && (await readText($, `${found}/${plan}`)) !== null) listing.push(plan)
   }
   const worktrees = listing.filter(p => p.startsWith('.claude/worktrees/') && p.endsWith('/')).map(p => p.slice('.claude/worktrees/'.length, -1))
   // The local branches, so a merged item's branch is listed as `branch:<name>` for the caller's `git branch -D`; none when git fails.
@@ -997,7 +1019,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
     const merged = await checkMerged($, found, c, loaded)
     let answer: string
     if (e.full) {
-      const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings), mergedPending: merged }
+      const out: Record<string, unknown> = { config: isGithub(c) ? githubConfig(c) : c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings), mergedPending: merged }
       if (error) out['error'] = error
       if (isGithub(c)) Object.assign(out, githubGet(c, e.id))
       answer = JSON.stringify(out, null, 2)
@@ -1038,7 +1060,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       if (!item) throw new Refused(`no item ${id}`)
       if (item.status !== 'merged') throw new Refused(`${id} is ${item.status}, not merged`)
     }
-    const list = cleanList({ config: c, backlog: loaded, ...(id !== undefined ? { item: id } : {}), ...(await cleanInput($, found, loaded)) })
+    const list = cleanList({ config: c, backlog: loaded, ...(id !== undefined ? { item: id } : {}), ...(isGithub(c) ? { queue: 'github' as const } : {}), ...(await cleanInput($, found, loaded)) })
     return list.length ? list.join('\n') : 'nothing to clean'
   }
   if (e.action === 'migrate') {
@@ -1073,24 +1095,26 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       const id = need(typeof e.item === 'string' ? e.item : e.item?.id)
       const set = e.set as LedgerSet | undefined
       if (!set || typeof set !== 'object' || Array.isArray(set)) throw new Refused('ledger needs set')
+      const ledgerPath = placesOf(found, c).ledger(id)
+      const ledgerFile = relOf(found, ledgerPath)
       const onDisk = await readLedger($, found, id)
       if (onDisk.error) throw new Refused(onDisk.error)
       // A ledger file the item does not link is a leftover of a removed item: never merged into silently.
       const linked = current.items.find(i => i.id === id)?.ledger
       if (onDisk.value && (linked === null || linked === undefined)) {
-        throw new Refused(`${ledgerFile(id)} exists but ${id} has no ledger link: a stale file of an earlier item; move or delete it, or link it with update { id: "${id}", set: { ledger: "${ledgerFile(id)}" } }`)
+        throw new Refused(`${ledgerFile} exists but ${id} has no ledger link: a stale file of an earlier item; move or delete it, or link it with update { id: "${id}", set: { ledger: "${ledgerFile}" } }`)
       }
       // A wrong shape is refused before anything is written; what was plainly meant (text for the resume state) is kept.
       const base = onDisk.value ?? emptyLedger(id)
       const shaped = shapeSet(set as Record<string, unknown>, { resume: repairResume(base.resume, Math.max(1, base.tasks?.length ?? 1)), tasks: base.tasks ?? [] })
       if (shaped.problems.length) throw new Refused(`ledger ${id} not written: ${shaped.problems.join('; ')}`)
       const merged = mergeLedger({ ...base, ...(base.resume ? { resume: repairResume(base.resume, Math.max(1, base.tasks?.length ?? 1))! } : {}) }, shaped.set, now)
-      await $.fs.write(p.ledger(id), serialize(merged))
+      await $.fs.write(ledgerPath, serialize(merged))
       self.memo.delete(`ledger:${id}`)
       // The item points at its ledger, and carries the branch, PR and plan the ledger names.
       const item = current.items.find(i => i.id === id)!
       const mirror: Partial<Item> = {}
-      if (item.ledger !== ledgerFile(id)) mirror.ledger = ledgerFile(id)
+      if (item.ledger !== ledgerFile) mirror.ledger = ledgerFile
       for (const k of ['branch', 'pr', 'plan'] as const) if (typeof set[k] === 'string' && item[k] !== set[k]) mirror[k] = set[k] as string
       if (Object.keys(mirror).length) await writeBacklog($, found, updateItem(current, id, mirror, now))
       return ledgerLine(merged)
@@ -1176,6 +1200,16 @@ function githubGet(c: Config | null, id: string | undefined): Record<string, unk
   return out
 }
 
+/**
+ * The config as `get` answers it with queue: github: an afterMerge entry under docs/pipeline/ has nothing to act on
+ * (no BACKLOG.md, no record on mainBranch), so it is left out; pushMain and retain are not read in this mode.
+ */
+function githubConfig(c: Config | null): Config | null {
+  if (!c) return c
+  const recordsDir = `${places('', 'file').recordsDir}/`
+  return { ...c, afterMerge: normalizeConfig(c).config.afterMerge.filter(x => !x.replace(/^\.?\/+/, '').startsWith(recordsDir)) }
+}
+
 /** `<id> lost the <label> label` for each issue in flight that is open without the queue label. */
 const lostLines = (c: Config | null): string[] => (self.queue?.lost ?? []).map(id => `${id} lost the ${labelOf(c)} label`)
 
@@ -1204,7 +1238,7 @@ async function gitOut($: EngineInterface, wt: string, args: string[]): Promise<s
 
 /** The plan of an item, parsed and sound, or refused with the format or the problems. */
 async function loadPlan($: EngineInterface, found: string, wt: string, id: string, ledger: Ledger | null) {
-  const rel = typeof ledger?.plan === 'string' && ledger.plan ? ledger.plan : `docs/pipeline/plans/${id}.md`
+  const rel = typeof ledger?.plan === 'string' && ledger.plan ? ledger.plan : placesOf(found, await read($, config)).planRel(id)
   const text = await readItemFile($, found, wt, rel)
   if (text === null) throw new Refused(`no plan at ${rel}; write it in this format, then call plan again:\n\n${PLAN_FORMAT}`)
   const plan = parsePlan(text)
@@ -1216,17 +1250,16 @@ async function loadPlan($: EngineInterface, found: string, wt: string, id: strin
 /** A brief's answer without its leading item id, for joining onto another answer. */
 const withoutId = (id: string, line: string) => (line.startsWith(`${id} · `) ? line.slice(id.length + 3) : line)
 
-const FACTS_FILE = 'docs/pipeline/facts.md'
 const FACTS_MAX = 12
 
 /**
  * What a run learned about working in this repository (a command's working spelling, a step that must come first):
- * one line per fact in docs/pipeline/facts.md, the newest twelve kept, given to every implementer and reviewer.
+ * one line per fact in the facts file of the queue mode, the newest twelve kept, given to every implementer and reviewer.
  */
 async function addFact($: EngineInterface, found: string, fact: string): Promise<void> {
   const line = fact.replace(/\s+/g, ' ').trim().slice(0, 240)
   if (!line) return
-  const path = `${found}/${FACTS_FILE}`
+  const path = placesOf(found, await read($, config)).facts
   const lines = ((await readText($, path)) ?? '').split('\n').map(l => l.replace(/^[-*]\s+/, '').trim()).filter(l => l && !l.startsWith('#'))
   if (lines.some(l => l.toLowerCase() === line.toLowerCase())) return
   const kept = [...lines, line].slice(-FACTS_MAX)
@@ -1274,20 +1307,54 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
   const branch = typeof ledger?.branch === 'string' && ledger.branch ? ledger.branch : itemBranchOf(c?.branch ?? DEFAULTS.branch, id)
   const rel = typeof ledger?.worktree === 'string' && ledger.worktree ? slashes(ledger.worktree) : `.claude/worktrees/${id}`
   const wt = worktreePath(found, { ...(ledger ?? emptyLedger(id)), worktree: rel })
+  const P = placesOf(found, c)
+  const gh = isGithub(c)
+  // queue: github. The issue as GitHub has it now: the claim of another machine and the spec comment, before any worktree.
+  let specMd = ''
+  let seen: string[] = []
+  if (gh) {
+    const fresh = await readIssue($, found, id)
+    const other = fresh.assignees.find(a => a !== self.me)
+    if (fresh.labels.includes(labelsOf(labelOf(c)).building) && other) throw new Refused(`${id} is being built by @${other}; pick the next item`)
+    const spec = specCommentOf(fresh, self.me)
+    if (!spec) throw new Refused(`${id} has no spec comment: post one with spec`)
+    specMd = parseSpecComment(spec.body).specMd
+    seen = fresh.assignees
+  }
   // Off the remote's main when it is known, so the branch starts from what a PR will be compared with.
   await gitOut($, found, ['fetch', '-q', 'origin', mainBranch])
   const from = (await gitOut($, found, ['rev-parse', '--verify', '-q', `origin/${mainBranch}`])) !== null ? `origin/${mainBranch}` : mainBranch
   await ensureWorktree($, found, wt, branch, from)
+  if (gh) {
+    await ensureExclude($, found)
+    await $.fs.write(`${wt}/${P.specRel(id)}`, specMd)
+  }
   const base = ledger?.base ?? (await gitOut($, wt, ['merge-base', 'HEAD', from])) ?? (await gitOut($, wt, ['rev-parse', 'HEAD'])) ?? undefined
   const hasTasks = (ledger?.tasks ?? []).length > 0
   const status = item.status === 'ready' || (item.status === 'blocked' && !hasTasks) ? 'planning' : item.status === 'blocked' ? 'building' : item.status
   self.item = id
-  await runTool($, { action: 'ledger', item: id, set: { branch, worktree: rel, ...(base ? { base: base.slice(0, 12) } : {}) } })
+  const record = () => runTool($, { action: 'ledger', item: id, set: { branch, worktree: rel, ...(base ? { base: base.slice(0, 12) } : {}) } })
+  if (!gh) await record()
   if (status !== item.status) await runTool($, { action: 'update', id, set: { status } })
+  if (gh) {
+    // Two machines that labelled the issue in the same second: the one that sees a new assignee besides itself lets go.
+    if (status !== item.status) {
+      const after = await readIssue($, found, id)
+      const other = after.assignees.find(a => a !== self.me && !seen.includes(a))
+      if (other) {
+        await gitMain($, found, ['worktree', 'remove', '--force', wt])
+        await runTool($, { action: 'update', id, set: { status: item.status } })
+        if (self.item === id) self.item = ''
+        throw new Refused(`${id} is being built by @${other}; pick the next item`)
+      }
+    }
+    // Recorded once the item is in flight, so its entry in items.json keeps the ledger's link.
+    await record()
+  }
   await heartbeat($, true)
-  const spec = item.spec ?? `docs/pipeline/specs/${id}.md`
+  const spec = gh ? P.specRel(id) : item.spec ?? P.specRel(id)
   const r = ledger?.resume
-  const next = hasTasks && r ? `resume: task ${r.task}/${ledger!.tasks.length} · ${r.state}${r.lastVerified ? ` · verified ${r.lastVerified}` : ''}` : `next: read ${spec}, write docs/pipeline/plans/${id}.md, then plan`
+  const next = hasTasks && r ? `resume: task ${r.task}/${ledger!.tasks.length} · ${r.state}${r.lastVerified ? ` · verified ${r.lastVerified}` : ''}` : `next: read ${spec}, write ${P.planRel(id)}, then plan`
   return `${id} · ${status} · branch ${branch} · base ${(base ?? '?').slice(0, 7)} · ${isChild ? 'this directory is the worktree' : `EnterWorktree { "path": "${wt}" }`} · ${next}`
 }
 
@@ -1307,7 +1374,9 @@ async function acceptAction($: EngineInterface, found: string, c: Config | null,
   if (!head) throw new Refused(`git could not read HEAD in ${wt}`)
   if (from && (await gitOut($, wt, ['rev-parse', '--short', from])) === head) throw new Refused(`task ${n} has no commit after ${from}: nothing to accept`)
   // The pipeline's own files (a brief rendered again, a report rewritten) are committed below, not the implementer's to commit.
-  const dirty = await gitOut($, wt, ['status', '--porcelain', '--untracked-files=no', '--', '.', ':(exclude)docs/pipeline'])
+  const P = placesOf(found, c)
+  const gh = isGithub(c)
+  const dirty = await gitOut($, wt, ['status', '--porcelain', '--untracked-files=no', '--', '.', `:(exclude)${P.recordsDir}`])
   if (dirty) throw new Refused(`uncommitted changes in the worktree, the implementer did not commit:\n${dirty.split('\n').slice(0, 8).join('\n')}`)
   const wasReviewed = (task.dispatches ?? []).some(d => d.role === 'reviewer')
   // The review the config asks for is checked here, so the lead calls accept straight after its own verification.
@@ -1320,7 +1389,8 @@ async function acceptAction($: EngineInterface, found: string, c: Config | null,
     }
   }
   const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
-  const isRecorded = await commitPaths($, wt, [`docs/pipeline/ledgers/${id}`], `${id}: task ${n} record`, attribution)
+  // queue: github keeps the records out of the repository: nothing to commit.
+  const isRecorded = gh ? false : await commitPaths($, wt, [P.briefDir(id)], `${id}: task ${n} record`, attribution)
   const after = isRecorded ? (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? head : head
   const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
   const next = ledger.tasks.find(t => t.n !== n && t.status !== 'accepted')?.n
@@ -1329,6 +1399,8 @@ async function acceptAction($: EngineInterface, found: string, c: Config | null,
   const review = { kind: (wasReviewed ? 'independent' : 'lead-diff') as 'independent' | 'lead-diff', verdict: e.verdict?.trim() || 'approved', ...(carried ? { carried } : {}) }
   await runTool($, { action: 'ledger', item: id, set: { tasks: [{ n, close, status: 'accepted', commits: `${from || 'base'}..${head}`, review }], resume: { task: next ?? n, state: `task ${n} accepted`, lastVerified: after }, ...(await recordLead($, ledger)) } })
   const done = ledger.tasks.filter(t => t.status === 'accepted' || t.n === n).length
+  // The issue's status line shows the task counter.
+  if (gh) await runTool($, { action: 'update', id, set: { note: `task ${done}/${ledger.tasks.length}` } })
   if (typeof e.fact === 'string' && e.fact.trim()) await addFact($, found, e.fact)
   const line = `${id} · task ${n} accepted · ${done}/${ledger.tasks.length} · ${from ? `${from.slice(0, 7)}..` : ''}${head} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'}`
   // The next Agent call comes with the answer: the next task's implementer, or the final review after the last.
@@ -1378,7 +1450,7 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
   await runTool($, { action: 'ledger', item: id, set: { final, resume: { task: ledger.resume?.task ?? ledger.tasks.length, state: gate.startsWith('red') ? 'gate red' : 'gate run', ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) }, ...(await recordLead($, ledger)) } })
   if (gate.startsWith('red')) return `${id} · gate ${gate} · \`${command}\`\n${output}`
   const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
-  await commitPaths($, wt, [`docs/pipeline/ledgers/${id}`], `${id}: final review record`, attribution)
+  if (!isGithub(c)) await commitPaths($, wt, [placesOf(found, c).briefDir(id)], `${id}: final review record`, attribution)
   const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
   return `${id} · gate ${gate} · final ${verdict} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${/approved/i.test(verdict) ? 'open the PR' : 'the final review'}`
 }
@@ -1440,7 +1512,7 @@ async function removeCleaned($: EngineInterface, found: string, list: string[]):
 /** The worktrees and local branches of items already merged, removed when this session is not inside them: what an earlier close had to leave. */
 async function sweepMerged($: EngineInterface, found: string, c: Config | null, b: Backlog): Promise<void> {
   try {
-    const list = cleanList({ config: c, backlog: b, ...(await cleanInput($, found, b)) }).filter(x => x.startsWith('branch:') || x.startsWith('.claude/worktrees/'))
+    const list = cleanList({ config: c, backlog: b, ...(isGithub(c) ? { queue: 'github' as const } : {}), ...(await cleanInput($, found, b)) }).filter(x => x.startsWith('branch:') || x.startsWith('.claude/worktrees/'))
     // Worktrees first, so their branches are free to delete.
     await removeCleaned($, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
   } catch {}
@@ -1457,28 +1529,47 @@ async function closeAction($: EngineInterface, found: string, c: Config | null, 
   const branch = (typeof ledger?.branch === 'string' && ledger.branch) || item.branch || itemBranchOf(cfg.branch, id)
   const main = cfg.mainBranch
   const pr = e.pr?.trim() || item.pr || ledger?.pr || undefined
+  const gh = isGithub(c)
 
-  // The main checkout on mainBranch, with the merge in it.
-  const on = await gitOut($, found, ['rev-parse', '--abbrev-ref', 'HEAD'])
-  if (on !== main) {
-    const co = await gitMain($, found, ['checkout', main])
-    if (!co.ok) throw new Refused(`the main checkout is on ${on ?? 'an unknown branch'} and git checkout ${main} failed: ${co.said}`)
+  if (gh) {
+    // queue: github has no record to commit on mainBranch: the main checkout is left as it is, origin/<main> is enough.
+    await gitMain($, found, ['fetch', '-q', 'origin', main])
+  } else {
+    // The main checkout on mainBranch, with the merge in it.
+    const on = await gitOut($, found, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    if (on !== main) {
+      const co = await gitMain($, found, ['checkout', main])
+      if (!co.ok) throw new Refused(`the main checkout is on ${on ?? 'an unknown branch'} and git checkout ${main} failed: ${co.said}`)
+    }
+    await gitMain($, found, ['fetch', '-q', 'origin', main])
+    const pull = await gitMain($, found, ['merge', '--ff-only', `origin/${main}`])
+    if (!pull.ok) throw new Refused(`${main} in the main checkout could not be fast-forwarded to origin/${main}: ${pull.said}`)
   }
-  await gitMain($, found, ['fetch', '-q', 'origin', main])
-  const pull = await gitMain($, found, ['merge', '--ff-only', `origin/${main}`])
-  if (!pull.ok) throw new Refused(`${main} in the main checkout could not be fast-forwarded to origin/${main}: ${pull.said}`)
   if (item.status !== 'merged' && !e.force) {
     const tip = (await gitOut($, found, ['rev-parse', '--verify', '-q', branch])) ?? (await gitOut($, found, ['rev-parse', '--verify', '-q', `origin/${branch}`]))
     const isIn = tip !== null && (await gitMain($, found, ['merge-base', '--is-ancestor', tip, `origin/${main}`])).ok
     if (!isIn) throw new Refused(`${branch} is not on origin/${main}: the pull request is not merged yet; after a squash merge pass "force": true`)
   }
 
-  // Merged in the backlog, then what retain lets go.
+  const closed = async () => {
+    if (ledger) await runTool($, { action: 'ledger', item: id, set: { resume: { task: ledger.resume?.task ?? ledger.tasks.length, state: 'closed', ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) }, ...(await recordLead($, ledger)) } })
+  }
+  // queue: github: a merged issue leaves the backlog, so its ledger is closed while the item is still there.
+  if (gh) await closed()
+  // Merged in the backlog (with queue: github the labels off and the issue closed), then what retain lets go.
   if (item.status !== 'merged' || (pr && item.pr !== pr)) await runTool($, { action: 'update', id, set: { status: 'merged', ...(pr ? { pr } : {}) } })
   const after = (await loadBacklog($, found)).value ?? current
-  const list = cleanList({ config: c, backlog: after, item: id, ...(await cleanInput($, found, after)) })
+  const merged = after.items.some(i => i.id === id) ? after : { ...after, items: [...after.items, { ...item, status: 'merged' as const, ...(pr ? { pr } : {}) }] }
+  const list = cleanList({ config: c, backlog: merged, item: id, ...(gh ? { queue: 'github' as const } : {}), ...(await cleanInput($, found, merged)) })
   const { kept, paths: gone } = await removeCleaned($, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
-  if (ledger) await runTool($, { action: 'ledger', item: id, set: { resume: { task: ledger.resume?.task ?? ledger.tasks.length, state: 'closed', ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) }, ...(await recordLead($, ledger)) } })
+  if (!gh) await closed()
+  if (gh) {
+    if (self.item === id) self.item = ''
+    const tasks = ledger?.tasks.length ?? 0
+    const next = after.items.find(i => i.status === 'ready')
+    const left = kept.length ? ` · worktree ${kept[0]} left, this session is in it: the next begin or close removes it` : ''
+    return `${id} merged${pr ? ` · PR ${pr}` : ''} · ${tasks} task${tasks === 1 ? '' : 's'} · issue closed${left} · next: ${next ? next.id : 'nothing ready'}`
+  }
 
   // The record on mainBranch.
   const attribution = typeof ledger?.['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
@@ -1506,9 +1597,9 @@ async function planAction($: EngineInterface, found: string, c: Config | null, c
   await runTool($, { action: 'ledger', item: id, set })
   const item = current.items.find(i => i.id === id)!
   if (item.status !== 'building') await runTool($, { action: 'update', id, set: { status: 'building' } })
-  // The plan is committed here, so the lead spends no turn on it; nothing to commit is fine.
+  // The plan is committed here, so the lead spends no turn on it; nothing to commit is fine. queue: github commits no record.
   const attribution = typeof e.attribution === 'string' ? e.attribution : typeof ledger?.['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
-  const committed = await commitPaths($, wt, [rel], `${id}: plan`, attribution)
+  const committed = isGithub(c) ? false : await commitPaths($, wt, [rel], `${id}: plan`, attribution)
   const head = `${id} · building · ${plan.tasks.length} task${plan.tasks.length === 1 ? '' : 's'}${committed ? ' · plan committed' : ''}`
   // A fresh plan answers the first Agent call too, so the lead spends no turn asking for it.
   if (!known.size) {
@@ -1530,6 +1621,8 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
   const { plan } = await loadPlan($, found, wt, id, ledger)
   const n = kind === 'final' ? plan.tasks.length : Number(e.task)
   if (kind !== 'final' && !plan.tasks.some(t => t.n === n)) throw new Refused(`brief needs task: 1 to ${plan.tasks.length}`)
+  const P = placesOf(found, c)
+  const dir = P.briefDir(id)
 
   // A review the config does not ask for is answered, not rendered; a re-review (findings given) always runs.
   let risky: string[] = []
@@ -1545,8 +1638,8 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
 
   // The round is the first whose brief is not on disk yet: fix rounds from 1, a re-review and a second final review from 2.
   let round = 1
-  if (kind !== 'implementer') while (round < 50 && (await $.fs.exists(`${wt}/${briefPaths(id, kind, n, round).brief}`))) round++
-  if ((kind === 'review' || kind === 'final') && round > 1 && !e.findings?.trim()) throw new Refused(`${briefPaths(id, kind, n, 1).brief} exists: dispatch it again by its path, or pass findings for a scoped re-review`)
+  if (kind !== 'implementer') while (round < 50 && (await $.fs.exists(`${wt}/${briefPaths(id, kind, n, round, dir).brief}`))) round++
+  if ((kind === 'review' || kind === 'final') && round > 1 && !e.findings?.trim()) throw new Refused(`${briefPaths(id, kind, n, 1, dir).brief} exists: dispatch it again by its path, or pass findings for a scoped re-review`)
 
   const item = current.items.find(i => i.id === id)!
   const template = await readItemFile($, found, wt, `docs/pipeline/templates/${kind}.md`)
@@ -1556,9 +1649,11 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
     out = renderBrief({
       kind, item: id, itemTitle: item.title, task: n, round, plan, config: cfg, ledger,
       root: wt,
+      places: { specRel: P.specRel(id), planRel: P.planRel(id), recordsDir: P.recordsDir, briefDir: dir },
       rulesMd: (await readItemFile($, found, wt, 'docs/pipeline/rules.md')) ?? '',
-      factsMd: (await readText($, `${found}/${FACTS_FILE}`)) ?? '',
-      specMd: (await readItemFile($, found, wt, item.spec ?? `docs/pipeline/specs/${id}.md`)) ?? '',
+      factsMd: (await readText($, P.facts)) ?? '',
+      // queue: github: the spec cache begin wrote in the worktree.
+      specMd: (isGithub(c) ? await readText($, `${wt}/${P.specRel(id)}`) : await readItemFile($, found, wt, item.spec ?? P.specRel(id))) ?? '',
       ...(template ? { template } : {}),
       ...(e.findings !== undefined ? { findings: e.findings } : {}),
       ...(e.carried !== undefined ? { carried: e.carried } : {}),
@@ -1997,7 +2092,7 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
     next = updateItem(next, target, fields, now)
   }
   for (const { id, item } of ledgers) {
-    const file = ledgerFile(id)
+    const file = relOf(found, places(found, 'file').ledger(id))
     const ledger: Ledger = {
       ...emptyLedger(id),
       ...(typeof item.branch === 'string' ? { branch: item.branch } : {}),
@@ -2013,7 +2108,7 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
   let stubs = 0
   for (const item of next.items) {
     if (!fresh.has(item.id) || (item.status !== 'inbox' && item.status !== 'building') || item.spec) continue
-    const file = `docs/pipeline/specs/${item.id}.md`
+    const file = places(found, 'file').specRel(item.id)
     if (!(await $.fs.exists(p.spec(item.id)))) {
       await $.fs.write(p.spec(item.id), specStub(item.id, item.title, item.note, item.source))
       stubs += 1
@@ -2782,9 +2877,16 @@ async function configCommand($: EngineInterface, arg: string): Promise<string> {
   return `${key} = ${JSON.stringify(value)}`
 }
 
-/** The first line of the active item's spec, for the running hero; nothing without a spec file. */
+/** The first line of the active item's spec, for the running hero; nothing without a spec file. With queue: github, the spec cache in the item's worktree. */
 async function specLine($: EngineInterface, found: string, item: Item | null): Promise<string> {
-  if (!item || typeof item.spec !== 'string' || !item.spec) return ''
+  if (!item) return ''
+  const c = await read($, config)
+  if (isGithub(c)) {
+    const ledger = await loadLedger($, found, item.id)
+    const text = ledger?.worktree ? await readText($, `${worktreePath(found, ledger)}/${placesOf(found, c).specRel(item.id)}`) : null
+    return text ? specWhat(text) : ''
+  }
+  if (typeof item.spec !== 'string' || !item.spec) return ''
   const text = await readText($, `${found}/${item.spec.replace(/^\/+/, '')}`)
   return text ? specWhat(text) : ''
 }

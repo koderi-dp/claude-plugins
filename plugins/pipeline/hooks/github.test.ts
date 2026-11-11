@@ -62,7 +62,7 @@ const text = (r: unknown) => String((r as { result: unknown }).result)
 const call = ($: { tool: { call: (e: never) => Promise<unknown> } }, input: Record<string, unknown>) => $.tool.call({ tool: TOOL, ...input } as never)
 const json = async ($: { tool: { call: (e: never) => Promise<unknown> } }, input: Record<string, unknown>) => JSON.parse(text(await call($, input))) as Record<string, any>
 
-type GhState = { me: string; issues: Issue[]; fail?: boolean; missing?: boolean; labels?: string[] }
+type GhState = { me: string; issues: Issue[]; fail?: boolean; missing?: boolean; labels?: string[]; git?: (argv: string[]) => string; onEdit?: (i: Issue) => void }
 
 /** gh's JSON for one issue, as `gh issue list --json` prints it. */
 const raw = (i: Issue) => ({
@@ -86,7 +86,7 @@ function ghWorld(on: On, state: GhState) {
     const argv = [...(e as { argv: readonly string[] }).argv]
     runs.push(argv)
     const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
-    if (argv[0] !== 'gh') return ok()
+    if (argv[0] !== 'gh') return ok(state.git?.(argv) ?? '')
     if (state.missing) return { deny: 'ENOENT: gh' } as never
     if (state.fail) return { value: { exitCode: 1, stdout: '', stderr: 'could not resolve host: api.github.com', isStdoutTruncated: false, isStderrTruncated: false } } as never
     const [, a, b] = argv
@@ -125,6 +125,7 @@ function ghWorld(on: On, state: GhState) {
       i.labels = [...i.labels.filter(l => !remove.includes(l)), ...add.filter(l => !i.labels.includes(l))]
       const who = flag('--add-assignee')
       if (who && !i.assignees.includes(who)) i.assignees.push(who)
+      state.onEdit?.(i)
       return ok()
     }
     if (a === 'issue' && b === 'close') {
@@ -378,4 +379,175 @@ test('a pending GitHub update shows in the backlog until it is retried, and afte
   expect(has(runs.slice(before), ['gh', 'issue', 'edit', '1', '--add-label', 'pipeline:blocked'])).toBe(true)
   expect(JSON.parse(files.get(ITEMS)!).pending).toEqual([])
   expect((await json($, { action: 'get', id: '1' }))['item']).toMatchObject({ status: 'blocked' })
+})
+
+// ---------- the run loop keeps its records local ----------
+
+const WT2 = `${MAIN}/.claude/worktrees/2`
+const LEDGER2 = `${MAIN}/.git/pipeline/2/ledger.json`
+const PLAN2 = `# 2: Export
+
+## Constraints
+Kysely only.
+
+### Task 1: Schema
+- Files: src/schema.ts
+
+Write the failing test first.
+
+### Task 2: Route
+- Files: src/route.ts
+- Needs: 1
+
+Build the route.
+`
+const RULES = '# Rules\n\n## In every implementer brief\n\n1. No raw SQL.\n'
+
+/** A run over issue 2: git answers HEAD with `head.sha`, a named revision with itself, merge-base with the base, the branches main and feat/2. */
+function runWorld(on: On, gh: Partial<GhState> = {}) {
+  const head = { sha: 'aaa1111' }
+  const state: GhState = {
+    me: 'me',
+    issues: [issueOf(2, 'Export', { comments: [specComment('200')] })],
+    git: argv => {
+      if (argv.includes('rev-parse')) return `${argv.at(-1) === 'HEAD' ? head.sha : argv.at(-1)}\n`
+      if (argv.includes('merge-base')) return 'aaa1111\n'
+      if (argv.includes('for-each-ref')) return 'main\nfeat/2\n'
+      return ''
+    },
+    ...gh,
+  }
+  const runs = ghWorld(on, state)
+  return { runs, head, gh: state }
+}
+
+const commits = (runs: string[][]) => runs.filter(r => r[0] === 'git' && r.includes('commit'))
+
+test('begin labels and assigns the issue, writes the spec cache in the worktree and ignores .pipeline/', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const { runs } = runWorld(on)
+  const line = text(await call($, { action: 'begin', item: '2' }))
+  expect(has(runs, ['gh', 'issue', 'edit', '2', '--add-label', 'pipeline:building', '--add-assignee', 'me'])).toBe(true)
+  expect(files.get(`${WT2}/.pipeline/2/spec.md`)).toContain('## Acceptance')
+  expect(files.get(EXCLUDE)).toContain('.pipeline/')
+  expect(line).toContain('next: read .pipeline/2/spec.md, write .pipeline/2/plan.md, then plan')
+  expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ branch: 'feat/2', worktree: '.claude/worktrees/2' })
+  expect(JSON.parse(files.get(ITEMS)!).items['2']).toMatchObject({ status: 'planning', ledger: '.git/pipeline/2/ledger.json' })
+  // The fresh read before the worktree and the one after labelling.
+  expect(runs.filter(r => r[0] === 'gh' && r[1] === 'issue' && r[2] === 'view' && r[3] === '2').length).toBe(2)
+})
+
+test("begin refuses an issue another user's machine is building", async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const { runs } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['zoe'], comments: [specComment('200', 'building')] })] })
+  expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 is being built by @zoe; pick the next item')
+  expect(runs.some(r => r.includes('worktree'))).toBe(false)
+  expect(files.has(LEDGER2)).toBe(false)
+})
+
+test('begin refuses an issue with no spec comment', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const { runs } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:blocked'] })] })
+  expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 has no spec comment: post one with spec')
+  expect(runs.some(r => r[1] === 'issue' && r[2] === 'edit')).toBe(false)
+  expect(files.has(LEDGER2)).toBe(false)
+})
+
+test('begin that loses the race to another machine removes its worktree, takes the label off and refuses', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const { runs } = runWorld(on, { onEdit: i => void (i.labels.includes('pipeline:building') && !i.assignees.includes('zoe') && i.assignees.push('zoe')) })
+  expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 is being built by @zoe; pick the next item')
+  expect(runs).toContainEqual(['git', '-C', MAIN, 'worktree', 'remove', '--force', WT2])
+  expect(has(runs, ['gh', 'issue', 'edit', '2', '--remove-label', 'pipeline:building'])).toBe(true)
+  expect(files.has(LEDGER2)).toBe(false)
+})
+
+test('plan reads the worktree plan, seeds the ledger under .git/pipeline and commits nothing', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH, [`${DIR}/rules.md`]: RULES })
+  const { runs } = runWorld(on)
+  await call($, { action: 'begin', item: '2' })
+  files.set(`${WT2}/.pipeline/2/plan.md`, PLAN2)
+  const line = text(await call($, { action: 'plan', item: '2' }))
+  expect(line.startsWith('2 · building · 2 tasks · task 1/2')).toBe(true)
+  expect(line).not.toContain('plan committed')
+  const ledger = JSON.parse(files.get(LEDGER2)!)
+  expect(ledger.tasks.length).toBe(2)
+  expect(ledger.plan).toBe('.pipeline/2/plan.md')
+  expect(commits(runs)).toEqual([])
+})
+
+test('a brief is written under .pipeline/<id>/ and names no docs/pipeline path except rules', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH, [`${DIR}/rules.md`]: RULES })
+  runWorld(on)
+  await call($, { action: 'begin', item: '2' })
+  files.set(`${WT2}/.pipeline/2/plan.md`, PLAN2)
+  await call($, { action: 'plan', item: '2' })
+  const line = text(await call($, { action: 'brief', item: '2', kind: 'implementer', task: 2 }))
+  expect(line).toContain('prompt: Read .pipeline/2/task-2-brief.md and follow it.')
+  const brief = files.get(`${WT2}/.pipeline/2/task-2-brief.md`)!
+  expect(brief).toContain('No raw SQL.')
+  expect(brief).toContain(`${WT2}/.pipeline/2/task-2-report.md`)
+  expect(brief.split('\n').filter(l => l.includes('docs/pipeline') && !l.includes('rules'))).toEqual([])
+  const final = text(await call($, { action: 'brief', item: '2', kind: 'final' }))
+  expect(final).toContain('Read .pipeline/2/final-brief.md')
+  expect(files.get(`${WT2}/.pipeline/2/final-brief.md`)).toContain('a csv downloads')
+})
+
+test('accept pushes the branch, makes no commit, and the status line says task 1/2', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const { runs, head, gh } = runWorld(on)
+  await call($, { action: 'begin', item: '2' })
+  files.set(`${WT2}/.pipeline/2/plan.md`, PLAN2)
+  await call($, { action: 'plan', item: '2' })
+  head.sha = 'bbb2222'
+  const line = text(await call($, { action: 'accept', item: '2', task: 1, fact: 'run the tests with npm test' }))
+  expect(line).toContain('2 · task 1 accepted · 1/2 · aaa1111..bbb2222 · pushed')
+  expect(runs).toContainEqual(['git', '-C', WT2, 'push', '-q', '-u', 'origin', 'feat/2'])
+  expect(commits(runs)).toEqual([])
+  expect(gh.issues[0]!.comments[0]!.body.split('\n')[1]).toBe('**Pipeline** · building · task 1/2')
+  expect(files.get(`${MAIN}/.git/pipeline/facts.md`)).toContain('- run the tests with npm test')
+})
+
+test('close after the PR merged: labels gone, issue closed, worktree removed, nothing committed on main', async ($, on) => {
+  const { files } = world(on, {
+    [CONFIG]: CONFIG_GH,
+    [ITEMS]: JSON.stringify({ items: { '2': { status: 'review', branch: 'feat/2', pr: '#5', ledger: '.git/pipeline/2/ledger.json' } }, pending: [] }),
+    [LEDGER2]: JSON.stringify({ item: '2', branch: 'feat/2', worktree: '.claude/worktrees/2', tasks: [{ n: 1, title: 'A', status: 'accepted', dispatches: [] }, { n: 2, title: 'B', status: 'accepted', dispatches: [] }], rulings: [], blockers: [], tokens: 0 }),
+    [`${MAIN}/.claude/worktrees`]: '',
+  })
+  const { runs, gh } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] })] })
+  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
+  expect(text(await call($, { action: 'close', item: '2' }))).toBe('2 merged · PR #5 · 2 tasks · issue closed · next: nothing ready')
+  expect(has(runs, ['gh', 'issue', 'close', '2'])).toBe(true)
+  expect(gh.issues[0]!.labels).not.toContain('pipeline:building')
+  expect(gh.issues[0]!.state).toBe('closed')
+  expect(runs).toContainEqual(['git', '-C', MAIN, 'worktree', 'remove', '--force', '.claude/worktrees/2'])
+  expect(runs).toContainEqual(['git', '-C', MAIN, 'branch', '-D', 'feat/2'])
+  expect(runs.some(r => r[0] === 'git' && (r.includes('commit') || r.includes('checkout') || r.includes('--ff-only')))).toBe(false)
+  expect(runs.some(r => r[0] === 'git' && r.includes('push'))).toBe(false)
+  expect(JSON.parse(files.get(ITEMS)!).items['2']).toBeUndefined()
+  expect(JSON.parse(files.get(LEDGER2)!).resume.state).toBe('closed')
+})
+
+test('across begin, plan, brief, accept, gate and close no write lands under docs/pipeline and no git commit is issued', async ($, on) => {
+  const { files, writes } = world(on, { [CONFIG]: CONFIG_GH, [`${DIR}/rules.md`]: RULES })
+  const { runs, head } = runWorld(on)
+  await call($, { action: 'begin', item: '2' })
+  files.set(`${WT2}/.pipeline/2/plan.md`, PLAN2)
+  await call($, { action: 'plan', item: '2' })
+  await call($, { action: 'brief', item: '2', kind: 'implementer', task: 1 })
+  head.sha = 'bbb2222'
+  expect(text(await call($, { action: 'accept', item: '2', task: 1 }))).toContain('task 1 accepted')
+  head.sha = 'ccc3333'
+  expect(text(await call($, { action: 'accept', item: '2', task: 2 }))).toContain('task 2 accepted')
+  expect(text(await call($, { action: 'gate', item: '2', verdict: 'approved' }))).toBe('2 · gate none configured · final approved · pushed · next: open the PR')
+  expect(text(await call($, { action: 'close', item: '2', pr: '#5' }))).toBe('2 merged · PR #5 · 2 tasks · issue closed · next: nothing ready')
+  expect(writes.filter(w => w.includes('/docs/pipeline/'))).toEqual([])
+  expect(commits(runs)).toEqual([])
+})
+
+test('get full leaves out an afterMerge entry under docs/pipeline, which has nothing to act on', async ($, on) => {
+  world(on, { [CONFIG]: JSON.stringify({ ...JSON.parse(CONFIG_GH), afterMerge: ['docs/pipeline/BACKLOG.md', 'npm run release-notes'] }) })
+  ghWorld(on, { me: 'me', issues: [] })
+  expect((await json($, { action: 'get', full: true }))['config'].afterMerge).toEqual(['npm run release-notes'])
 })

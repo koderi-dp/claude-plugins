@@ -21,6 +21,8 @@ export type CleanInput = {
   branches?: string[]
   /** Per item id, the branch its ledger records, for an item whose record has none. */
   ledgerBranches?: Record<string, string>
+  /** The queue mode; under `github` the records are not in the repository, so only the worktree and the branch are listed. */
+  queue?: 'file' | 'github'
 }
 
 const LEDGERS = 'docs/pipeline/ledgers'
@@ -44,7 +46,8 @@ export const itemBranch = (item: Item, ledgerBranch: string | undefined, templat
 
 /**
  * The paths that may go: an item's ledger folder, plan, superpowers folders and worktree, each only when on disk and
- * not retained, then its local branch as `branch:<name>` when it exists and is not `mainBranch`.
+ * not retained, then its local branch as `branch:<name>` when it exists and is not `mainBranch`. Under queue github
+ * only the worktree (as `.claude/worktrees/<id>`) and the branch.
  */
 export function cleanList(input: CleanInput): string[] {
   const retain = { ...DEFAULTS.retain, ...(input.config?.retain ?? {}) }
@@ -64,7 +67,14 @@ export function cleanList(input: CleanInput): string[] {
   const add = (p: string) => {
     if (!out.includes(p)) out.push(p)
   }
+  const isGithub = input.queue === 'github'
   for (const item of chosen) {
+    const branch = itemBranch(item, input.ledgerBranches?.[item.id], template)
+    if (isGithub) {
+      if (worktrees.has(item.id) || has(`${WORKTREES}/${item.id}`)) add(`${WORKTREES}/${item.id}`)
+      if (branch !== mainBranch && branches.has(branch)) add(`branch:${branch}`)
+      continue
+    }
     const plan = planOf(item)
     if (!retain.briefs && has(`${LEDGERS}/${item.id}`)) add(`${LEDGERS}/${item.id}/`)
     if (!retain.plans && has(plan)) add(plan)
@@ -75,7 +85,6 @@ export function cleanList(input: CleanInput): string[] {
       }
     }
     if (worktrees.has(item.id) || has(`${WORKTREES}/${item.id}`)) add(`${WORKTREES}/${item.id}/`)
-    const branch = itemBranch(item, input.ledgerBranches?.[item.id], template)
     if (branch !== mainBranch && branches.has(branch)) add(`branch:${branch}`)
   }
   return out
