@@ -23,6 +23,43 @@ export function paths(root: string) {
   }
 }
 
+/** Where an item's records live: the spec, plan and briefs relative to a checkout, the tool's own files absolute. */
+export type Places = { specRel(id: string): string; planRel(id: string): string; briefDir(id: string): string; recordsDir: string; ledger(id: string): string; facts: string; issues: string; items: string; exclude: string }
+
+/**
+ * The record locations of a queue mode. File mode keeps everything under docs/pipeline, as before. GitHub mode puts what
+ * agents write under .pipeline/ in the checkout and what only the tool writes under .git/pipeline/ of the root.
+ */
+export function places(root: string, queue: 'file' | 'github'): Places {
+  const r = slashes(root)
+  if (queue === 'file') {
+    const p = paths(root)
+    return {
+      specRel: id => `${DIR}/specs/${id}.md`,
+      planRel: id => `${DIR}/plans/${id}.md`,
+      briefDir: id => `${DIR}/ledgers/${id}`,
+      recordsDir: DIR,
+      ledger: p.ledger,
+      facts: `${p.dir}/facts.md`,
+      issues: `${r}/.git/pipeline/issues.json`,
+      items: `${r}/.git/pipeline/items.json`,
+      exclude: `${r}/.git/info/exclude`,
+    }
+  }
+  const tool = `${r}/.git/pipeline`
+  return {
+    specRel: id => `.pipeline/${id}/spec.md`,
+    planRel: id => `.pipeline/${id}/plan.md`,
+    briefDir: id => `.pipeline/${id}`,
+    recordsDir: '.pipeline',
+    ledger: id => `${tool}/${id}/ledger.json`,
+    facts: `${tool}/facts.md`,
+    issues: `${tool}/issues.json`,
+    items: `${tool}/items.json`,
+    exclude: `${r}/.git/info/exclude`,
+  }
+}
+
 /** The first 12 hex characters of the root's SHA-1, for the live file of a project without a repository. */
 export async function hashRoot(root: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(slashes(root)))

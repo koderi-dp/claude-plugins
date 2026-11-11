@@ -258,3 +258,14 @@ test('taskReview: risky by default, always and off kept, anything else named wit
   expect(wrong.config.taskReview).toBe('risky')
   expect(draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: [], prose: [] }).config.taskReview).toBe('risky')
 })
+
+test('queue and queueLabel: defaults, a wrong value named and the default used', () => {
+  expect(normalizeConfig({}).config.queue).toBe('file')
+  expect(normalizeConfig({}).config.queueLabel).toBe('pipeline')
+  expect(normalizeConfig({ queue: 'github', queueLabel: 'factory' }).config).toMatchObject({ queue: 'github', queueLabel: 'factory' })
+  const bad = normalizeConfig({ queue: 'jira', queueLabel: '' })
+  expect(bad.config.queue).toBe('file')
+  expect(bad.config.queueLabel).toBe('pipeline')
+  expect(bad.problems).toContain('queue must be "file" or "github"')
+  expect(bad.problems).toContain('queueLabel must be a label name without a comma')
+})

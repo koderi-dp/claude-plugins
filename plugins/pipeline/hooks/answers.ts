@@ -43,6 +43,8 @@ export function slimGet(input: SlimInput): Record<string, unknown> {
   })
   const config: Record<string, unknown> | null = c ? {} : null
   if (c && config) for (const k of CONFIG_KEYS) if (c[k] !== undefined) config[k] = c[k]
+  // The queue keys only in github mode, so a file-mode answer stays as it was.
+  if (c && config && c.queue === 'github') Object.assign(config, { queue: c.queue, queueLabel: c.queueLabel })
   return {
     active: active
       ? {

@@ -7,7 +7,7 @@ const END = `No model identifier goes into commits, PR text or comments.`
 
 const implementer = `# {{item}} · task {{n}} of {{total}}: {{title}}
 
-You are the implementer, in the item's worktree on its branch. Never switch branches, never push, never touch \`docs/pipeline/\` except your report. {{process}}
+You are the implementer, in the item's worktree on its branch. Never switch branches, never push, never touch \`{{records}}/\` except your report. {{process}}
 
 ## Task
 
@@ -23,7 +23,7 @@ You are the implementer, in the item's worktree on its branch. Never switch bran
 
 ## How
 
-1. Read only what the task needs: the files you own and what they import. The plan and spec are at \`docs/pipeline/plans/{{item}}.md\` and \`docs/pipeline/specs/{{item}}.md\` when the task leaves a question.
+1. Read only what the task needs: the files you own and what they import. The plan and spec are at \`{{plan}}\` and \`{{spec}}\` when the task leaves a question.
 2. Write the failing test first, see it fail, then implement until it passes. No test, no behaviour.
 3. \`{{checkFast}}\` while you work; \`{{checkTask}}\` once before you hand back, and read its output: a claim without a run is not evidence. One simple command per shell call (no \`&&\`, \`;\` or \`cd\`): a compound command is refused in a worktree.
 4. Commit as soon as it is green, one commit, message \`{{commit}}\`, staging only your files by path (never \`git add -A\`). An uncommitted tree is lost on a restart.
@@ -48,7 +48,7 @@ ${END} End the commit message with these lines exactly:
 
 const fix = `# {{item}} · task {{n}}: {{title}} · fix round {{round}} of {{max}}
 
-Same worktree and branch; the task's commits are in place. Fix what is listed, nothing else. Never push, never amend or rewrite a commit, never touch \`docs/pipeline/\` except your report. {{process}}
+Same worktree and branch; the task's commits are in place. Fix what is listed, nothing else. Never push, never amend or rewrite a commit, never touch \`{{records}}/\` except your report. {{process}}
 
 ## Findings
 
@@ -74,7 +74,7 @@ ${END} End the commit message with these lines exactly:
 
 const review = `# {{item}} · review of task {{n}}: {{title}}
 
-You are the independent reviewer. Read-only: no edit and no commit in the worktree, nothing under \`docs/pipeline/\` except your report. Probes run in a scratch copy (\`git worktree add --detach <tmp>/probe HEAD\`) that you remove when done. {{process}}
+You are the independent reviewer. Read-only: no edit and no commit in the worktree, nothing under \`{{records}}/\` except your report. Probes run in a scratch copy (\`git worktree add --detach <tmp>/probe HEAD\`) that you remove when done. {{process}}
 
 ## Read
 
@@ -111,12 +111,12 @@ ${END}
 
 const final = `# {{item}} · final review: {{title}}
 
-You are the final reviewer. Read-only: no edit and no commit, nothing under \`docs/pipeline/\` except your report. Probes run in a scratch copy you remove when done. {{process}}
+You are the final reviewer. Read-only: no edit and no commit, nothing under \`{{records}}/\` except your report. Probes run in a scratch copy you remove when done. {{process}}
 
 ## Read
 
 - \`git diff {{base}}..{{head}}\`: every file, not a sample.
-- The spec \`docs/pipeline/specs/{{item}}.md\`; the plan \`docs/pipeline/plans/{{item}}.md\` for intent.
+- The spec \`{{spec}}\`; the plan \`{{plan}}\` for intent.
 - Scope of this review: {{findings}}
 
 ## Rulings the lead made; the code must keep each

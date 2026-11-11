@@ -37,6 +37,8 @@ export const DEFAULTS: Config = {
   pushMain: true,
   taskReview: 'risky',
   superpowers: 'off',
+  queue: 'file',
+  queueLabel: 'pipeline',
 }
 
 const kind = (x: unknown) => (x === null ? 'null' : Array.isArray(x) ? 'array' : typeof x)
@@ -127,7 +129,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
       }
   }
 
-  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'superpowers', 'pushMain'])
+  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'superpowers', 'pushMain', 'queue', 'queueLabel'])
   const extra = Object.fromEntries(Object.entries(raw).filter(([k]) => !known.has(k)))
   const config: Config = {
     ...extra,
@@ -150,8 +152,26 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
     pushMain: bool('pushMain', DEFAULTS.pushMain),
     taskReview: oneOf('taskReview', ['risky', 'always', 'off'] as const, DEFAULTS.taskReview),
     superpowers: oneOf('superpowers', ['off', 'on'] as const, DEFAULTS.superpowers),
+    queue: queueOf(raw['queue'], problems),
+    queueLabel: queueLabelOf(raw['queueLabel'], problems),
   }
   return { config, problems }
+}
+
+/** The queue mode: "file" or "github"; anything else is named and the default used. */
+function queueOf(raw: unknown, problems: string[]): Config['queue'] {
+  if (raw === undefined) return DEFAULTS.queue
+  if (raw === 'file' || raw === 'github') return raw
+  problems.push('queue must be "file" or "github"')
+  return DEFAULTS.queue
+}
+
+/** The queue label: a non-empty label name without a comma, since gh takes labels as a comma list; anything else is named and the default used. */
+function queueLabelOf(raw: unknown, problems: string[]): string {
+  if (raw === undefined) return DEFAULTS.queueLabel
+  if (typeof raw === 'string' && raw.trim() !== '' && !raw.includes(',')) return raw
+  problems.push('queueLabel must be a label name without a comma')
+  return DEFAULTS.queueLabel
 }
 
 /** The retain block: each flag a boolean, missing ones from the defaults, wrong types named. */

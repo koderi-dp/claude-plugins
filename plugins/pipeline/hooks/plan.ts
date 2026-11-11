@@ -97,14 +97,14 @@ export function riskyMatches(changed: string[], globs: string[]): string[] {
 
 const DIR = 'docs/pipeline/ledgers'
 
-/** The brief and report paths of a dispatch, by the names the ledger folder uses. `round` is the fix round, or the review's (1 is the first). */
-export function briefPaths(item: string, kind: BriefKind, task: number, round: number): { brief: string; report: string } {
+/** The brief and report paths of a dispatch, by the names the ledger folder uses. `round` is the fix round, or the review's (1 is the first). `dir` is the folder the brief goes in, `docs/pipeline/ledgers/<item>` by default. */
+export function briefPaths(item: string, kind: BriefKind, task: number, round: number, dir = `${DIR}/${item}`): { brief: string; report: string } {
   const base =
     kind === 'implementer' ? `task-${task}`
     : kind === 'fix' ? `task-${task}-fix-${round}`
     : kind === 'review' ? (round > 1 ? `task-${task}-review-${round}` : `task-${task}-review`)
     : round > 1 ? `final-review-${round}` : 'final'
-  return { brief: `${DIR}/${item}/${base}-brief.md`, report: `${DIR}/${item}/${base}-report.md` }
+  return { brief: `${dir}/${base}-brief.md`, report: `${dir}/${base}-report.md` }
 }
 
 /** The template with every `{{name}}` filled; a name without a value is left out of the text and named in `missing`. */
@@ -143,6 +143,8 @@ export type BriefInput = {
   head?: string
   attribution?: string
   isEscalated?: boolean
+  /** Where the item's records are, relative to the worktree; absent means the file-mode paths under docs/pipeline. */
+  places?: { specRel: string; planRel: string; recordsDir: string; briefDir: string }
 }
 
 const or = (s: string | undefined, fallback: string) => (s && s.trim() ? s.trim() : fallback)
@@ -152,7 +154,8 @@ export function renderBrief(input: BriefInput): { text: string; brief: string; r
   const { kind, item, plan, config: c, ledger } = input
   const task = plan.tasks.find(t => t.n === input.task)
   if (kind !== 'final' && !task) throw new Error(`the plan has no task ${input.task}`)
-  const paths = briefPaths(item, kind, input.task, input.round)
+  const at = input.places ?? { specRel: `docs/pipeline/specs/${item}.md`, planRel: `docs/pipeline/plans/${item}.md`, recordsDir: 'docs/pipeline', briefDir: `${DIR}/${item}` }
+  const paths = briefPaths(item, kind, input.task, input.round, at.briefDir)
   const others = plan.tasks.filter(t => t.n !== input.task).flatMap(t => t.files).filter(f => !task?.files.includes(f))
   const role = kind === 'review' ? 'reviewer' : kind === 'final' ? 'final' : 'implementer'
   const m = c.models[input.isEscalated && role === 'implementer' ? 'escalate' : role]
@@ -168,6 +171,9 @@ export function renderBrief(input: BriefInput): { text: string; brief: string; r
     checkGate: or(c.checks.gate, 'the full test suite'),
     process: c.superpowers === 'on' ? 'A skill the session has for testing, debugging or verification may be used inside a step; this brief decides what is done.' : 'This brief is the whole process: invoke no skill (no superpowers skill, no planning or brainstorming skill) and dispatch no agent.',
     facts: (input.factsMd ?? '').split('\n').filter(l => /^[-*]\s/.test(l)).join('\n') || 'none yet',
+    spec: at.specRel,
+    plan: at.planRel,
+    records: at.recordsDir,
     attribution: or(input.attribution ?? (typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''), '(no attribution lines)'),
   }
   if (task) {
@@ -187,12 +193,12 @@ export function renderBrief(input: BriefInput): { text: string; brief: string; r
   }
   if (kind === 'review') {
     if (!input.commits?.trim()) throw new Error('a review brief needs commits, as <sha>..<sha>')
-    const impl = briefPaths(item, 'implementer', input.task, 1)
+    const impl = briefPaths(item, 'implementer', input.task, 1, at.briefDir)
     Object.assign(values, { commits: input.commits.trim(), risky: input.risky?.length ? input.risky.join(', ') : 'no risky path; every task is reviewed', brief: impl.brief, implReport: impl.report, findings: or(input.findings, 'the whole task'), rules: rulesGroup(input.rulesMd, 'In every reviewer brief') })
   }
   if (kind === 'final') {
     const acceptance = section(input.specMd, 'Acceptance')
-    if (!acceptance) throw new Error(`docs/pipeline/specs/${item}.md has no Acceptance list`)
+    if (!acceptance) throw new Error(`${at.specRel} has no Acceptance list`)
     const rulings = (ledger.rulings ?? []).map(r => `${r.n}. ${[r.text, r.why].filter(Boolean).join(' — ')}`).join('\n')
     Object.assign(values, { base: or(ledger.base, c.mainBranch), head: or(input.head, 'HEAD'), acceptance, rulings: rulings || 'none', parked: or(plan.parked, 'nothing'), findings: or(input.findings, 'the whole branch'), rules: rulesGroup(input.rulesMd, 'Before the PR') })
   }

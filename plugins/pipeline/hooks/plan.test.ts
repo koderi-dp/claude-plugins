@@ -177,3 +177,12 @@ test('renderBrief refuses what it cannot fill', () => {
   expect(() => renderBrief({ ...base(), kind: 'final', task: 2, specMd: '# x' })).toThrow('has no Acceptance list')
   expect(() => renderBrief({ ...base(), kind: 'implementer', task: 1, template: 'x {{nope}}' })).toThrow('{{nope}}')
 })
+
+test('briefPaths takes the folder; a brief rendered with places names those paths and not docs/pipeline', () => {
+  expect(briefPaths('12', 'implementer', 2, 1, '.pipeline/12')).toEqual({ brief: '.pipeline/12/task-2-brief.md', report: '.pipeline/12/task-2-report.md' })
+  expect(briefPaths('p1', 'final', 1, 1)).toEqual({ brief: 'docs/pipeline/ledgers/p1/final-brief.md', report: 'docs/pipeline/ledgers/p1/final-report.md' })
+  const out = renderBrief({ ...base(), kind: 'implementer', task: 1, item: '12', places: { specRel: '.pipeline/12/spec.md', planRel: '.pipeline/12/plan.md', recordsDir: '.pipeline', briefDir: '.pipeline/12' } })
+  expect(out.brief).toBe('.pipeline/12/task-1-brief.md')
+  expect(out.text).toContain('.pipeline/12/plan.md')
+  expect(out.text).not.toContain('docs/pipeline')
+})

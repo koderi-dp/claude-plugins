@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { hashRoot, livePath, parseJson, paths, serialize } from './files'
+import { hashRoot, livePath, parseJson, paths, places, serialize } from './files'
 
 const ROOT = '/p/main'
 
@@ -65,4 +65,13 @@ test('parseJson rejects an empty file and trailing text with a line', () => {
 
 test('serialize indents by two and ends with a newline', () => {
   expect(serialize({ a: [1] })).toBe('{\n  "a": [\n    1\n  ]\n}\n')
+})
+
+test('places: file mode is docs/pipeline, github mode is .pipeline in the checkout and .git/pipeline for the tool', () => {
+  const f = places('/r', 'file')
+  expect([f.specRel('p1'), f.planRel('p1'), f.briefDir('p1'), f.recordsDir]).toEqual(['docs/pipeline/specs/p1.md', 'docs/pipeline/plans/p1.md', 'docs/pipeline/ledgers/p1', 'docs/pipeline'])
+  expect([f.ledger('p1'), f.facts]).toEqual(['/r/docs/pipeline/ledgers/p1.json', '/r/docs/pipeline/facts.md'])
+  const g = places('/r', 'github')
+  expect([g.specRel('12'), g.planRel('12'), g.briefDir('12'), g.recordsDir]).toEqual(['.pipeline/12/spec.md', '.pipeline/12/plan.md', '.pipeline/12', '.pipeline'])
+  expect([g.ledger('12'), g.facts, g.issues, g.items, g.exclude]).toEqual(['/r/.git/pipeline/12/ledger.json', '/r/.git/pipeline/facts.md', '/r/.git/pipeline/issues.json', '/r/.git/pipeline/items.json', '/r/.git/info/exclude'])
 })
