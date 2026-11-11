@@ -12,7 +12,7 @@ import type { Places } from './files'
 import * as tracker from './tracker'
 import { QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
-import { EMPTY_EXTRAS, applyOps, extrasOf, labelsOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import { EMPTY_EXTRAS, applyOps, extrasOf, issueBodyOf, labelsOf, migrationOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import type { Extras, Leftover, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
 import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
@@ -66,12 +66,12 @@ const TOOL_DESCRIPTION =
   '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate? }, blockers?: [text], pr?, branch?, worktree?, base?, <any other key>?: value | null } } merges anything else into the ledger: text for resume is taken as its state, a wrong shape is refused and nothing is written, and null removes one of the other keys. ' +
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain says may go and deletes nothing. ' +
   'A file that does not parse is refused with its line and left alone. ' +
-  'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12): `add` opens an issue, `spec` { id, text } posts or replaces the issue\'s spec comment, `question` { id, text } asks on the issue and holds the item, `init` { queue: "github" } sets it up; `move` and `remove` are refused.'
+  'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12): `add` opens an issue, `spec` { id, text } posts or replaces the issue\'s spec comment, `question` { id, text } asks on the issue and holds the item, `init` { queue: "github" } sets it up; `move` and `remove` are refused. `migrate-github` { apply? } drafts, and with apply makes, the move of a file backlog onto issues.'
 
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
@@ -109,6 +109,7 @@ const TOOL_SCHEMA = {
     rules: { type: 'array', description: 'For migrate-apply: the corrected rules, each { group, line, source }.', items: { type: 'object' } },
     text: { type: 'string', description: 'For spec: the spec, with the template\'s headings. For question: the question to ask on the issue.' },
     queue: { type: 'string', enum: ['file', 'github'], description: 'For init: github sets the project up with the issues as the queue.' },
+    apply: { type: 'boolean', description: 'For migrate-github: move the file backlog onto issues; without it the action answers the draft and writes nothing.' },
   },
   required: ['action'],
 }
@@ -730,6 +731,7 @@ type ToolInput = {
   force?: boolean
   text?: string
   queue?: string
+  apply?: boolean
 }
 
 class Refused extends Error {}
@@ -914,7 +916,7 @@ async function markDelivered($: EngineInterface): Promise<void> {
 }
 
 /** The actions that change the backlog or a ledger: each runs alone across every session on the repository. */
-const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'start', 'stop', 'init', 'migrate-apply', 'spec', 'question'])
+const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'start', 'stop', 'init', 'migrate-apply', 'migrate-github', 'spec', 'question'])
 const LOCK_WAIT_MS = 250
 const LOCK_TRIES = 120
 
@@ -1092,6 +1094,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
     if (error) throw new Refused(error)
     return migrateApply($, found, loaded, e)
   }
+  if (e.action === 'migrate-github') return migrateGithub($, found, c, loaded, error, e)
 
   if (e.action === 'log') {
     const id = typeof e.item === 'string' ? e.item : e.item?.id ?? e.id
@@ -2199,6 +2202,131 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
   if (bulk.count) lines.push(`bulk: ${bulk.count} files of merged increments to remove with git rm once the user confirms (kept with retain.superpowers):`, ...bulk.files)
   lines.push(commitLine(normalizeConfig(nextConfig).config.mainBranch))
   return lines.join('\n')
+}
+
+/** What a project on issues no longer needs, for the lead to remove with git rm once migrate-github has applied. */
+const FILE_RECORDS = ['docs/pipeline/backlog.json', 'docs/pipeline/BACKLOG.md', 'docs/pipeline/facts.md', 'docs/pipeline/specs', 'docs/pipeline/plans', 'docs/pipeline/ledgers']
+
+/**
+ * `migrate-github`: a file backlog moved onto GitHub issues. Without `apply`, the draft. With it: an issue per open
+ * item (its spec as the spec comment, an active one labelled building and assigned), each active item's ledger, plan
+ * and briefs copied to the places of queue: github under the issue's number, the facts copied, items.json written,
+ * the config set to queue: github and .pipeline/ ignored. It deletes nothing. A failure stops it with what was made;
+ * an item whose title already has a labelled open issue is not made again, so a second apply finishes the move.
+ */
+async function migrateGithub($: EngineInterface, found: string, c: Config | null, loaded: Backlog | null, error: string | null, e: ToolInput): Promise<string> {
+  if (isGithub(c)) throw new Refused(`${CONFIG_FILE} already has queue: github; there is no file backlog to move`)
+  if (error) throw new Refused(error)
+  if (!loaded) throw new Refused(`no ${BACKLOG_FILE} to move`)
+  const p = paths(found)
+  const F = places(found, 'file')
+  const P = places(found, 'github')
+  const m = migrationOf(loaded)
+  const specPath = (item: Item) => (item.spec ? `${found}/${slashes(item.spec).replace(/^\//, '')}` : p.spec(item.id))
+  if (!e.apply) {
+    const create = []
+    for (const item of m.create) create.push({ id: item.id, title: item.title, status: item.status, spec: (await readText($, specPath(item))) !== null ? relOf(found, specPath(item)) : null })
+    return JSON.stringify({ create, active: m.active.map(i => i.id), skipped: { merged: m.skipped.merged, parked: m.skipped.parked.map(i => ({ id: i.id, title: i.title })) }, remove: FILE_RECORDS }, null, 2)
+  }
+
+  const run = ghRun($, found)
+  const who = await tracker.me(run)
+  if (!who.ok) throw new Refused(who.error)
+  const me = who.value
+  self.me = me
+  const label = labelOf(c)
+  const L = labelsOf(label)
+  const labelled = await tracker.ensureLabels(run, [L.queue, L.building, L.blocked, L.needsInfo])
+  if (!labelled.ok) throw new Refused(labelled.error)
+  const listed = await tracker.list(run, label)
+  if (!listed.ok) throw new Refused(listed.error)
+  const extras = await extrasOrRefuse($, found)
+
+  const ids = new Map<string, string>()
+  const lines: string[] = []
+  const stop = (error: string) => new Refused([`migration stopped: ${error}`, ...lines, 'the issues above stay; apply again and it skips them'].join('\n'))
+  for (const item of m.create) {
+    const spec = await readText($, specPath(item))
+    const isActive = (ACTIVE_STATUSES as readonly string[]).includes(item.status)
+    const there = listed.value.find(i => i.title === item.title)
+    let n: number
+    if (there) {
+      n = there.number
+    } else {
+      const made = await tracker.create(run, { title: item.title, body: issueBodyOf(spec, item.note), labels: [label] })
+      if (!made.ok) throw stop(made.error)
+      n = made.value
+    }
+    ids.set(item.id, String(n))
+    lines.push(`${item.id} → #${n}`)
+    // An issue an earlier apply made gets what that apply did not get to.
+    if (spec !== null && !(there && specCommentOf(there, me))) {
+      const posted = await tracker.comment(run, n, renderSpecComment(spec, isActive ? item.status : 'ready', ''))
+      if (!posted.ok) throw stop(posted.error)
+    }
+    if (isActive && !there?.labels.includes(L.building)) {
+      const claimed = await tracker.edit(run, n, { add: [L.building], assign: me })
+      if (!claimed.ok) throw stop(claimed.error)
+    }
+  }
+
+  // The records of the items in flight, under the issue's number; the branch and the worktree stay what they were.
+  const items: Record<string, Partial<Item>> = { ...extras.items }
+  for (const item of m.active) {
+    const id = ids.get(item.id)!
+    const kept: Partial<Item> = { status: item.status }
+    for (const k of ['branch', 'pr', 'note', 'size'] as const) if (item[k] !== undefined && item[k] !== null && item[k] !== '') (kept as Record<string, unknown>)[k] = item[k]
+    const from = item.ledger ? `${found}/${slashes(item.ledger).replace(/^\//, '')}` : F.ledger(item.id)
+    const old = await loadJson<Ledger>($, from, relOf(found, from))
+    if (old.error) throw stop(old.error)
+    if (old.value && typeof old.value === 'object' && !Array.isArray(old.value)) {
+      const briefs = F.briefDir(item.id)
+      const moved = JSON.parse(JSON.stringify(old.value).split(`"${briefs}/`).join(`"${P.briefDir(id)}/`)) as Ledger
+      const planFrom = typeof old.value.plan === 'string' && old.value.plan ? old.value.plan : typeof item.plan === 'string' && item.plan ? item.plan : null
+      const ledger: Ledger = { ...moved, item: id, ...(planFrom ? { plan: P.planRel(id) } : {}) }
+      await $.fs.write(P.ledger(id), serialize(ledger))
+      kept.ledger = relOf(found, P.ledger(id))
+      if (planFrom) kept.plan = P.planRel(id)
+      if (typeof ledger.worktree === 'string' && ledger.worktree) {
+        const wt = worktreePath(found, ledger)
+        const plan = planFrom ? await readItemFile($, found, wt, planFrom) : null
+        if (plan !== null) await $.fs.write(`${wt}/${P.planRel(id)}`, plan)
+        let dir = `${wt}/${briefs}`
+        let names = (await listDir($, dir)).filter(n => !n.endsWith('/'))
+        if (!names.length && wt !== found) {
+          dir = `${found}/${briefs}`
+          names = (await listDir($, dir)).filter(n => !n.endsWith('/'))
+        }
+        for (const name of names) {
+          const text = await readText($, `${dir}/${name}`)
+          if (text !== null) await $.fs.write(`${wt}/${P.briefDir(id)}/${name}`, text)
+        }
+      }
+    }
+    items[id] = kept
+  }
+  const facts = await readText($, F.facts)
+  if (facts !== null) await $.fs.write(P.facts, facts)
+  await writeExtras($, found, { ...extras, items })
+
+  // The config on disk with queue: github, every other key as the user left it.
+  const onDisk = await loadJson<Record<string, unknown>>($, p.config, CONFIG_FILE)
+  if (onDisk.error) throw stop(onDisk.error)
+  const nextConfig = { ...(onDisk.value ?? structuredClone(DEFAULTS)), queue: 'github' }
+  await $.fs.write(p.config, serialize(nextConfig))
+  const normal = normalizeConfig(nextConfig).config
+  await update($, config, () => normal)
+  await ensureExclude($, found)
+  await update($, fileError, () => null)
+  await loadBacklog($, found)
+
+  const parked = m.skipped.parked.map(i => i.id)
+  return [
+    ...lines,
+    parked.length ? `parked, not moved (file them by hand when wanted): ${parked.join(', ')}` : 'parked: none',
+    `remove with git rm -r --ignore-unmatch and commit with ${CONFIG_FILE} on ${normal.mainBranch}:`,
+    ...FILE_RECORDS,
+  ].join('\n')
 }
 
 // ---------- the watchdog and the live file ----------

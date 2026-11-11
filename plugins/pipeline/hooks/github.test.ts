@@ -646,3 +646,118 @@ test('a worktree close had to leave is recorded, listed by clean, and swept by a
   expect(runs.slice(before)).toContainEqual(['git', '-C', MAIN, 'branch', '-D', 'feat/2'])
   expect(JSON.parse(files.get(ITEMS)!).leftover ?? []).toEqual([])
 })
+
+// ---------- moving a file backlog onto issues ----------
+
+const WTP2 = `${MAIN}/.claude/worktrees/p2`
+const FILE_BACKLOG = JSON.stringify({
+  version: 1,
+  items: [
+    { id: 'p1', title: 'Login', status: 'merged', pr: '#1' },
+    { id: 'p2', title: 'Export', status: 'building', spec: 'docs/pipeline/specs/p2.md', plan: 'docs/pipeline/plans/p2.md', branch: 'feat/p2', ledger: 'docs/pipeline/ledgers/p2.json' },
+    { id: 'p3', title: 'Dark mode', status: 'parked' },
+    { id: 'p4', title: 'Import', status: 'inbox', note: 'bob asked for it' },
+  ],
+}, null, 2) + '\n'
+const FILE_LEDGER = JSON.stringify({
+  item: 'p2', plan: 'docs/pipeline/plans/p2.md', branch: 'feat/p2', worktree: '.claude/worktrees/p2', base: 'aaa1111',
+  tasks: [{ n: 1, title: 'Schema', status: 'accepted', dispatches: [{ role: 'implementer', model: 'm', effort: 'default', tokens: 1, minutes: 1, result: 'done', brief: 'docs/pipeline/ledgers/p2/task-1-brief.md', report: 'docs/pipeline/ledgers/p2/task-1-report.md' }] }],
+  rulings: [], blockers: [], tokens: 0,
+}, null, 2) + '\n'
+const FILE_PROJECT = {
+  [CONFIG]: VALID_CONFIG,
+  [BACKLOG]: FILE_BACKLOG,
+  [`${DIR}/BACKLOG.md`]: '# Backlog\n',
+  [`${DIR}/specs/p2.md`]: SPEC,
+  [`${DIR}/ledgers/p2.json`]: FILE_LEDGER,
+  [`${DIR}/facts.md`]: '- run the tests with npm test\n',
+  [`${WTP2}/docs/pipeline/plans/p2.md`]: PLAN2,
+  [`${WTP2}/docs/pipeline/ledgers/p2`]: '',
+  [`${WTP2}/docs/pipeline/ledgers/p2/task-1-brief.md`]: 'the brief',
+  [`${WTP2}/docs/pipeline/ledgers/p2/task-1-report.md`]: 'the report',
+}
+
+/** fs.list over the in-memory files: the names directly under a folder. */
+const listFiles = (on: On, files: Map<string, string>) =>
+  on('fs.list', (_$, e) => {
+    const dir = `${(e as { path: string }).path}/`
+    const names = new Set([...files.keys()].filter(k => k.startsWith(dir)).map(k => k.slice(dir.length).split('/')[0]!))
+    return { value: [...names].map(name => ({ name, kind: [...files.keys()].some(k => k.startsWith(`${dir}${name}/`)) ? 'dir' : 'file' })) } as never
+  })
+
+test('migrate-github without apply answers the draft and writes nothing', async ($, on) => {
+  const { writes } = world(on, FILE_PROJECT)
+  const runs = ghWorld(on, { me: 'me', issues: [] })
+  const draft = await json($, { action: 'migrate-github' })
+  expect(draft['create'].map((i: { id: string }) => i.id)).toEqual(['p2', 'p4'])
+  expect(draft['active']).toEqual(['p2'])
+  expect(draft['skipped']).toMatchObject({ merged: 1, parked: [{ id: 'p3', title: 'Dark mode' }] })
+  expect(draft['remove']).toContain('docs/pipeline/backlog.json')
+  expect(writes).toEqual([])
+  expect(runs.some(r => r[0] === 'gh')).toBe(false)
+})
+
+test('migrate-github apply creates the issues, posts the specs, copies the active ledger, flips the config and lists what to git rm', async ($, on) => {
+  const { files } = world(on, { ...FILE_PROJECT, [EXCLUDE]: '' })
+  listFiles(on, files)
+  const gh: GhState = { me: 'me', issues: [] }
+  const runs = ghWorld(on, gh)
+  const answer = text(await call($, { action: 'migrate-github', apply: true }))
+  const creates = runs.filter(r => r[0] === 'gh' && r[1] === 'issue' && r[2] === 'create')
+  expect(creates.length).toBe(2)
+  expect(creates[0]).toEqual(['gh', 'issue', 'create', '--title', 'Export', '--body', '### What\n\nCSV export of the list.\n\n### Why\n\nUsers asked for it.', '--label', 'pipeline'])
+  expect(creates[1]).toEqual(['gh', 'issue', 'create', '--title', 'Import', '--body', 'bob asked for it', '--label', 'pipeline'])
+  expect(gh.issues[0]!.labels).toEqual(['pipeline', 'pipeline:building'])
+  expect(gh.issues[0]!.assignees).toEqual(['me'])
+  expect(gh.issues[0]!.comments[0]!.body.split('\n').slice(0, 2)).toEqual([SPEC_MARK, '**Pipeline** · building'])
+  expect(gh.issues[1]!.labels).toEqual(['pipeline'])
+  expect(gh.issues[1]!.comments).toEqual([])
+  const ledger = JSON.parse(files.get(`${MAIN}/.git/pipeline/1/ledger.json`)!)
+  expect(ledger).toMatchObject({ item: '1', plan: '.pipeline/1/plan.md', branch: 'feat/p2', worktree: '.claude/worktrees/p2' })
+  expect(ledger.tasks[0].dispatches[0]).toMatchObject({ brief: '.pipeline/1/task-1-brief.md', report: '.pipeline/1/task-1-report.md' })
+  expect(files.get(`${WTP2}/.pipeline/1/plan.md`)).toBe(PLAN2)
+  expect(files.get(`${WTP2}/.pipeline/1/task-1-brief.md`)).toBe('the brief')
+  expect(files.get(`${MAIN}/.git/pipeline/facts.md`)).toBe('- run the tests with npm test\n')
+  expect(JSON.parse(files.get(ITEMS)!).items['1']).toMatchObject({ status: 'building', branch: 'feat/p2', ledger: '.git/pipeline/1/ledger.json' })
+  expect(JSON.parse(files.get(CONFIG)!)).toMatchObject({ queue: 'github', mainBranch: 'main' })
+  expect(files.get(EXCLUDE)!.split('\n')).toContain('.pipeline/')
+  expect(answer).toContain('p2 → #1')
+  expect(answer).toContain('p4 → #2')
+  expect(answer).toContain('p3')
+  expect(answer).toContain('docs/pipeline/backlog.json')
+  expect(answer).toContain('docs/pipeline/ledgers')
+  // Nothing was removed, and the issues are the queue now.
+  for (const f of Object.keys(FILE_PROJECT)) expect(files.has(f)).toBe(true)
+  expect((await json($, { action: 'get', titles: true }))['titles']).toEqual(['1 building Export', '2 inbox Import'])
+  // Once the config says github, apply is refused.
+  expect(text(await call($, { action: 'migrate-github', apply: true }))).toMatch(/^refused: .*queue: github/)
+})
+
+test('a second apply after a failure skips the issues already created', async ($, on) => {
+  const { files } = world(on, FILE_PROJECT)
+  listFiles(on, files)
+  const gh: GhState = { me: 'me', issues: [], onEdit: () => void (gh.fail = true) }
+  const runs = ghWorld(on, gh)
+  const first = text(await call($, { action: 'migrate-github', apply: true }))
+  expect(first).toMatch(/^refused: /)
+  expect(first).toContain('p2 → #1')
+  expect(first).toContain('could not resolve host')
+  expect(JSON.parse(files.get(CONFIG)!).queue).toBeUndefined()
+  gh.fail = false
+  gh.onEdit = undefined
+  const before = runs.length
+  const second = text(await call($, { action: 'migrate-github', apply: true }))
+  expect(second).toContain('p2 → #1')
+  expect(second).toContain('p4 → #2')
+  expect(runs.slice(before).filter(r => r[1] === 'issue' && r[2] === 'create').map(r => r[4])).toEqual(['Import'])
+  expect(gh.issues.map(i => i.title)).toEqual(['Export', 'Import'])
+  expect(gh.issues[0]!.comments.length).toBe(1)
+  expect(JSON.parse(files.get(CONFIG)!).queue).toBe('github')
+})
+
+test('migrate-github is refused when the gh user cannot be read', async ($, on) => {
+  const { writes } = world(on, FILE_PROJECT)
+  ghWorld(on, { me: 'me', issues: [], missing: true })
+  expect(text(await call($, { action: 'migrate-github', apply: true }))).toBe(`refused: ${NO_GH}`)
+  expect(writes).toEqual([])
+})
