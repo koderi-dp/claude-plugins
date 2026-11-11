@@ -137,17 +137,17 @@ The steps of `pipeline-run` and the lead's part in them do not change. The tool'
 | `question` (new) | `{ action: "question", id, text }` posts a question comment and adds `pipeline:needs-info`. |
 | `move`, `remove` | Refused: the queue is the issues. |
 | `park`, `unpark` | Remove or add the queue label. |
-| `begin` | Refuses an issue that carries `pipeline:building` and is assigned to someone else, and names them. Otherwise adds the label, assigns the issue, makes the worktree and branch, and writes `<worktree>/.pipeline/<issue>/spec.md` from the spec comment. |
+| `begin` | Refuses an issue that carries `pipeline:building` when this machine has no ledger for it, unless `force: true` (see The claim). Otherwise adds the label, assigns the issue, makes the worktree and branch, and writes `<worktree>/.pipeline/<issue>/spec.md` from the spec comment. |
 | `plan` | Checks the plan at `<worktree>/.pipeline/<issue>/plan.md` and seeds the ledger's tasks. No commit. |
 | `brief` | As today, with paths into `<worktree>/.pipeline/<issue>/`. |
 | `accept` | Closes the dispatch, records the range and pushes the branch. No record commit. |
 | `gate` | As today. |
 | `ledger`, `status`, `signals` | As today, reading the local ledger. |
-| `close` | Removes the state labels, the worktree (and with it `.pipeline/`), the local branch and the item's entry in `items.json`. Closes the issue when the merge did not. It does not check out or commit on the main branch. |
+| `close` | Removes the state labels, the worktree (and with it `.pipeline/`), the local branch and the item's entry in `items.json`. A worktree the session sits in is kept, recorded in `items.json` and removed by the next `begin` or `clean`. Closes the issue when the merge did not. It does not check out or commit on the main branch. |
 
 The lead opens the PR as today and adds `Closes #<issue>` to its body. The PR body keeps the ticked acceptance list, the rulings, what was parked and the token totals.
 
-**The claim.** The lock under `.git` still stops two sessions on one machine from taking the same item. Across machines, the `pipeline:building` label and the assignee are the claim. Two machines that `begin` the same issue within the same second can both succeed; the second one's `begin` re-reads the issue after labelling and, when the assignee is not its own user, releases its worktree and answers a refusal.
+**The claim.** The lock under `.git` still stops two sessions on one machine from taking the same item. Across machines, the `pipeline:building` label is the claim and the local ledger says whose it is: `begin` refuses an issue that carries the label when this machine has no ledger for it, naming the other assignee, or "another machine of yours" when the only assignee is the `gh` user (one user on two machines has one login, which the assignee cannot tell apart). `begin` with `force: true` takes the item over here. Two users that label the same issue within the same second both see the other as a new assignee: the login that sorts first keeps the claim, and the other removes its worktree and its own assignment and touches no label.
 
 **Branch name.** The `branch` key keeps its default `feat/<id>`, which gives `feat/12`.
 
