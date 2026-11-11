@@ -247,6 +247,8 @@ const self = {
   me: '',
   readiness: {} as Record<string, Readiness>,
   queue: null as Queue | null,
+  // When gh last failed in loadQueue and with what: for a minute after, loads answer from the cache without calling gh.
+  ghDown: null as null | { at: number; error: string },
   ghPending: null as number | null,
   toolDepth: 0,
 }
@@ -333,7 +335,7 @@ const labelOf = (c: Config | null): string => normalizeConfig(c ?? DEFAULTS).con
 /** The tracker's `run`: the argv through `$.process.run` in the main checkout; a thrown error (no gh) answers null. */
 const ghRun = ($: EngineInterface, found: string): Run => async argv => {
   try {
-    const r = await $.process.run(argv, { cwd: found, timeoutMs: 60_000 })
+    const r = await $.process.run(argv, { cwd: found, timeoutMs: 30_000 })
     return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr }
   } catch {
     return null
@@ -395,15 +397,19 @@ async function loadQueue($: EngineInterface, found: string, c: Config | null): P
     me = cache.me || self.me
   } else {
     const run = ghRun($, found)
-    const who: tracker.Result<string> = self.me ? { ok: true, value: self.me } : await tracker.me(run)
+    // A minute after gh failed, it is not asked again: the redraws and the tick would each wait on it.
+    const down = self.ghDown && at >= self.ghDown.at && at - self.ghDown.at < CACHE_MS ? self.ghDown : null
+    const who: tracker.Result<string> = down ? { ok: false, error: down.error } : self.me ? { ok: true, value: self.me } : await tracker.me(run)
     const listed = who.ok ? await tracker.list(run, label) : who
     if (!who.ok || !listed.ok) {
       const error = !who.ok ? who.error : !listed.ok ? listed.error : ''
+      if (!down) self.ghDown = { at, error }
       if (!cache) return { issues: [], extras, me: self.me, stale: null, error, lost: [] }
       issues = cache.issues
       me = cache.me || self.me
       stale = `issues read ${Math.max(0, Math.floor((at - cache.at) / 60_000))} min ago`
     } else {
+      self.ghDown = null
       me = who.value
       issues = [...listed.value]
       for (const id of Object.keys(extras.items)) {
@@ -465,7 +471,8 @@ async function loadIssueBacklog($: EngineInterface, found: string, c: Config | n
       return { value: null, error: q.error }
     }
     const label = labelOf(c)
-    const mapped = toBacklog(q.issues, q.extras, label, q.me)
+    // The updates still pending show as done: the cache keeps what GitHub said, the backlog what the tool left.
+    const mapped = toBacklog(applyOps(q.issues, q.extras.pending, label, q.me), q.extras, label, q.me)
     self.readiness = mapped.readiness
     const needsInfo = labelsOf(label).needsInfo
     // Once per answer: an op already pending is not queued again by every redraw.
@@ -497,7 +504,7 @@ async function writeIssueBacklog($: EngineInterface, found: string, c: Config | 
   const kept = extrasOf(next, await extrasOrRefuse($, found))
   await writeExtras($, found, kept)
   const after = ((await readCache($, found))?.issues ?? issues).filter(i => i.labels.includes(label) || kept.items[String(i.number)] !== undefined)
-  self.readiness = toBacklog(after, kept, label, q.me).readiness
+  self.readiness = toBacklog(applyOps(after, kept.pending, label, q.me), kept, label, q.me).readiness
   await update($, backlog, () => next)
   await update($, fileError, () => null)
   return { backlog: next, readiness: self.readiness }

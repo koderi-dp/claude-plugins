@@ -347,3 +347,35 @@ test('/pipeline run 12 and /pipeline run #12 reach the tool with id 12', async (
   }
   expect((await run('move 12 top')).text).toBe('refused: move does not apply with queue: github: the issues are the queue')
 })
+
+test('gh failing with an old cache is asked once a minute, not on every load', async ($, on) => {
+  const { clock } = world(on, { [CONFIG]: CONFIG_GH })
+  const gh: GhState = { me: 'me', issues: [issueOf(1, 'Login')] }
+  const runs = ghWorld(on, gh)
+  await call($, { action: 'get' })
+  gh.fail = true
+  await clock.advance(2 * MIN)
+  const ghCalls = () => runs.filter(r => r[0] === 'gh').length
+  const before = ghCalls()
+  for (let i = 0; i < 3; i++) expect((await json($, { action: 'get' }))['stale']).toBe('issues read 2 min ago')
+  expect(ghCalls() - before).toBe(1)
+  await clock.advance(MIN + 1000)
+  expect((await json($, { action: 'get' }))['stale']).toBe('issues read 3 min ago')
+  expect(ghCalls() - before).toBe(2)
+})
+
+test('a pending GitHub update shows in the backlog until it is retried, and after', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const gh: GhState = { me: 'me', issues: [issueOf(1, 'Login'), issueOf(2, 'Export')] }
+  const runs = ghWorld(on, gh)
+  await call($, { action: 'get' })
+  gh.fail = true
+  expect(text(await call($, { action: 'update', id: '1', set: { status: 'blocked' } }))).toMatch(/ · 1 GitHub update pending$/)
+  expect((await json($, { action: 'get', id: '1' }))['item']).toMatchObject({ status: 'blocked' })
+  gh.fail = false
+  const before = runs.length
+  await call($, { action: 'update', id: '2', set: { note: 'later' } })
+  expect(has(runs.slice(before), ['gh', 'issue', 'edit', '1', '--add-label', 'pipeline:blocked'])).toBe(true)
+  expect(JSON.parse(files.get(ITEMS)!).pending).toEqual([])
+  expect((await json($, { action: 'get', id: '1' }))['item']).toMatchObject({ status: 'blocked' })
+})
