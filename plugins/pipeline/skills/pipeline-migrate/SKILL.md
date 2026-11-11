@@ -20,7 +20,7 @@ One command, run once, in the main checkout on a clean `mainBranch`. The tool do
 
 ## From a file backlog to issues
 
-When the project already has `docs/pipeline/backlog.json` and the user asks for GitHub issues as the queue, the steps above do not apply; these do. Run it in the main checkout on a clean `mainBranch`, with `gh` logged in.
+On `/pipeline migrate github`, and when the project already has `docs/pipeline/backlog.json` and the user asks for GitHub issues as the queue, the steps above do not apply; these do. Run it in the main checkout on a clean `mainBranch`, with `gh` logged in.
 
 1. **Draft.** `{ "action": "migrate-github" }` answers `{ create, active, skipped, remove }` and writes nothing: `create` is every item that becomes an issue, in backlog order, with its spec file when it has one; `active` names the items in flight: those in `planning`, `building` or `review`, which will carry the `pipeline:building` label, and the `blocked` ones, which will carry `pipeline:blocked`; `questions` names the `inbox` items whose spec still has an open question, which will be asked on the issue; `skipped` counts the merged items, which get no issue because their PRs are the record, and lists the parked ones, which the user files by hand when wanted; `remove` is the files the project no longer needs.
 2. **Show and ask once.** In one message: the items that become issues, the ones in flight, the parked ones and the files to remove. Then one sentence asking for corrections and whether to proceed. A correction to an item (a title, a status) is made with `update` on the file backlog before the apply; nothing else is changed by hand.

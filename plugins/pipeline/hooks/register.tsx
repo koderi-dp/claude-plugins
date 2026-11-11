@@ -37,7 +37,7 @@ const TOOL = 'mcp__pipeline__pipeline'
 const PANE = 'pipeline'
 const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
 const USAGE =
-  'pipeline: status [id] | panel | config [key=value] | init | add <text> | next | run <id> | run all | migrate | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
+  'pipeline: status [id] | panel | config [key=value] | init | add <text> | next | run <id> | run all | migrate | migrate github | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
 const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers', 'pushMain', 'queue', 'queueLabel']
 const CONFIG_FILE = 'docs/pipeline/config.json'
 const BACKLOG_FILE = 'docs/pipeline/backlog.json'
@@ -203,6 +203,8 @@ const SESSION_RUN_PROMPT = (target: string) => {
 }
 
 const MIGRATE_PROMPT = `Use the pipeline-migrate skill. First tool call: ${call({ action: 'migrate' })}, which reads the project's queue, workflow prose and ledgers and drafts the config, the rules and the items without writing. Then finish the mapping, ask once, and apply as the skill says.`
+
+const MIGRATE_GITHUB_PROMPT = `Use the pipeline-migrate skill, its section "From a file backlog to issues". First tool call: ${call({ action: 'migrate-github' })}, which drafts the move of docs/pipeline/backlog.json onto GitHub issues without writing. Show the draft, ask once, then apply as that section says.`
 
 const INIT_PROMPT =
   `Set the pipeline up in this project with the pipeline-init skill: read it and follow its steps. If the project already has a queue, a workflow document or a ledger, it hands over to the pipeline-migrate skill, whose first tool call is ${call({ action: 'migrate' })}; otherwise its first tool call is ${call({ action: 'init' })}.`
@@ -3008,6 +3010,8 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
     case 'init':
       return prompt('pipeline: setting up…', INIT_PROMPT)
     case 'migrate':
+      // `migrate github`: a project already on a file backlog moves onto issues; the plain form is for a project with no pipeline yet.
+      if (/^(github|issues)$/i.test(arg.trim())) return prompt('pipeline: moving the backlog onto GitHub issues…', MIGRATE_GITHUB_PROMPT)
       return prompt('pipeline: migrating…', MIGRATE_PROMPT)
     case 'add':
       if (!arg) return { text: 'pipeline: add needs the request, as /pipeline add <text>' }
