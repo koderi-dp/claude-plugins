@@ -81,6 +81,9 @@ test('isAnswered: a reply by the author or me after the last question, not by a 
   expect(isAnswered(issue(1, { comments: [q, c('me', 'CSV, said on chat')] }), 'me')).toBe(true)
   expect(isAnswered(issue(1, { comments: [q, c('me', renderSpecComment(SPEC, 'ready', ''))] }), 'me')).toBe(false)
   expect(isAnswered(issue(1, { comments: [q, c('ann', 'CSV'), c('me', `${QUESTION_MARK}\nAnd?`)] }), 'me')).toBe(false)
+  expect(isAnswered(issue(1, { comments: [q, c('ann', 'CSV'), c('eve', `${QUESTION_MARK}\nStill open?`, 'NONE')] }), 'me')).toBe(true)
+  expect(isAnswered(issue(1, { comments: [c('eve', `${QUESTION_MARK}\nWhich?`, 'NONE'), c('ann', 'CSV')] }), 'me')).toBe(false)
+  expect(isAnswered(issue(1, { comments: [c('bob', `${QUESTION_MARK}\nWhich?`, 'COLLABORATOR'), c('ann', 'CSV')] }), 'me')).toBe(true)
 })
 
 test('statuses from labels, the spec comment and the extras', () => {

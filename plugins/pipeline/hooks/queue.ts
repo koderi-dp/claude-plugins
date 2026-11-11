@@ -94,10 +94,10 @@ export function parseSpecComment(body: string): { state: string; detail: string;
   return { state, detail, specMd }
 }
 
-/** There is a question comment, and after the last one the issue's author or the gh user wrote a comment without a marker. */
+/** There is a trusted question comment, and after the last one the issue's author or the gh user wrote a comment without a marker. */
 export function isAnswered(issue: Issue, me: string): boolean {
   let last = -1
-  issue.comments.forEach((c, i) => { if (c.body.trimStart().startsWith(QUESTION_MARK)) last = i })
+  issue.comments.forEach((c, i) => { if (c.body.trimStart().startsWith(QUESTION_MARK) && isTrusted(c, me)) last = i })
   if (last < 0) return false
   return issue.comments.slice(last + 1).some(c => (c.author === issue.author || c.author === me) && !marked(c.body))
 }
