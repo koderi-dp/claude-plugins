@@ -7,7 +7,12 @@ import type { Readiness } from './backlog'
 import { compactSignal, itemState, ledgerLine, slimGet } from './answers'
 import { cleanList, planOf } from './clean'
 import { DEFAULTS, draftConfig, normalizeConfig } from './config'
-import { hashRoot, livePath, parseJson, paths, serialize } from './files'
+import { hashRoot, livePath, parseJson, paths, places, serialize } from './files'
+import * as tracker from './tracker'
+import { QUESTION_MARK } from './tracker'
+import type { Issue, Run } from './tracker'
+import { EMPTY_EXTRAS, applyOps, extrasOf, labelsOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import type { Extras, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
 import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
 import { PLAN_FORMAT } from './templates'
@@ -59,12 +64,13 @@ const TOOL_DESCRIPTION =
   '`close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is (also from inside the item\'s worktree): the main checkout on mainBranch and pulled, the item merged, what config.retain lets go removed, docs/pipeline committed on mainBranch and pushed unless config.pushMain is false, the worktree and local branch removed (a worktree this session is inside is left and removed by a later begin or close). ' +
   '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate? }, blockers?: [text], pr?, branch?, worktree?, base?, <any other key>?: value | null } } merges anything else into the ledger: text for resume is taken as its state, a wrong shape is refused and nothing is written, and null removes one of the other keys. ' +
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain says may go and deletes nothing. ' +
-  'A file that does not parse is refused with its line and left alone.'
+  'A file that does not parse is refused with its line and left alone. ' +
+  'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12): `add` opens an issue, `spec` { id, text } posts or replaces the issue\'s spec comment, `question` { id, text } asks on the issue and holds the item, `init` { queue: "github" } sets it up; `move` and `remove` are refused.'
 
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
@@ -100,6 +106,8 @@ const TOOL_SCHEMA = {
     attribution: { type: 'string', description: 'For plan or brief: the attribution lines this session was given; kept in the ledger, so once per item is enough.' },
     escalate: { type: 'boolean', description: 'For an implementer or fix brief: dispatch at config.models.escalate.' },
     rules: { type: 'array', description: 'For migrate-apply: the corrected rules, each { group, line, source }.', items: { type: 'object' } },
+    text: { type: 'string', description: 'For spec: the spec, with the template\'s headings. For question: the question to ask on the issue.' },
+    queue: { type: 'string', enum: ['file', 'github'], description: 'For init: github sets the project up with the issues as the queue.' },
   },
   required: ['action'],
 }
@@ -234,6 +242,13 @@ const self = {
   pendingRename: '',
   // The running child processes by item: the stream whose end kills the child, the unread tail of a line, the log throttle.
   procs: new Map<string, { stream: AsyncGenerator<{ stream: string; text: string }, { code: number | null; signal: string | null }> | null; partial: string; lastWrite: number }>(),
+  // queue: github. The gh user, asked once per session; the readiness and the queue of the last load; the GitHub
+  // updates the last write left pending (null when none ran); how deep this session is inside tool calls.
+  me: '',
+  readiness: {} as Record<string, Readiness>,
+  queue: null as Queue | null,
+  ghPending: null as number | null,
+  toolDepth: 0,
 }
 
 /** The web URL of the repository's origin, for PR numbers the old queue names; nothing without a remote. */
@@ -283,8 +298,10 @@ async function loadConfig($: EngineInterface, found: string): Promise<Loaded<Con
   return loaded
 }
 
-/** Reads the backlog file into its atom. */
+/** Reads the backlog file into its atom; with queue: github, the issues through their cache. Never throws in that mode. */
 async function loadBacklog($: EngineInterface, found: string): Promise<Loaded<Backlog>> {
+  const c = await read($, config)
+  if (isGithub(c)) return loadIssueBacklog($, found, c)
   const loaded = await loadJson<Backlog>($, paths(found).backlog, BACKLOG_FILE)
   await update($, backlog, () => loaded.value)
   return loaded
@@ -297,6 +314,296 @@ async function loadAll($: EngineInterface, found: string): Promise<{ config: Con
   const error = c.error ?? b.error
   await update($, fileError, () => error)
   return { config: c.value, backlog: b.value, error }
+}
+
+// ---------- queue: github ----------
+
+const ISSUES_FILE = '.git/pipeline/issues.json'
+const ITEMS_FILE = '.git/pipeline/items.json'
+const CACHE_MS = 60_000
+
+/** What the issues answered: the issues the backlog maps (labelled, or with an entry in items.json), the extras, the gh user, how old the cache is when gh failed, the tracker's error when nothing could be read, and the in-flight ids that lost the queue label. */
+type Queue = { issues: Issue[]; extras: Extras; me: string; stale: string | null; error: string | null; lost: string[] }
+type IssueCache = { at: number; me: string; issues: Issue[] }
+
+/** Whether the config says the issues are the queue. */
+const isGithub = (c: Config | null): boolean => normalizeConfig(c ?? DEFAULTS).config.queue === 'github'
+const labelOf = (c: Config | null): string => normalizeConfig(c ?? DEFAULTS).config.queueLabel
+
+/** The tracker's `run`: the argv through `$.process.run` in the main checkout; a thrown error (no gh) answers null. */
+const ghRun = ($: EngineInterface, found: string): Run => async argv => {
+  try {
+    const r = await $.process.run(argv, { cwd: found, timeoutMs: 60_000 })
+    return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr }
+  } catch {
+    return null
+  }
+}
+
+/** The issue cache, or null when it is missing or not the tool's shape. */
+async function readCache($: EngineInterface, found: string): Promise<IssueCache | null> {
+  try {
+    const loaded = await loadJson<IssueCache>($, places(found, 'github').issues, ISSUES_FILE)
+    const v = loaded.value
+    return v && typeof v.at === 'number' && typeof v.me === 'string' && Array.isArray(v.issues) ? v : null
+  } catch {
+    return null
+  }
+}
+
+/** Changes the cached issues; without a cache, starts one that the next load lists again. */
+async function editCache($: EngineInterface, found: string, change: (issues: Issue[]) => Issue[]): Promise<void> {
+  const cache = await readCache($, found)
+  await $.fs.write(places(found, 'github').issues, serialize({ at: cache?.at ?? 0, me: cache?.me ?? self.me, issues: change(cache?.issues ?? []) }))
+}
+
+/** items.json: missing reads as no extras; a file that does not parse gives its error and is never overwritten. */
+async function readExtras($: EngineInterface, found: string): Promise<Loaded<Extras>> {
+  const loaded = await loadJson<Partial<Extras>>($, places(found, 'github').items, ITEMS_FILE)
+  if (loaded.error) return { value: null, error: loaded.error }
+  const v = loaded.value
+  const items = v && v.items && typeof v.items === 'object' && !Array.isArray(v.items) ? v.items : {}
+  const pending = v && Array.isArray(v.pending) ? v.pending : []
+  return { value: v ? { items, pending } : { ...EMPTY_EXTRAS, items: {}, pending: [] }, error: null }
+}
+
+async function extrasOrRefuse($: EngineInterface, found: string): Promise<Extras> {
+  const ex = await readExtras($, found)
+  if (ex.error || !ex.value) throw new Refused(ex.error ?? `${ITEMS_FILE} could not be read`)
+  return ex.value
+}
+
+const writeExtras = ($: EngineInterface, found: string, extras: Extras) => $.fs.write(places(found, 'github').items, serialize(extras))
+
+/**
+ * The issues of the queue: the cache when it is younger than a minute; else the gh user (once per session) and the
+ * labelled open issues, plus each issue items.json names that the list does not show, written back to the cache.
+ * When gh fails the cache answers with its age, and without one the tracker's error is the answer.
+ */
+async function loadQueue($: EngineInterface, found: string, c: Config | null): Promise<Queue> {
+  const label = labelOf(c)
+  const ex = await readExtras($, found)
+  if (ex.error || !ex.value) return { issues: [], extras: EMPTY_EXTRAS, me: self.me, stale: null, error: ex.error, lost: [] }
+  const extras = ex.value
+  const at = await $.clock.now()
+  const cache = await readCache($, found)
+  let issues: Issue[]
+  let me: string
+  let stale: string | null = null
+  if (cache && at >= cache.at && at - cache.at < CACHE_MS) {
+    issues = cache.issues
+    me = cache.me || self.me
+  } else {
+    const run = ghRun($, found)
+    const who: tracker.Result<string> = self.me ? { ok: true, value: self.me } : await tracker.me(run)
+    const listed = who.ok ? await tracker.list(run, label) : who
+    if (!who.ok || !listed.ok) {
+      const error = !who.ok ? who.error : !listed.ok ? listed.error : ''
+      if (!cache) return { issues: [], extras, me: self.me, stale: null, error, lost: [] }
+      issues = cache.issues
+      me = cache.me || self.me
+      stale = `issues read ${Math.max(0, Math.floor((at - cache.at) / 60_000))} min ago`
+    } else {
+      me = who.value
+      issues = [...listed.value]
+      for (const id of Object.keys(extras.items)) {
+        if (!/^\d+$/.test(id) || issues.some(i => String(i.number) === id)) continue
+        const one = await tracker.read(run, Number(id))
+        const known = one.ok ? one.value : cache?.issues.find(i => String(i.number) === id)
+        if (known) issues.push(known)
+      }
+      await $.fs.write(places(found, 'github').issues, serialize({ at, me, issues }))
+    }
+  }
+  self.me = me
+  const shown = issues.filter(i => i.labels.includes(label) || extras.items[String(i.number)] !== undefined)
+  const lost = shown.filter(i => i.state === 'open' && !i.labels.includes(label)).map(i => String(i.number))
+  return { issues: shown, extras, me, stale, error: null, lost }
+}
+
+/**
+ * Runs the tracker operations; the ones that succeed go into the cache, the ones that fail are appended to the
+ * pending list in items.json. Answers how many are pending.
+ */
+async function pushOps($: EngineInterface, found: string, c: Config | null, ops: Op[]): Promise<number> {
+  const extras = await extrasOrRefuse($, found)
+  const run = ghRun($, found)
+  const cache = await readCache($, found)
+  const me = cache?.me || self.me
+  const done: Op[] = []
+  const failed: Op[] = []
+  for (const op of ops) {
+    let r: tracker.Result<true>
+    if (op.kind === 'edit') {
+      r = await tracker.edit(run, Number(op.id), { add: op.add, remove: op.remove, ...(op.assign ? { assign: op.assign } : {}) })
+    } else if (op.kind === 'status') {
+      const issue = cache?.issues.find(i => String(i.number) === op.id)
+      const spec = issue ? specCommentOf(issue, me) : null
+      // No spec comment to rewrite: there is nothing to say the status on.
+      if (!spec || !spec.id) continue
+      r = await tracker.editComment(run, spec.id, renderSpecComment(parseSpecComment(spec.body).specMd, op.state, op.detail))
+    } else {
+      r = await tracker.close(run, Number(op.id))
+    }
+    ;(r.ok ? done : failed).push(op)
+  }
+  if (cache && done.length) await $.fs.write(places(found, 'github').issues, serialize({ ...cache, issues: applyOps(cache.issues, done, labelOf(c), me) }))
+  const pending = [...extras.pending, ...failed]
+  await writeExtras($, found, { ...extras, pending })
+  self.ghPending = pending.length
+  return pending.length
+}
+
+/** The backlog the issues make, kept with its readiness; an answered question's label is taken off. */
+async function loadIssueBacklog($: EngineInterface, found: string, c: Config | null): Promise<Loaded<Backlog>> {
+  try {
+    const q = await loadQueue($, found, c)
+    self.queue = q
+    if (q.error) {
+      self.readiness = {}
+      await update($, backlog, () => null)
+      return { value: null, error: q.error }
+    }
+    const label = labelOf(c)
+    const mapped = toBacklog(q.issues, q.extras, label, q.me)
+    self.readiness = mapped.readiness
+    const needsInfo = labelsOf(label).needsInfo
+    // Once per answer: an op already pending is not queued again by every redraw.
+    const ops: Op[] = mapped.answered
+      .filter(id => !q.extras.pending.some(o => o.kind === 'edit' && o.id === id && o.remove.includes(needsInfo)))
+      .map(id => ({ kind: 'edit', id, add: [], remove: [needsInfo] }))
+    if (ops.length) await pushOps($, found, c, ops)
+    await update($, backlog, () => mapped.backlog)
+    return { value: mapped.backlog, error: null }
+  } catch (err) {
+    self.readiness = {}
+    await update($, backlog, () => null)
+    return { value: null, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Retries what is pending, turns the change from the loaded backlog to `next` into tracker operations, keeps the extras. */
+async function writeIssueBacklog($: EngineInterface, found: string, c: Config | null, next: Backlog): Promise<{ backlog: Backlog; readiness: Record<string, Readiness> }> {
+  const label = labelOf(c)
+  const q = await loadQueue($, found, c)
+  if (q.error) throw new Refused(q.error)
+  const before = (await read($, backlog)) ?? toBacklog(q.issues, q.extras, label, q.me).backlog
+  if (q.extras.pending.length) {
+    await writeExtras($, found, { ...q.extras, pending: [] })
+    await pushOps($, found, c, q.extras.pending)
+  }
+  const issues = (await readCache($, found))?.issues ?? q.issues
+  await pushOps($, found, c, opsFor(before, next, issues, label, q.me))
+  const kept = extrasOf(next, await extrasOrRefuse($, found))
+  await writeExtras($, found, kept)
+  const after = ((await readCache($, found))?.issues ?? issues).filter(i => i.labels.includes(label) || kept.items[String(i.number)] !== undefined)
+  self.readiness = toBacklog(after, kept, label, q.me).readiness
+  await update($, backlog, () => next)
+  await update($, fileError, () => null)
+  return { backlog: next, readiness: self.readiness }
+}
+
+/** An item's one-line state after a GitHub action changed its issue: the backlog loaded again from the cache. */
+async function issueState($: EngineInterface, found: string, id: string, fallback: string): Promise<string> {
+  const b = (await loadBacklog($, found)).value
+  const item = b?.items.find(i => i.id === id)
+  return item ? itemState(item, self.readiness) : fallback
+}
+
+/** `add`: a labelled issue; the cache takes it. */
+async function addIssue($: EngineInterface, found: string, c: Config | null, e: ToolInput): Promise<string> {
+  const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
+  if (!title) throw new Refused('add needs item.title')
+  const body = typeof e.item === 'string' ? '' : (e.item?.note ?? '')
+  const r = await tracker.create(ghRun($, found), { title, body, labels: [labelOf(c)] })
+  if (!r.ok) throw new Refused(r.error)
+  const n = r.value
+  const at = await nowIso($)
+  await editCache($, found, issues => [...issues.filter(i => i.number !== n), { number: n, title, body, author: self.me, labels: [labelOf(c)], assignees: [], state: 'open', url: '', createdAt: at, comments: [] }])
+  return `added ${n} · ${await issueState($, found, String(n), 'inbox · no spec')}`
+}
+
+/** `spec`: edits the spec comment (its state and detail kept) or posts one as ready; rewrites the worktree's spec.md. */
+async function specIssue($: EngineInterface, found: string, id: string, e: ToolInput): Promise<string> {
+  const body = typeof e.text === 'string' ? e.text : ''
+  if (!body.trim()) throw new Refused('spec needs text')
+  const run = ghRun($, found)
+  const me = self.me
+  const issue = (await readCache($, found))?.issues.find(i => String(i.number) === id) ?? self.queue?.issues.find(i => String(i.number) === id)
+  const old = issue ? specCommentOf(issue, me) : null
+  const at = await nowIso($)
+  if (old) {
+    const was = parseSpecComment(old.body)
+    const rendered = renderSpecComment(body, was.state || 'ready', was.detail)
+    const r = await tracker.editComment(run, old.id, rendered)
+    if (!r.ok) throw new Refused(r.error)
+    await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: i.comments.map(cm => (cm.id === old.id ? { ...cm, body: rendered } : cm)) } : i)))
+  } else {
+    const rendered = renderSpecComment(body, 'ready', '')
+    const r = await tracker.comment(run, Number(id), rendered)
+    if (!r.ok) throw new Refused(r.error)
+    await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: [...i.comments, { id: r.value, author: me, association: '', body: rendered, at }] } : i)))
+  }
+  const P = places(found, 'github')
+  const ledger = (await loadJson<Ledger>($, P.ledger(id), `.git/pipeline/${id}/ledger.json`)).value
+  if (ledger && typeof ledger.worktree === 'string' && ledger.worktree) await $.fs.write(`${worktreePath(found, ledger)}/${P.specRel(id)}`, body)
+  return `${id} · ${await issueState($, found, id, 'ready')} · spec posted`
+}
+
+/** `question`: a marked comment on the issue and the needs-info label. */
+async function questionIssue($: EngineInterface, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
+  const question = typeof e.text === 'string' ? e.text.trim() : ''
+  if (!question) throw new Refused('question needs text')
+  const posted = `${QUESTION_MARK}\n${question}`
+  const r = await tracker.comment(ghRun($, found), Number(id), posted)
+  if (!r.ok) throw new Refused(r.error)
+  const at = await nowIso($)
+  await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: [...i.comments, { id: r.value, author: self.me, association: '', body: posted, at }] } : i)))
+  await pushOps($, found, c, [{ kind: 'edit', id, add: [labelsOf(labelOf(c)).needsInfo], remove: [] }])
+  return `${id} · ${await issueState($, found, id, 'inbox · open question on the issue')}`
+}
+
+/** `unpark`: the issue is not in the list; read it, refuse a closed one, put the queue label back. */
+async function unparkIssue($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string | undefined): Promise<string> {
+  if (!id) throw new Refused('an id is needed')
+  const there = current.items.find(i => i.id === id)
+  if (there) throw new Refused(`${id} is ${there.status}, not parked`)
+  if (!/^\d+$/.test(id)) throw new Refused(`no item ${id}`)
+  const r = await tracker.read(ghRun($, found), Number(id))
+  if (!r.ok) throw new Refused(r.error)
+  if (r.value.state === 'closed') throw new Refused(`${id} is closed`)
+  await editCache($, found, issues => [...issues.filter(i => i.number !== r.value.number), r.value])
+  await pushOps($, found, c, [{ kind: 'edit', id, add: [labelOf(c)], remove: [] }])
+  return `${id} · ${await issueState($, found, id, 'inbox')}`
+}
+
+/** `init` with queue: github: gh must answer for this repository; the config, the labels and the exclude line, no backlog. */
+async function initGithub($: EngineInterface, found: string, c: Config | null, error: string | null): Promise<string> {
+  const p = paths(found)
+  const hasConfig = await $.fs.exists(p.config)
+  if (hasConfig && error) throw new Refused(error)
+  if (hasConfig && !isGithub(c)) throw new Refused(`${CONFIG_FILE} exists with queue: file; set it with /pipeline config queue=github`)
+  const next = hasConfig ? normalizeConfig(c).config : { ...structuredClone(DEFAULTS), queue: 'github' as const }
+  const run = ghRun($, found)
+  const who = self.me ? ({ ok: true, value: self.me } as const) : await tracker.me(run)
+  if (!who.ok) throw new Refused(who.error)
+  self.me = who.value
+  const listed = await tracker.list(run, next.queueLabel)
+  if (!listed.ok) throw new Refused(listed.error)
+  if (!hasConfig) {
+    await $.fs.write(p.config, serialize(next))
+    await update($, config, () => structuredClone(next))
+  }
+  const L = labelsOf(next.queueLabel)
+  const names = [L.queue, L.building, L.blocked, L.needsInfo]
+  const labelled = await tracker.ensureLabels(run, names)
+  if (!labelled.ok) throw new Refused(labelled.error)
+  const exclude = places(found, 'github').exclude
+  const had = (await readText($, exclude)) ?? ''
+  if (!had.split('\n').some(l => l.trim() === '.pipeline/')) await $.fs.write(exclude, `${had}${had && !had.endsWith('\n') ? '\n' : ''}.pipeline/\n`)
+  await update($, fileError, () => null)
+  const head = hasConfig ? `exists: ${CONFIG_FILE}` : `wrote ${CONFIG_FILE}`
+  return `${head} · labels ${names.join(', ')}${hasConfig ? '' : ` · commit ${CONFIG_FILE} on ${next.mainBranch}`}`
 }
 
 // ---------- readiness from the files ----------
@@ -313,6 +620,7 @@ export function hasOpenQuestion(spec: string): boolean {
 
 /** The readiness of every inbox or ready item, with the spec looked up on disk. */
 async function judgeAll($: EngineInterface, found: string, b: Backlog): Promise<Record<string, Readiness>> {
+  if (isGithub(await read($, config))) return self.readiness
   const p = paths(found)
   const exists = new Map<string, boolean>()
   const open = new Map<string, boolean>()
@@ -376,6 +684,8 @@ type ToolInput = {
   fact?: string
   pr?: string
   force?: boolean
+  text?: string
+  queue?: string
 }
 
 class Refused extends Error {}
@@ -531,6 +841,8 @@ async function checkMerged($: EngineInterface, found: string, c: Config | null, 
 
 /** Writes the backlog and its generated view, refreshes the atom and answers what was written, settled, with its readiness. */
 async function writeBacklog($: EngineInterface, found: string, next: Backlog): Promise<{ backlog: Backlog; readiness: Record<string, Readiness> }> {
+  const c = await read($, config)
+  if (isGithub(c)) return writeIssueBacklog($, found, c, next)
   const p = paths(found)
   // Settling moves items between inbox and ready only, so the judgement holds for the settled backlog too.
   const judged = await judgeAll($, found, next)
@@ -556,7 +868,7 @@ async function markDelivered($: EngineInterface): Promise<void> {
 }
 
 /** The actions that change the backlog or a ledger: each runs alone across every session on the repository. */
-const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'start', 'stop', 'init', 'migrate-apply'])
+const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'start', 'stop', 'init', 'migrate-apply', 'spec', 'question'])
 const LOCK_WAIT_MS = 250
 const LOCK_TRIES = 120
 
@@ -605,18 +917,39 @@ async function withLock<T>($: EngineInterface, found: string, work: () => Promis
 }
 
 async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
-  if (LOCKED_ACTIONS.has(e.action) && self.lockDepth === 0) {
-    const root = await resolveRoot($)
-    return withLock($, root, () => runToolNow($, e))
+  const isOuter = self.toolDepth === 0
+  if (isOuter) self.ghPending = null
+  self.toolDepth++
+  try {
+    let answer: string
+    if (LOCKED_ACTIONS.has(e.action) && self.lockDepth === 0) {
+      const root = await resolveRoot($)
+      answer = await withLock($, root, () => runToolNow($, e))
+    } else {
+      answer = await runToolNow($, e)
+    }
+    return isOuter && LOCKED_ACTIONS.has(e.action) ? withPending(answer, self.ghPending) : answer
+  } finally {
+    self.toolDepth--
   }
-  return runToolNow($, e)
 }
+
+/** A writing action's answer with the GitHub updates still pending at the end of its first line. */
+function withPending(answer: string, pending: number | null): string {
+  if (!pending) return answer
+  const [first = '', ...rest] = answer.split('\n')
+  return [`${first} · ${pending} GitHub update${pending === 1 ? '' : 's'} pending`, ...rest].join('\n')
+}
+
+/** The refusal of an action the issues make meaningless. */
+const notWithIssues = (action: string) => `${action} does not apply with queue: github: the issues are the queue`
 
 async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
   const found = await resolveRoot($)
   const { config: c, backlog: loaded, error } = await loadAll($, found)
   const p = paths(found)
 
+  if (e.action === 'init' && (e.queue === 'github' || isGithub(c))) return initGithub($, found, c, error)
   if (e.action === 'init') {
     const hasConfig = await $.fs.exists(p.config)
     const hasBacklog = await $.fs.exists(p.backlog)
@@ -659,6 +992,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
     if (e.full) {
       const out: Record<string, unknown> = { config: c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings), mergedPending: merged }
       if (error) out['error'] = error
+      if (isGithub(c)) Object.assign(out, githubGet(c, e.id))
       answer = JSON.stringify(out, null, 2)
     } else {
       const out: Record<string, unknown> = slimGet({ config: c ? normalizeConfig(c).config : null, backlog: loaded, readiness: r, active, ledger, signals: open, children: kids, siblings: await read($, siblings) })
@@ -669,6 +1003,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       if (e.titles) out['titles'] = (loaded?.items ?? []).map(i => `${i.id} ${i.status} ${i.title}`)
       if (merged.length) out['mergedPending'] = merged
       if (error) out['error'] = error
+      if (isGithub(c)) Object.assign(out, githubGet(c, e.id))
       answer = JSON.stringify(out)
     }
     // Each signal is delivered once: what this answer carries is marked.
@@ -678,6 +1013,11 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
   if (e.action === 'signals') {
     const open = (await read($, signals)).filter(s => !s.delivered)
     const merged = await checkMerged($, found, c, loaded)
+    const lost = isGithub(c) ? lostLines(c) : []
+    if (lost.length) {
+      if (open.length) await markDelivered($)
+      return JSON.stringify({ signals: open.map(compactSignal), lost, ...(merged.length ? { mergedPending: merged } : {}) })
+    }
     if (!open.length && !merged.length) return 'no signals'
     const answer = merged.length ? JSON.stringify({ signals: open.map(compactSignal), mergedPending: merged }) : JSON.stringify(open.map(compactSignal))
     if (open.length) await markDelivered($)
@@ -761,6 +1101,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
     case 'brief':
       return briefAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'add': {
+      if (isGithub(c)) return addIssue($, found, c, e)
       const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
       if (!title) throw new Refused('add needs item.title')
       const next = addItem(current, { ...(e.item as Partial<Item>), title }, now)
@@ -779,6 +1120,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       return out
     }
     case 'move': {
+      if (isGithub(c)) throw new Refused(notWithIssues('move'))
       const id = need(e.id)
       const to = e.to
       if (to !== 'top' && !(to && typeof to === 'object' && typeof to.after === 'string')) throw new Refused('move needs to: "top" or { after: "<id>" }')
@@ -790,6 +1132,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
     case 'stop':
       return stopChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
     case 'remove': {
+      if (isGithub(c)) throw new Refused(notWithIssues('remove'))
       const id = need(e.id)
       const left = (await writeBacklog($, found, removeItem(current, id))).backlog.items.length
       return `removed ${id} · ${left} item${left === 1 ? '' : 's'} left`
@@ -799,13 +1142,35 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       return writeLine($, found, updateItem(current, id, { status: 'parked' }, now), id, state => `${id} · ${state}`)
     }
     case 'unpark': {
+      if (isGithub(c)) return unparkIssue($, found, c, current, e.id)
       const id = need(e.id)
       return writeLine($, found, updateItem(current, id, { status: 'inbox' }, now), id, state => `${id} · ${state}`)
+    }
+    case 'spec':
+    case 'question': {
+      if (!isGithub(c)) throw new Refused(`${e.action} is for queue: github; with queue: file the spec is a file and a question its Open section`)
+      const id = need(e.id)
+      return e.action === 'spec' ? specIssue($, found, id, e) : questionIssue($, found, c, id, e)
     }
     default:
       throw new Refused(`unknown action "${String(e.action)}"`)
   }
 }
+
+/** The keys `get` adds with queue: github: how old the issues are when gh failed, the issues that lost the label, the quoted issue. */
+function githubGet(c: Config | null, id: string | undefined): Record<string, unknown> {
+  const q = self.queue
+  const out: Record<string, unknown> = {}
+  if (q?.stale) out['stale'] = q.stale
+  const lost = lostLines(c)
+  if (lost.length) out['lost'] = lost
+  const issue = id !== undefined ? q?.issues.find(i => String(i.number) === id) : undefined
+  if (issue) out['quoted'] = quoted(issue, q!.me)
+  return out
+}
+
+/** `<id> lost the <label> label` for each issue in flight that is open without the queue label. */
+const lostLines = (c: Config | null): string[] => (self.queue?.lost ?? []).map(id => `${id} lost the ${labelOf(c)} label`)
 
 const BRIEF_KINDS: readonly string[] = ['implementer', 'fix', 'review', 'final']
 
@@ -2275,12 +2640,15 @@ export const register: Register = (on, options) => {
 
 type CommandAnswer = { text?: string; context?: readonly string[] }
 
-const ID = /^[a-z][a-z0-9-]*$/i
+const ID = /^(?:[a-z][a-z0-9-]*|#?\d+)$/i
+/** An id as the tool takes it: `#12` is issue 12. */
+const idArg = (id: string) => id.replace(/^#(?=\d+$)/, '')
 
 /** `/pipeline <sub> ...`: text for what the mod answers itself, a prompt for what the model does. */
 async function runCommand($: EngineInterface, args: string): Promise<CommandAnswer> {
   const [sub = '', ...rest] = args.trim().split(/\s+/).filter(Boolean)
-  const arg = rest.join(' ')
+  // An id argument may be written as #12: the subcommands that take an id read it without the #.
+  const arg = ['status', 'run', 'stop', 'log', 'park', 'unpark'].includes(sub) ? idArg(rest.join(' ')) : rest.join(' ')
   // The engine refuses a submit from inside the command's own hook (it would wait on
   // the turn the hook holds), so the submit goes out from a timer once this hook is done.
   const prompt = (text: string, instruction: string): CommandAnswer => {
@@ -2323,7 +2691,8 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
     case 'clean':
       return prompt('pipeline: cleaning…', CLEAN_PROMPT)
     case 'move': {
-      const [id = '', where = '', after = ''] = rest
+      if (await isIssueQueue($)) return { text: `refused: ${notWithIssues('move')}` }
+      const [id = '', where = '', after = ''] = rest.map(idArg)
       const to = where === 'top' ? 'top' : where === 'after' && ID.test(after) ? { after } : null
       if (!ID.test(id) || !to) return { text: 'pipeline: move needs an id and a place, as /pipeline move p12 top or /pipeline move p12 after p9' }
       return prompt(`pipeline: moving ${id}…`, QUEUE_PROMPT({ action: 'move', id, to }))
@@ -2334,6 +2703,16 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
       return prompt(`pipeline: ${sub === 'park' ? 'parking' : 'unparking'} ${arg}…`, QUEUE_PROMPT({ action: sub, id: arg }))
     default:
       return { text: USAGE }
+  }
+}
+
+/** Whether the config on disk says `queue: github`. */
+async function isIssueQueue($: EngineInterface): Promise<boolean> {
+  try {
+    const found = (await read($, root)) || (await resolveRoot($))
+    return isGithub((await loadConfig($, found)).value)
+  } catch {
+    return false
   }
 }
 
