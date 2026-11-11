@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Backlog, Item } from '../types'
 
 import { section } from './plan'
-import { EMPTY_EXTRAS, applyOps, extrasOf, isAnswered, isTrusted, issueBodyOf, labelsOf, migrationOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import { EMPTY_EXTRAS, applyOps, extrasOf, isAnswered, isTrusted, issueBodyOf, labelsOf, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import { QUESTION_MARK, SPEC_MARK } from './tracker'
 import type { Issue, IssueComment } from './tracker'
 
@@ -194,10 +194,10 @@ test('quoted: title, author, a multi-line body and a comment by me, each line qu
 })
 
 test('migrationOf: open items become issues, merged and parked do not', () => {
-  const b: Backlog = { version: 1, items: [{ id: 'p1', title: 'a', status: 'merged' }, { id: 'p2', title: 'b', status: 'building' }, { id: 'p3', title: 'c', status: 'parked' }, { id: 'p4', title: 'd', status: 'inbox' }] }
+  const b: Backlog = { version: 1, items: [{ id: 'p1', title: 'a', status: 'merged' }, { id: 'p2', title: 'b', status: 'building' }, { id: 'p3', title: 'c', status: 'parked' }, { id: 'p4', title: 'd', status: 'inbox' }, { id: 'p5', title: 'e', status: 'blocked' }] }
   const m = migrationOf(b)
-  expect(m.create.map(i => i.id)).toEqual(['p2', 'p4'])
-  expect(m.active.map(i => i.id)).toEqual(['p2'])
+  expect(m.create.map(i => i.id)).toEqual(['p2', 'p4', 'p5'])
+  expect(m.active.map(i => i.id)).toEqual(['p2', 'p5'])
   expect(m.skipped).toEqual({ merged: 1, parked: [b.items[2]] })
 })
 
@@ -206,4 +206,10 @@ test('issueBodyOf: the spec\'s What and Why, the note without a spec or when bot
   expect(issueBodyOf(null, 'alice asked for it')).toBe('alice asked for it')
   expect(issueBodyOf('## What\n\n*What it does.*\n\n## Why\n\n', 'the note')).toBe('the note')
   expect(issueBodyOf(null, undefined)).toBe('')
+})
+
+test('openQuestionOf: the Open section without the template placeholders', () => {
+  expect(openQuestionOf(`${SPEC}Which columns?\n`)).toBe('Which columns?')
+  expect(openQuestionOf(SPEC)).toBe('')
+  expect(openQuestionOf('## Open\n\n*A question only the user can answer.*\n')).toBe('')
 })

@@ -761,3 +761,70 @@ test('migrate-github is refused when the gh user cannot be read', async ($, on) 
   expect(text(await call($, { action: 'migrate-github', apply: true }))).toBe(`refused: ${NO_GH}`)
   expect(writes).toEqual([])
 })
+
+test('migrate-github keeps a blocked item, an open question, a PR link, and gives an in-flight item without a ledger one', async ($, on) => {
+  const withOpen = SPEC.replace('## Open\n\n', '## Open\n\nWhich columns?\n')
+  const items = [
+    { id: 'p5', title: 'Billing', status: 'blocked', note: 'waits on the API key', spec: 'docs/pipeline/specs/p5.md', branch: 'feat/p5', ledger: 'docs/pipeline/ledgers/p5.json' },
+    { id: 'p6', title: 'Search', status: 'inbox', spec: 'docs/pipeline/specs/p6.md' },
+    { id: 'p7', title: 'Sharing', status: 'review', pr: '#9', spec: 'docs/pipeline/specs/p7.md', branch: 'feat/p7' },
+    { id: 'p8', title: 'Themes', status: 'building', spec: 'docs/pipeline/specs/p8.md', branch: 'feat/p8' },
+  ]
+  const { files } = world(on, {
+    [CONFIG]: VALID_CONFIG,
+    [BACKLOG]: JSON.stringify({ version: 1, items }, null, 2) + '\n',
+    [`${DIR}/specs/p5.md`]: SPEC,
+    [`${DIR}/specs/p6.md`]: withOpen,
+    [`${DIR}/specs/p7.md`]: SPEC,
+    [`${DIR}/specs/p8.md`]: SPEC,
+    [`${DIR}/ledgers/p5.json`]: JSON.stringify({ item: 'p5', branch: 'feat/p5', worktree: '.claude/worktrees/p5', tasks: [], rulings: [], blockers: ['waits on the API key'], tokens: 0 }),
+  })
+  listFiles(on, files)
+  const gh: GhState = { me: 'me', issues: [] }
+  const runs = ghWorld(on, gh)
+  const draft = await json($, { action: 'migrate-github' })
+  expect(draft['active']).toEqual(['p5', 'p7', 'p8'])
+  expect(draft['questions']).toEqual(['p6'])
+  const answer = text(await call($, { action: 'migrate-github', apply: true }))
+  expect(answer).toContain('p5 → #1')
+  const [blocked, asked, review, building] = gh.issues
+  // The blocked item: its label, no building label or assignment, the reason in the status line, its ledger carried.
+  expect(blocked!.labels).toEqual(['pipeline', 'pipeline:blocked'])
+  expect(blocked!.assignees).toEqual([])
+  expect(blocked!.comments[0]!.body.split('\n')[1]).toBe('**Pipeline** · blocked · waits on the API key')
+  expect(JSON.parse(files.get(`${MAIN}/.git/pipeline/1/ledger.json`)!)).toMatchObject({ item: '1', branch: 'feat/p5', blockers: ['waits on the API key'] })
+  expect(JSON.parse(files.get(ITEMS)!).items['1']).toMatchObject({ status: 'blocked', note: 'waits on the API key', ledger: '.git/pipeline/1/ledger.json' })
+  // The open question: asked on the issue, which waits.
+  expect(asked!.comments.map(c => c.body.split('\n')[0])).toEqual([SPEC_MARK, QUESTION_MARK])
+  expect(asked!.comments[1]!.body).toBe(`${QUESTION_MARK}\nWhich columns?`)
+  expect(asked!.labels).toEqual(['pipeline', 'pipeline:needs-info'])
+  // The review item's status line names its PR.
+  expect(review!.comments[0]!.body.split('\n')[1]).toBe('**Pipeline** · review · PR #9')
+  // The building item without a ledger gets one, and begin takes it on this machine.
+  expect(JSON.parse(files.get(`${MAIN}/.git/pipeline/4/ledger.json`)!)).toMatchObject({ item: '4', branch: 'feat/p8' })
+  expect(JSON.parse(files.get(ITEMS)!).items['4']).toMatchObject({ status: 'building', ledger: '.git/pipeline/4/ledger.json' })
+  const got = await json($, { action: 'get', id: '2' })
+  expect(got['item']).toMatchObject({ status: 'inbox', readiness: { ready: false, reason: 'open question on the issue' } })
+  expect(building!.labels).toEqual(['pipeline', 'pipeline:building'])
+  expect(text(await call($, { action: 'begin', item: '4' }))).toContain('4 · building · branch feat/p8')
+  expect(runs.some(r => r[0] === 'gh' && r.includes('--remove-label'))).toBe(false)
+})
+
+test('a second apply does not ask the open question twice', async ($, on) => {
+  const withOpen = SPEC.replace('## Open\n\n', '## Open\n\nWhich columns?\n')
+  const { files } = world(on, {
+    [CONFIG]: VALID_CONFIG,
+    [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p6', title: 'Search', status: 'inbox', spec: 'docs/pipeline/specs/p6.md' }, { id: 'p9', title: 'Later', status: 'inbox', note: 'n' }] }, null, 2) + '\n',
+    [`${DIR}/specs/p6.md`]: withOpen,
+  })
+  listFiles(on, files)
+  const gh: GhState = { me: 'me', issues: [] }
+  ghWorld(on, gh)
+  gh.onEdit = () => void (gh.fail = true)
+  expect(text(await call($, { action: 'migrate-github', apply: true }))).toMatch(/^refused: /)
+  gh.fail = false
+  gh.onEdit = undefined
+  expect(text(await call($, { action: 'migrate-github', apply: true }))).toContain('p9 → #2')
+  expect(gh.issues[0]!.comments.filter(c => c.body.startsWith(QUESTION_MARK)).length).toBe(1)
+  expect(gh.issues[0]!.labels).toEqual(['pipeline', 'pipeline:needs-info'])
+})

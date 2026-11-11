@@ -12,7 +12,7 @@ import type { Places } from './files'
 import * as tracker from './tracker'
 import { QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
-import { EMPTY_EXTRAS, applyOps, extrasOf, issueBodyOf, labelsOf, migrationOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import type { Extras, Leftover, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
 import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
@@ -2223,10 +2223,17 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
   const P = places(found, 'github')
   const m = migrationOf(loaded)
   const specPath = (item: Item) => (item.spec ? `${found}/${slashes(item.spec).replace(/^\//, '')}` : p.spec(item.id))
+  // An inbox item whose spec still has an open question: asked on its issue, so the issue waits as the item did.
+  const questionOf = (item: Item, spec: string | null) => (item.status === 'inbox' && spec !== null && hasOpenQuestion(spec) ? openQuestionOf(spec) : '')
   if (!e.apply) {
     const create = []
-    for (const item of m.create) create.push({ id: item.id, title: item.title, status: item.status, spec: (await readText($, specPath(item))) !== null ? relOf(found, specPath(item)) : null })
-    return JSON.stringify({ create, active: m.active.map(i => i.id), skipped: { merged: m.skipped.merged, parked: m.skipped.parked.map(i => ({ id: i.id, title: i.title })) }, remove: FILE_RECORDS }, null, 2)
+    const questions: string[] = []
+    for (const item of m.create) {
+      const spec = await readText($, specPath(item))
+      create.push({ id: item.id, title: item.title, status: item.status, spec: spec !== null ? relOf(found, specPath(item)) : null })
+      if (questionOf(item, spec)) questions.push(item.id)
+    }
+    return JSON.stringify({ create, active: m.active.map(i => i.id), questions, skipped: { merged: m.skipped.merged, parked: m.skipped.parked.map(i => ({ id: i.id, title: i.title })) }, remove: FILE_RECORDS }, null, 2)
   }
 
   const run = ghRun($, found)
@@ -2248,6 +2255,10 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
   for (const item of m.create) {
     const spec = await readText($, specPath(item))
     const isActive = (ACTIVE_STATUSES as readonly string[]).includes(item.status)
+    const isBlocked = item.status === 'blocked'
+    const state = isActive || isBlocked ? item.status : 'ready'
+    const detail = item.status === 'review' && item.pr ? `PR ${item.pr}` : isActive || isBlocked ? (item.note ?? '') : ''
+    const question = questionOf(item, spec)
     const there = listed.value.find(i => i.title === item.title)
     let n: number
     if (there) {
@@ -2261,12 +2272,17 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
     lines.push(`${item.id} → #${n}`)
     // An issue an earlier apply made gets what that apply did not get to.
     if (spec !== null && !(there && specCommentOf(there, me))) {
-      const posted = await tracker.comment(run, n, renderSpecComment(spec, isActive ? item.status : 'ready', ''))
+      const posted = await tracker.comment(run, n, renderSpecComment(spec, state, detail))
       if (!posted.ok) throw stop(posted.error)
     }
-    if (isActive && !there?.labels.includes(L.building)) {
-      const claimed = await tracker.edit(run, n, { add: [L.building], assign: me })
-      if (!claimed.ok) throw stop(claimed.error)
+    if (question && !there?.comments.some(cm => cm.body.trimStart().startsWith(QUESTION_MARK) && isTrusted(cm, me))) {
+      const asked = await tracker.comment(run, n, `${QUESTION_MARK}\n${question}`)
+      if (!asked.ok) throw stop(asked.error)
+    }
+    const add = isActive ? L.building : isBlocked ? L.blocked : question ? L.needsInfo : ''
+    if (add && !there?.labels.includes(add)) {
+      const labelledNow = await tracker.edit(run, n, isActive ? { add: [add], assign: me } : { add: [add] })
+      if (!labelledNow.ok) throw stop(labelledNow.error)
     }
   }
 
@@ -2302,6 +2318,13 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
           if (text !== null) await $.fs.write(`${wt}/${P.briefDir(id)}/${name}`, text)
         }
       }
+    } else if (!(await $.fs.exists(P.ledger(id)))) {
+      // No ledger to carry: a fresh one with the branch and PR, so this machine's begin knows the item as its own.
+      const fresh: Ledger = { ...emptyLedger(id), ...(typeof item.branch === 'string' && item.branch ? { branch: item.branch } : {}), ...(typeof item.pr === 'string' && item.pr ? { pr: item.pr } : {}) }
+      await $.fs.write(P.ledger(id), serialize(fresh))
+      kept.ledger = relOf(found, P.ledger(id))
+    } else {
+      kept.ledger = relOf(found, P.ledger(id))
     }
     items[id] = kept
   }
