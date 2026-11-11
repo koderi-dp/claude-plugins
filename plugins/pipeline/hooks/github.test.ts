@@ -488,6 +488,43 @@ test('begin refuses an issue building on another machine of the same user unless
   expect(files.get(`${WT2}/.pipeline/2/spec.md`)).toContain('## Acceptance')
 })
 
+/** The session runner over issue 2: runner session, an auto permission mode, a child that never ends; 2 read as ready, then labelled building by another machine of this user. */
+async function startWorld($: { classic: { UserPromptSubmit: (e: never) => Promise<unknown> } } & Parameters<typeof call>[0], on: On) {
+  const { files } = world(on, { [CONFIG]: JSON.stringify({ ...JSON.parse(CONFIG_GH), runner: 'session' }) })
+  on('classic.UserPromptSubmit', () => ({}) as never)
+  on('process.spawn', async function* () {
+    await new Promise<void>(() => {})
+  } as never)
+  const { gh } = runWorld(on)
+  await $.classic.UserPromptSubmit({ prompt: 'hi', permission_mode: 'auto' } as never)
+  expect((await json($, { action: 'get', id: '2' }))['item']).toMatchObject({ status: 'ready' })
+  gh.issues[0]!.labels.push('pipeline:building')
+  gh.issues[0]!.assignees.push('me')
+  return { files }
+}
+
+test('start refuses an issue building on another machine of the same user, as begin does', async ($, on) => {
+  const { files } = await startWorld($ as never, on)
+  expect(text(await call($, { action: 'start', item: '2' }))).toBe('refused: 2 is being built on another machine of yours · to take it over here: begin with "force": true')
+  expect(files.has(LEDGER2)).toBe(false)
+})
+
+test('start with force takes over an issue building on another machine', async ($, on) => {
+  const { files } = await startWorld($ as never, on)
+  expect(text(await call($, { action: 'start', item: '2', force: true }))).toStartWith('started 2')
+  expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ branch: 'feat/2', worktree: '.claude/worktrees/2' })
+})
+
+test('start refuses an issue with no spec comment, as begin does', async ($, on) => {
+  world(on, { [CONFIG]: JSON.stringify({ ...JSON.parse(CONFIG_GH), runner: 'session' }) })
+  on('classic.UserPromptSubmit', () => ({}) as never)
+  const { gh } = runWorld(on)
+  await $.classic.UserPromptSubmit({ prompt: 'hi', permission_mode: 'auto' } as never)
+  await call($, { action: 'get' })
+  gh.issues[0]!.comments = []
+  expect(text(await call($, { action: 'start', item: '2' }))).toBe('refused: 2 has no spec comment: post one with spec')
+})
+
 test('begin resumes an issue with a local ledger although a teammate was added as a second assignee', async ($, on) => {
   world(on, {
     [CONFIG]: CONFIG_GH,

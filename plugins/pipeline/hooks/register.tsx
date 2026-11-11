@@ -96,7 +96,7 @@ const TOOL_SCHEMA = {
     tokens: { type: 'number', description: 'For accept and gate: the tokens of the Agent result.' },
     minutes: { type: 'number', description: 'For accept: the minutes of the Agent result.' },
     pr: { type: 'string', description: 'For close: the pull request, as #31, when the item does not carry it yet.' },
-    force: { type: 'boolean', description: 'For close: close although the branch tip is not on origin/mainBranch (a squash merge). For begin with queue: github: take over here an issue another machine is building.' },
+    force: { type: 'boolean', description: 'For close: close although the branch tip is not on origin/mainBranch (a squash merge). For begin and start with queue: github: take over here an issue another machine is building.' },
     fact: { type: 'string', description: 'For accept: one line a later implementer must know about working in this repository (a command\'s working spelling, a step that must come first); kept in docs/pipeline/facts.md and given to every brief.' },
     verdict: { type: 'string', description: 'For accept: how the task was approved. For gate: the final review\'s verdict.' },
     kind: { type: 'string', enum: ['implementer', 'fix', 'review', 'final'], description: 'For brief: which brief to render.' },
@@ -605,6 +605,22 @@ async function readIssue($: EngineInterface, found: string, id: string): Promise
   if (!r.ok) throw new Refused(r.error)
   await editCache($, found, issues => [...issues.filter(i => i.number !== r.value.number), r.value])
   return r.value
+}
+
+/**
+ * The issue read fresh before `begin` or `start` makes a worktree for it. Refused when it carries the building label and
+ * this machine has no ledger for it (another machine builds it, of another user or of this one: one login) unless
+ * forced, and when it has no spec comment. Answers the issue and the spec its comment holds.
+ */
+async function claimIssue($: EngineInterface, found: string, c: Config | null, id: string, hasLedger: boolean, force: boolean): Promise<{ issue: Issue; specMd: string }> {
+  const issue = await readIssue($, found, id)
+  if (issue.labels.includes(labelsOf(labelOf(c)).building) && !hasLedger && !force) {
+    const other = issue.assignees.find(a => a !== self.me)
+    throw new Refused(`${id} is being built ${other ? `elsewhere (by @${other})` : 'on another machine of yours'} · to take it over here: begin with "force": true`)
+  }
+  const spec = specCommentOf(issue, self.me)
+  if (!spec) throw new Refused(`${id} has no spec comment: post one with spec`)
+  return { issue, specMd: parseSpecComment(spec.body).specMd }
 }
 
 /** `init` with queue: github: gh must answer for this repository; the config, the labels and the exclude line, no backlog. */
@@ -1163,7 +1179,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       return writeLine($, found, moveItem(current, id, to), id, state => `${id} · moved ${to === 'top' ? 'to the top' : `after ${to.after}`} · ${state}`)
     }
     case 'start':
-      return startChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
+      return startChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e.force === true)
     case 'stop':
       return stopChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
     case 'remove': {
@@ -1317,16 +1333,9 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
   let specMd = ''
   let seen: string[] = []
   if (gh) {
-    const fresh = await readIssue($, found, id)
-    // Building with no ledger on this machine: another machine runs it, of another user or of this one (same login).
-    if (fresh.labels.includes(labelsOf(labelOf(c)).building) && !ledger && e.force !== true) {
-      const other = fresh.assignees.find(a => a !== self.me)
-      throw new Refused(`${id} is being built ${other ? `elsewhere (by @${other})` : 'on another machine of yours'} · to take it over here: begin with "force": true`)
-    }
-    const spec = specCommentOf(fresh, self.me)
-    if (!spec) throw new Refused(`${id} has no spec comment: post one with spec`)
-    specMd = parseSpecComment(spec.body).specMd
-    seen = fresh.assignees
+    const fresh = await claimIssue($, found, c, id, ledger !== null, e.force === true)
+    specMd = fresh.specMd
+    seen = fresh.issue.assignees
   }
   // Off the remote's main when it is known, so the branch starts from what a PR will be compared with.
   await gitOut($, found, ['fetch', '-q', 'origin', mainBranch])
@@ -1808,7 +1817,7 @@ async function ensureWorktree($: EngineInterface, found: string, worktree: strin
 const list = (xs: readonly string[]) => `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`
 
 /** `start`: the checks, the worktree, the item marked building, the ledger's branch and worktree, the child spawned and its loop detached. */
-async function startChild($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string): Promise<string> {
+async function startChild($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, force = false): Promise<string> {
   // The mechanical guard against recursion: a child is started with PIPELINE_CHILD set, and never starts children.
   if (await isChildSession($)) throw new Refused('a child session does not start children')
   const runner = c?.runner ?? DEFAULTS.runner
@@ -1818,8 +1827,13 @@ async function startChild($: EngineInterface, found: string, c: Config | null, c
   const own = running.find(ch => ch.item === id)
   if (own) throw new Refused(`${id} already runs in session ${own.id}`)
   if (item.status !== 'ready' && item.status !== 'blocked' && item.status !== 'building') throw new Refused(`${id} is ${item.status}, not ready`)
+  // queue: github: the claim begin checks, so the child's begin does not pass on the ledger written here.
+  const hasLedger = isGithub(c) && (await loadLedger($, found, id)) !== null
+  if (isGithub(c)) await claimIssue($, found, c, id, hasLedger, force)
   // A building item the session runner did not start is being run in a session, this one or another: not taken over.
-  if (item.status === 'building' && !/session runner/.test(item.note ?? '')) throw new Refused(`${id} is being run in-session (building, note: ${item.note || 'none'}); finish or stop that run, or block the item, before starting it as a child session`)
+  // With queue: github and no ledger here, a forced start takes over another machine's run, as begin does.
+  const isTakeover = isGithub(c) && force && !hasLedger
+  if (item.status === 'building' && !isTakeover && !/session runner/.test(item.note ?? '')) throw new Refused(`${id} is being run in-session (building, note: ${item.note || 'none'}); finish or stop that run, or block the item, before starting it as a child session`)
   const mode = await permissionModeOf($)
   if (!(ALLOWED_MODES as readonly string[]).includes(mode)) {
     throw new Refused(`the session's permission mode is ${mode}; a headless child cannot ask, so switch to ${list(ALLOWED_MODES)} (Shift+Tab) and start again`)
