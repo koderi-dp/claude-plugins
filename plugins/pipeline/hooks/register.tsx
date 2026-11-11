@@ -26,7 +26,7 @@ import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, 
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { BAND_COMPACT_H, BAND_H, bandSvg, bandText, idleStripSvg, idleStripText } from './draw'
 import { BLOCKED, renderPanel } from './pane'
-import { SEGMENT_COLORS, bandOf, idleLine, sessionName, specWhat, statusText, taskCounter } from './status'
+import { SEGMENT_COLORS, bandOf, idLabel, idleLine, sessionName, specWhat, statusText, taskCounter } from './status'
 import type { Band } from './status'
 import type { StatusInput } from './status'
 import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
@@ -2671,7 +2671,7 @@ export const register: Register = (on, options) => {
     } catch {}
     // A PR merged by hand since the last session: the person hears it once, in a toast; the status block says it too.
     try {
-      if (loaded) for (const m of await checkMerged($, loaded.found, loaded.config, loaded.backlog)) $.ui.toast(`pipeline: ${mergedLine(m)}`)
+      if (loaded) for (const m of await checkMerged($, loaded.found, loaded.config, loaded.backlog)) $.ui.toast(`pipeline: ${mergedLine({ ...m, id: idLabel(m.id) })}`)
     } catch {}
     return started
   })

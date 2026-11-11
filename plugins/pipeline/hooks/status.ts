@@ -50,10 +50,13 @@ export function displayTitle(title: string): string {
   return m ? m[1]! : title
 }
 
-/** The session's name while it runs an item: `p12 · CSV export`, the title without its slug, cut to 60 characters. */
+/** An item id as the user reads it: an issue number (digits only) as `#12`, a file id such as `p12` as it is. */
+export const idLabel = (id: string): string => (/^\d+$/.test(id) ? `#${id}` : id)
+
+/** The session's name while it runs an item: `p12 · CSV export` (`#12 · CSV export` for an issue), the title without its slug, cut to 60 characters. */
 export function sessionName(item: Pick<Item, 'id' | 'title'>): string {
   const title = displayTitle(item.title)
-  return `${item.id} · ${title.length > 60 ? title.slice(0, 59).trimEnd() + '…' : title}`
+  return `${idLabel(item.id)} · ${title.length > 60 ? title.slice(0, 59).trimEnd() + '…' : title}`
 }
 
 /** The PR as `#35` with its address when the record is a URL: from `https://…/pull/35`, `#35` or `35`; nothing otherwise. */
@@ -68,11 +71,11 @@ export function prLabel(pr: string | null | undefined): { label: string; href?: 
 export function idleLine(items: Item[]): string {
   const inbox = items.filter(i => i.status === 'inbox')
   const next = items.find(i => i.status === 'ready') ?? inbox[0]
-  return line(['idle', `${inbox.length} inbox`, next ? `next: ${next.id} ${displayTitle(next.title)}` : undefined])
+  return line(['idle', `${inbox.length} inbox`, next ? `next: ${idLabel(next.id)} ${displayTitle(next.title)}` : undefined])
 }
 
 function itemRow(item: Item, extra?: string): string {
-  return `  ${line([item.id, displayTitle(item.title), item.size, extra])}`
+  return `  ${line([idLabel(item.id), displayTitle(item.title), item.size, extra])}`
 }
 
 /** The status block: head line, the active item, agents, signals, then the queues. */
@@ -88,7 +91,7 @@ export function statusText(input: StatusInput): string {
   const items = backlog.items
   const ready = items.filter(i => i.status === 'ready')
   if (!fileError) lines.push(`pipeline: ${items.length} item${items.length === 1 ? '' : 's'} · ${ready.length} ready`)
-  for (const m of input.mergedPending ?? []) lines.push(mergedLine(m))
+  for (const m of input.mergedPending ?? []) lines.push(mergedLine({ ...m, id: idLabel(m.id) }))
 
   const active = items.filter(i => ACTIVE.includes(i.status))
   if (active.length) {
@@ -119,7 +122,7 @@ export function statusText(input: StatusInput): string {
     }
   }
   const parked = items.filter(i => i.status === 'parked')
-  if (parked.length) lines.push(`Parked: ${parked.map(i => i.id).join(', ')}`)
+  if (parked.length) lines.push(`Parked: ${parked.map(i => idLabel(i.id)).join(', ')}`)
   const merged = mergedThisWeek(items, now)
   if (merged.length) {
     lines.push('Merged this week')
@@ -260,7 +263,7 @@ export function siblingLabel(s: Sibling): { title: string; meta: string; isIdle:
   const isIdle = !s.item && !s.agents.length
   if (isIdle) return { title: `idle session · ${name}`, meta: s.isStale ? 'stale' : '', isIdle }
   const running = s.agents.filter(a => a.status === 'running').length
-  return { title: name, meta: line([s.item, `${running} agent${running === 1 ? '' : 's'}`, s.isStale ? 'stale' : undefined]), isIdle }
+  return { title: name, meta: line([s.item ? idLabel(s.item) : undefined, `${running} agent${running === 1 ? '' : 's'}`, s.isStale ? 'stale' : undefined]), isIdle }
 }
 
 export type Verdict = 'APPROVED' | 'FIX REQUIRED'
@@ -568,7 +571,7 @@ export function bandOf(item: Item, ledger: Ledger | null, agent: AgentRun | unde
   const blocked = segments.filter(s => s === 'blocked').length
   const summary = line([`${accepted} accepted`, running ? `${running} ${item.status === 'review' ? 'in review' : 'running'}` : '', blocked ? `${blocked} blocked` : '', item.status === 'merged' ? 'merged' : '', !running && !blocked && item.status !== 'merged' ? `${tasks.length - accepted} pending` : ''])
   return {
-    id: item.id,
+    id: idLabel(item.id),
     title: displayTitle(item.title),
     state: item.status === 'ready' || item.status === 'inbox' ? 'READY' : item.status.toUpperCase(),
     color,

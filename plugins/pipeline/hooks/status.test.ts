@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Backlog, Item, Ledger } from '../types'
 
 import { DEFAULTS } from './config'
-import { displayTitle, idleLine, prLabel, sessionName, statusText, taskCounter } from './status'
+import { displayTitle, idLabel, idleLine, prLabel, sessionName, statusText, taskCounter } from './status'
 import type { StatusInput } from './status'
 
 const NOW = Date.parse('2026-11-05T12:00:00Z')
@@ -514,4 +514,22 @@ test('attemptsOf: a dispatch without a result is the running one, drawn as in pr
   expect(lines[1]).toContain('FIX REQUIRED')
   expect(lines[2]).toBe(`Fix 1 of 2 · ${lines[2]!.split(' · ')[1]} · in progress`)
   expect(lines[2]).not.toContain('✓')
+})
+
+test('an issue id is shown with its hash; a file id as it is', () => {
+  expect(idLabel('12')).toBe('#12')
+  expect(idLabel('p12')).toBe('p12')
+  expect(sessionName({ id: '12', title: 'CSV export' })).toBe('#12 · CSV export')
+  expect(sessionName({ id: 'p12', title: 'CSV export' })).toBe('p12 · CSV export')
+})
+
+test('the status block, the idle line and the band show an issue id with its hash', () => {
+  const b = backlog(item('12', 'building'), item('13', 'ready'), item('14', 'parked'))
+  const text = statusText(base({ backlog: b, mergedPending: [{ id: '11', branch: 'feat/11', pr: '#5' }] }))
+  expect(text).toContain('  #12 · Item 12 · building')
+  expect(text).toContain('  #13 · Item 13')
+  expect(text).toContain('Parked: #14')
+  expect(text).toContain('#11 merged on main')
+  expect(idleLine(b.items)).toBe('idle · 0 inbox · next: #13 Item 13')
+  expect(bandOf(b.items[0]!, null, undefined, NOW).id).toBe('#12')
 })

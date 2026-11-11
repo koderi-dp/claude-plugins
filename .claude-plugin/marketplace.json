@@ -38,7 +38,7 @@
     {
       "name": "pipeline",
       "source": "./plugins/pipeline",
-      "description": "Owns a project's workflow: a structured backlog in docs/pipeline, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel."
+      "description": "Owns a project's workflow: a backlog in docs/pipeline or in GitHub issues, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel."
     }
   ]
 }

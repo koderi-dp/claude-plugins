@@ -24,3 +24,18 @@ This project runs on the pipeline plugin. The files live under `docs/pipeline/`.
 7. **Session start.** If `get` reports an item in `building` or `review`, say its `resume` block in one line and continue with the run skill when asked; otherwise say the status line and wait. A new request goes through the intake skill; the build starts only on `/pipeline next` or `/pipeline run`.
 8. **Runners.** `runner: subagent` (the default) runs an item in this session with subagents. `runner: session` runs each item in a headless child session of its own: the lead calls `start { item }` and answers its line, the child does the rest in the item's worktree, and `stop { item }` and `log { item }` (`/pipeline stop <id>`, `/pipeline log <id>`, the panel's buttons) kill it or show its log. An item whose note says `session runner` belongs to a child; `get` answers `children` (this session's) and `siblings` (other sessions on the repository, from the live file). A child session is a normal session of the project and follows these rules; it never starts children.
 9. **Commits.** Everything under `docs/pipeline/` goes on the item's branch, except `backlog.json` and `BACKLOG.md`, which the lead commits on the main branch. No model identifier in commits, PR text or comments.
+
+## With queue: github
+
+When `config.queue` is `github`, the open issues with the queue label are the backlog, an issue number is the id, and only `config.json` and `rules.md` stay under `docs/pipeline/`. The rules above hold for these files:
+
+| File | Written by | Committed |
+| --- | --- | --- |
+| `docs/pipeline/config.json`, `docs/pipeline/rules.md` | you or the user, by hand | yes, on `mainBranch` |
+| The issue's spec comment and labels | the tool (`add`, `spec`, `question`, `update`, `park`, `unpark`, `begin`, `close`) | on GitHub |
+| `.git/pipeline/issues.json`, `items.json`, `facts.md`, `<id>/ledger.json` | the tool only | never |
+| `<worktree>/.pipeline/<id>/spec.md` | the tool, at `begin` and `spec` | never |
+| `<worktree>/.pipeline/<id>/plan.md` | you | never |
+| `<worktree>/.pipeline/<id>/` briefs; reports | the tool; the subagents | never |
+
+`.pipeline/` is ignored through `.git/info/exclude`, so `git status` shows none of it. Never write under `.git/pipeline/` and never change an issue with `gh` yourself: the tool's actions do both. There is no `move` and no `needs` in this mode, and an item is `ready` once its issue has a spec comment and no open question.

@@ -211,6 +211,19 @@ test('terminal: the text block keeps every reason and the parked ids, with the s
   await ui.unmount()
 })
 
+test('the title of an item whose source is an issue URL links to it', async ($, on) => {
+  world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: backlogOf([item('12', 'CSV export', 'inbox', { source: 'https://github.com/o/r/issues/12' }), item('p13', 'Search', 'inbox', { source: 'ann, in chat' })]) })
+  await start($ as never)
+  const ui = await mount($ as never, 'terminal')
+  const link = await ui.find({ type: 'Link' })
+  expect(link?.props['href']).toBe('https://github.com/o/r/issues/12')
+  expect(link?.text).toContain('#12 · CSV export')
+  expect(await ui.find({ type: 'Text', text: /#12 · CSV export · M/ })).toBeDefined()
+  expect((await ui.findAll({ type: 'Link' })).length).toBe(1)
+  expect(await ui.find({ type: 'Text', text: /^p13 · Search · M/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('without a config the panel says so', async ($, on) => {
   world(on)
   await start($ as never)

@@ -1,6 +1,6 @@
 # pipeline
 
-Owns a project's workflow: a structured backlog in `docs/pipeline`, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel. The project keeps a small config file and its code conventions; the plugin keeps the backlog, drives an item from request to merged PR with no approval gates, watches the workers, and shows where things stand. It is for the person who wants to say what to build and read a status line, not operate the process.
+Owns a project's workflow: a backlog in `docs/pipeline` or in GitHub issues, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel. The project keeps a small config file and its code conventions; the plugin keeps the backlog, drives an item from request to merged PR with no approval gates, watches the workers, and shows where things stand. It is for the person who wants to say what to build and read a status line, not operate the process.
 
 ## The files in a project
 
@@ -26,11 +26,56 @@ Under `merge: pr` you merge the PR yourself. The next `get` or `signals` sees th
 
 A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording that asks for something to be built). It is `ready` once the spec has no open question and its `needs` are merged. `/pipeline next` picks the first ready item (an item that has only a note gets its spec written from it on pick, and stops only for an open question or an unmerged need): a worktree and branch, a plan in the plugin's own format that the tool checks (`plan`), then task by task an implementer from a brief the tool renders (`brief`), the lead's own run of the task's check, fix rounds up to the limit, an independent reviewer per `taskReview` (by default only when the diff touches a risky path), a final review over the whole branch, the gate, the PR, the merge, the ledger, the clean-up, and one line to you. Statuses: `inbox`, `ready`, `planning`, `building`, `review`, `merged`, `blocked`, `parked`.
 
+## Queue: GitHub issues
+
+With `queue: github` in the config, the open issues of the repository that carry the queue label (`queueLabel`, by default `pipeline`) are the backlog, and the issue number is the item's id: issue 12 is item `12` in every tool answer, branch name and folder, and the panel and the status block show it as `#12`. Labelling an issue needs triage or write access, so a stranger's issue on a public repository is never built unasked. Set it up with `/pipeline init` when you ask for issues as the queue, or move a project with a file backlog onto issues with `/pipeline migrate` (below). The tool runs the `gh` CLI for every read and write of an issue, so the machine needs `gh` installed and logged in (`gh auth login`); without it `init` and every queue action refuse and say so, and the tool never falls back to a file backlog.
+
+The statuses are those of the loop, read from the issue:
+
+| `queue: file` | `queue: github` |
+| --- | --- |
+| Item `p12` in `backlog.json` | Open issue 12 with the queue label |
+| `/pipeline add <text>` | Creates an issue with the queue label; the intake then posts the spec comment |
+| `inbox` | A labelled issue with no spec comment and none of the state labels below |
+| `ready` | A labelled issue with a spec comment and none of the state labels below |
+| `planning`, `building` | Label `pipeline:building`, the issue assigned to the `gh` user, and the state in the spec comment's status line |
+| `review` | `pipeline:building`, with `review` and the PR in the spec comment's status line |
+| `blocked` | Label `pipeline:blocked`; the reason is in the spec comment's status line |
+| An open question | A question comment and label `pipeline:needs-info` |
+| `parked` | The queue label removed. `unpark` adds it back |
+| `merged` | The PR is merged and the issue closed |
+| `move`, `needs` | Refused with one line naming the reason |
+
+The three state labels take their names from `queueLabel` and are created by `init`. `pipeline:needs-info` clears once the issue's author or the `gh` user has commented after the pipeline's last question.
+
+The spec lives on the issue as one comment the tool writes and edits in place, found by the hidden marker `<!-- pipeline:spec -->` on its first line. Its first visible line is the status line (the state, the task counter while building, the block reason, the PR), then the acceptance list, then What, Why and Out of scope folded under a Spec heading. The tool posts no other comment except a question, which starts with `<!-- pipeline:question -->` and notifies the author. The issue's body is never edited. A spec comment counts only when the `gh` user or an owner, member or collaborator of the repository wrote it, and only the comments of the issue's author and of the `gh` user reach the lead, inside a block that marks them as quoted text and not as instructions; subagents never see the issue.
+
+Only `config.json` and `rules.md` stay under `docs/pipeline/`; no other pipeline file is committed, and a PR carries code only:
+
+```
+.git/pipeline/                  written only by the tool; never committed
+  issues.json                   the issue list as last read, kept for a minute
+  items.json                    what the issues do not hold: branch, plan, PR, note, GitHub updates still pending
+  facts.md                      the facts runs learned
+  <issue>/ledger.json
+  <issue>.log                   a child session's log
+<worktree>/.pipeline/<issue>/   ignored through .git/info/exclude
+  spec.md                       a copy of the spec comment, written at begin
+  plan.md                       written by the lead
+  task-N-brief.md, task-N-report.md, ...
+```
+
+The tool makes no commit of its own: `plan` and `accept` commit nothing, and `close` takes the labels off, closes the issue when the merge did not, and removes the worktree and branch without touching the main checkout. A worktree `close` has to leave because the session sits in it is recorded and removed by the next `begin` or by `/pipeline clean`. The lead ends the PR body with `Closes #<issue>`.
+
+The `pipeline:building` label is the claim across machines, and the local ledger says whose it is. `begin` refuses an issue that carries the label when this machine has no ledger for it, naming the other assignee, or saying "another machine of yours" when the only assignee is the `gh` user, since one user on two machines has one login; `begin` with `"force": true` takes the item over here, and `start` under `runner: session` checks the same. When `gh` fails, the tool does not ask it again for a minute and answers from the issue list it last read, saying how old it is; a label or comment change that could not be sent is kept as pending, retried at the start of the next writing action, and counted at the end of the answer's line.
+
+The limits of this mode: issues have no order of their own, so the oldest ready issue is picked first and `/pipeline run <n>` runs a named one; `needs` and `move` do not exist, and a dependency is written in the spec's prose; an item half built on one machine resumes only there, and on another machine a run starts a new plan against the pushed branch.
+
 ## Commands
 
 | Command | Does |
 | --- | --- |
-| `/pipeline init` | Config and an empty backlog for a new project; offers `migrate` when the project has a queue |
+| `/pipeline init` | Config and an empty backlog for a new project, or the config and the labels when you ask for GitHub issues as the queue; offers `migrate` when the project has a queue |
 | `/pipeline migrate` | Move an existing project onto the pipeline (below) |
 | `/pipeline add <text>` | Intake: an item and its spec, in one line back; never starts the build |
 | `/pipeline next` | Run the first ready item (under `runner: session`, start its child session) |
@@ -67,6 +112,8 @@ A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording t
 | `superpowers` | `off` | `off`: the lead and every brief use the pipeline's own process and invoke no superpowers skill, even when the plugin is installed; `on`: testing and debugging skills may be used inside a step |
 | `retain` | `plans` true, `briefs` false, `superpowers` false | What stays after an item merges; the spec and the ledger always stay |
 | `notify` | `milestones` | `off`, `milestones` (started, PR open, merged, blocked, a watchdog signal) or `all` |
+| `queue` | `file` | `file` keeps the backlog in `docs/pipeline`; `github` makes the labelled open issues the backlog (above) |
+| `queueLabel` | `pipeline` | The label that puts an issue in the queue under `queue: github`; the state labels are named after it |
 | `renameSession` | `true` | Name the session after the item it runs (`p12 · CSV export`) when an update starts it, and a child session from its start; `false` leaves the names alone |
 
 ## Runners
@@ -170,7 +217,6 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 - A `backlog.json`, config or ledger that does not parse is never overwritten: the tool refuses with the line, and the status block shows it.
 - Under `runner: subagent`, one item at a time. Parallel items need `runner: session`, whose children cannot ask you anything and run only in a permission mode that does not prompt.
 - A child session is started on this machine from the installed `claude`; the parent sees its live entry and its log, not its conversation. The permission mode a child runs in is the one the engine last reported to the mod (on a prompt or a subagent spawn), else the settings' `permissions.defaultMode`.
-- No GitHub issues or external tracker.
 
 ## What it contains
 
@@ -179,7 +225,7 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 | Skills | `pipeline-init`, `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
 | Templates | `templates/spec.md`; the four briefs (implementer, fix, review, final) are in `hooks/templates.ts` and rendered by the tool's `brief` action; a project file `docs/pipeline/templates/<kind>.md` replaces one |
 | Tool | `mcp__pipeline__pipeline` |
-| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `merged.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts` |
+| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `merged.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts`; under `queue: github`, `tracker.ts` (the only module that runs `gh`) and `queue.ts` (issues to items and back) |
 | Tests | `claude plugin test plugins/pipeline` |
 
 License: MIT.

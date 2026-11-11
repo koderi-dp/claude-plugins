@@ -18,3 +18,7 @@ Sets a project up for the pipeline in one turn, with one line back. Never asks a
    - `merge`: `pr` unless the user has said auto-merge is on. Everything else keeps its default.
 5. **rules.md.** Write `docs/pipeline/rules.md` with the five group headings (`before dispatch`, `in every implementer brief`, `in every reviewer brief`, `before the PR`, `after merge`) and only the rules `CLAUDE.md` already states that the config cannot express (a test account, a browser rule, an env var that makes tests skip, a hand-off step). No rule is better than an invented one.
 6. **Answer** in one line: `pipeline set up · gate: make check · 2 risky paths · next: /pipeline add <request> or /pipeline migrate` (the migrate part only when step 2 found nothing but the user may still have notes elsewhere), then stop. Do not add items, do not start a run.
+
+## With queue: github
+
+Only when the user asks for GitHub issues as the queue (in words such as "use our issues", "the queue is GitHub"): step 3 is `{ "action": "init", "queue": "github" }`. It checks that `gh` is logged in for this repository, writes `docs/pipeline/config.json` with `queue: github`, creates the queue label and its three state labels, and ignores `.pipeline/`; it writes no backlog. Steps 4 and 5 are the same, and the commit holds `config.json` and `rules.md` only. When the project already has `docs/pipeline/backlog.json`, the move is the pipeline-migrate skill's, not init's. Never pick this mode yourself.

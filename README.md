@@ -10,7 +10,7 @@ Claude Code plugins for faster, quieter sessions. This repository is a plugin ma
 | [ssh-remote](plugins/ssh-remote) | Runs commands and downloads files over SSH, with credentials read from files Claude never sees | Windows |
 | [superpowers-flow](plugins/superpowers-flow) | Speed profiles (thorough, balanced, fast) and models per role for [superpowers](https://github.com/obra/superpowers) plan runs, chosen at the plan's handoff; parallel slices in git worktrees or their own headless sessions; a live progress bar and agents panel; and a handoff that builds an approved [EGM](https://github.com/google/elephant-goldfish-model) design | Any |
 | [board](plugins/board) | A panel of this session's tasks, subagents (what each is doing, in words) and sibling sessions, plus a project board of milestones and tasks Claude keeps in `docs/superpowers/board.json` | Any |
-| [pipeline](plugins/pipeline) | Owns a project's workflow: a structured backlog in `docs/pipeline`, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel | Any |
+| [pipeline](plugins/pipeline) | Owns a project's workflow: a backlog in `docs/pipeline` or in GitHub issues, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel | Any |
 
 ## Install
 

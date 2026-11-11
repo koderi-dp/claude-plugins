@@ -8,7 +8,7 @@ import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilt
 import { ACCENT, AGENT_CARD_H, BLOCKED, CAPTION_H, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TAB_UNDERLINE_H, TASK_BAR_H, agentCardSvg, captionSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, separatorSvg, sessionRowSvg, tabUnderlineSvg, tabWidth, taskBarSvg, taskRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
-import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from './status'
+import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, idLabel, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from './status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
 type Element = RenderElement
@@ -75,7 +75,9 @@ export type PanelInput = StatusInput & {
 
 const minutes = (from: number, to: number) => Math.max(0, Math.round((to - from) / 60000))
 const line = (parts: unknown[]) => parts.filter(p => p !== undefined && p !== null && p !== '').join(' · ')
-const itemText = (item: Item, extra?: string) => line([item.id, displayTitle(item.title), item.size, extra])
+const itemText = (item: Item, extra?: string) => line([idLabel(item.id), displayTitle(item.title), item.size, extra])
+/** The item's source when it is a web address (an issue's URL), for a Link; empty otherwise. */
+const sourceHref = (item: Item): string => (typeof item.source === 'string' && item.source.startsWith('https://') ? item.source : '')
 const signalText = (s: Signal) => `${s.kind}: ${line([s.agent, s.detail])}`
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
@@ -85,7 +87,7 @@ export function activeTitle(d: Pick<StatusInput, 'backlog' | 'ledger' | 'activeI
   const active = d.activeId !== undefined ? d.backlog?.items.find(i => i.id === d.activeId) : d.backlog?.items.find(i => ACTIVE.includes(i.status))
   if (!active) return ''
   const own = d.ledger && d.ledger.item === active.id ? d.ledger : null
-  return line([active.id, displayTitle(active.title), taskCounter(own)])
+  return line([idLabel(active.id), displayTitle(active.title), taskCounter(own)])
 }
 
 /** The footer's left half: agents running and open signals, or that nothing runs. */
@@ -123,7 +125,7 @@ export function renderText(ui: Ui, d: PanelInput): Element {
       'Active',
       active.map(i => {
         const own = ledger && ledger.item === i.id ? ledger : null
-        return <Text color={ACCENT}>{itemText(i, line([i.status, taskCounter(own), own?.resume?.state]))}</Text>
+        return itemTextRow({ Text, Link }, i, line([i.status, taskCounter(own), own?.resume?.state]), { color: ACCENT })
       }),
     )
   } else if (config && !fileError) rows.push(<Text dimColor>pipeline: no backlog (run /pipeline init)</Text>)
@@ -137,7 +139,7 @@ export function renderText(ui: Ui, d: PanelInput): Element {
   section(
     'Sessions',
     [
-      ...d.children.map(c => <Text color={c.status === 'failed' ? BLOCKED : c.status === 'running' ? ACCENT : undefined}>{line([c.item, taskCounter(d.ledgers[c.item] ?? null), c.status, c.lastLine])}</Text>),
+      ...d.children.map(c => <Text color={c.status === 'failed' ? BLOCKED : c.status === 'running' ? ACCENT : undefined}>{line([idLabel(c.item), taskCounter(d.ledgers[c.item] ?? null), c.status, c.lastLine])}</Text>),
       ...d.siblings.map(s => {
         const label = siblingLabel(s)
         return <Text dimColor={s.isStale || label.isIdle}>{line([label.title, label.meta])}</Text>
@@ -172,11 +174,11 @@ function queueRows(ui: { Text: Comp; Link?: Comp }, d: PanelInput, section: (tit
   const items = d.backlog?.items ?? []
   section(
     'Ready',
-    items.filter(i => i.status === 'ready').map(i => <Text>{itemText(i, (i.needs ?? []).length ? `needs ${i.needs!.join(' ')}` : undefined)}</Text>),
+    items.filter(i => i.status === 'ready').map(i => itemTextRow(ui, i, (i.needs ?? []).length ? `needs ${i.needs!.join(' ')}` : undefined)),
   )
   section(
     'Blocked',
-    items.filter(i => i.status === 'blocked').map(i => <Text color={BLOCKED}>{itemText(i, i.note || 'no reason recorded')}</Text>),
+    items.filter(i => i.status === 'blocked').map(i => itemTextRow(ui, i, i.note || 'no reason recorded', { color: BLOCKED })),
   )
   section(
     'Inbox',
@@ -184,30 +186,38 @@ function queueRows(ui: { Text: Comp; Link?: Comp }, d: PanelInput, section: (tit
       .filter(i => i.status === 'inbox')
       .map(i => {
         const r = d.readiness[i.id]
-        return (
-          <Text>
-            {itemText(i)}
-            {r && !r.ready ? <Text dimColor>{` · ${r.reason}`}</Text> : null}
-          </Text>
-        )
+        return itemTextRow(ui, i, undefined, {}, [r && !r.ready ? <Text dimColor>{` · ${r.reason}`}</Text> : null])
       }),
   )
   const parked = items.filter(i => i.status === 'parked')
-  if (parked.length) rows.push(<Text dimColor>{`Parked: ${parked.map(i => i.id).join(', ')}`}</Text>)
+  if (parked.length) rows.push(<Text dimColor>{`Parked: ${parked.map(i => idLabel(i.id)).join(', ')}`}</Text>)
   section(
     'Merged this week',
     mergedThisWeek(items, d.now).map(i => {
       const pr = prLabel(i.pr)
-      return (
-        <Text color={DONE}>
-          {itemText(i)}
-          {pr ? ' · ' : null}
-          {pr ? pr.href && Link ? <Link href={pr.href}>{pr.label}</Link> : pr.label : null}
-        </Text>
-      )
+      return itemTextRow(ui, i, undefined, { color: DONE }, [pr ? ' · ' : null, pr ? pr.href && Link ? <Link href={pr.href}>{pr.label}</Link> : pr.label : null])
     }),
   )
   return { rows }
+}
+
+/**
+ * An item's row of the text block, `#12 · Title · M · extra`, then `after`. With a web address as its source (the
+ * issue it came from), the id and title are a Link to it.
+ */
+function itemTextRow(ui: { Text: Comp; Link?: Comp }, item: Item, extra?: string, props: Record<string, unknown> = {}, after: unknown[] = []): Element {
+  const { Text, Link } = ui
+  const text = itemText(item, extra)
+  const href = sourceHref(item)
+  if (!Link || !href) return <Text {...props}>{text}{after}</Text>
+  const head = line([idLabel(item.id), displayTitle(item.title)])
+  return (
+    <Text {...props}>
+      <Link href={href}>{head}</Link>
+      {text.slice(head.length)}
+      {after}
+    </Text>
+  )
 }
 
 /** Running agents coloured, then the last few finished: failed in the blocked colour, done in the done colour. */
@@ -324,7 +334,7 @@ function itemRow(u: Desk, item: Item, tag: { text: string; kind: TagKind }, onPr
   const rw = rowWidth(W, CHEVRON_COLS)
   return (
     <Box key={`row-box-${item.id}`} flexDirection="row" alignItems="center" gap={1}>
-      <Svg source={itemRowSvg(rw, { id: item.id, title, meta, tag, isLast: isLast && !isExpanded })} alt={`${item.id}: ${line([title, meta, tag.text])}`} width={rw} height={ROW_H} />
+      <Svg source={itemRowSvg(rw, { id: idLabel(item.id), title, meta, tag, isLast: isLast && !isExpanded })} alt={`${idLabel(item.id)}: ${line([title, meta, tag.text])}`} width={rw} height={ROW_H} />
       <Button key={`row-${item.id}`} plain dimColor label={isExpanded ? '⌄' : '›'} onPress={onPress} />
     </Box>
   )
@@ -338,7 +348,7 @@ function mergedRow(u: Desk, item: Item, W: number, isLast: boolean): Element {
   const rw = rowWidth(W, pr ? LINK_COLS : 0)
   return (
     <Box key={`merged-${item.id}`} flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
-      <Svg source={mergedRowSvg(rw, { id: item.id, title, isLast })} alt={`${item.id}: ${line([title, 'merged', pr?.label])}`} width={rw} height={MERGED_ROW_H} />
+      <Svg source={mergedRowSvg(rw, { id: idLabel(item.id), title, isLast })} alt={`${idLabel(item.id)}: ${line([title, 'merged', pr?.label])}`} width={rw} height={MERGED_ROW_H} />
       {pr ? pr.href && Link ? <Link href={pr.href}>{`${pr.label} ↗`}</Link> : <Text color={DONE}>{pr.label}</Text> : null}
     </Box>
   )
@@ -428,7 +438,7 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
   const isCompact = d.tasksMode === 'compact'
   const hero: Hero = {
     kind: 'running',
-    state: `${active.status.toUpperCase()} · ${active.id.toUpperCase()}`,
+    state: `${active.status.toUpperCase()} · ${idLabel(active.id).toUpperCase()}`,
     headline: displayTitle(active.title),
     line: d.activeLine || active.note || ledger?.resume?.state || line([active.size, active.status]),
     progress: { done, total: tasks.length },
@@ -515,7 +525,7 @@ function childRows(u: Desk, d: PanelInput): Element | null {
     return (
       <Box key={`child-${c.item}`} flexDirection="row" justifyContent="space-between" gap={1}>
         <Text color={c.status === 'failed' ? BLOCKED : isLive ? ACCENT : undefined}>
-          {line([c.item, item ? displayTitle(item.title) : undefined])}
+          {line([idLabel(c.item), item ? displayTitle(item.title) : undefined])}
           <Text dimColor>{`  ${line([taskCounter(d.ledgers[c.item] ?? null), c.status, c.lastLine])}`}</Text>
         </Text>
         <Box flexDirection="row" gap={1}>
@@ -561,7 +571,7 @@ function siblingRows(u: Desk, d: PanelInput, W: number): Element | null {
 // ---------- Queue ----------
 
 function renderQueue(u: Desk, d: PanelInput, W: number): Element {
-  const { Box, Text, Button, Input } = u
+  const { Box, Text, Button, Input, Link } = u
   const items = d.backlog?.items ?? []
   const counts = groupCounts(items)
   const { filter, search, expanded } = d.panel
@@ -578,6 +588,7 @@ function renderQueue(u: Desk, d: PanelInput, W: number): Element {
           <Text dimColor>{i.note || (reason ? `This item needs a specification before it can become ready (${reason}).` : i.status === 'blocked' ? 'Blocked without a recorded reason.' : 'No note.')}</Text>
           {(i.needs ?? []).length ? <Text dimColor>{`Needs ${i.needs!.join(', ')}`}</Text> : null}
           {i.spec ? <Text dimColor>{`Spec ${i.spec}`}</Text> : null}
+          {sourceHref(i) && Link ? <Link href={sourceHref(i)}>{`${idLabel(i.id)} · ${displayTitle(i.title)} ↗`}</Link> : null}
           <Text mono>{`/pipeline status ${i.id}`}</Text>
         </Box>,
       )

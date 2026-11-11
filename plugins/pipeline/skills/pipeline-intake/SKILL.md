@@ -17,3 +17,13 @@ A request becomes an item in `docs/pipeline/backlog.json` and a spec in `docs/pi
 6. **Ready is not yours to set.** An item with an empty Open goes to `ready` when every id in `needs` is `merged`; the tool does that.
 7. **Only the tool writes `backlog.json`**: never Edit or Write it, and never `BACKLOG.md`. The spec file is the one file you write by hand.
 8. **Never start the build.** No plan, no worktree, no dispatch, whatever the request sounds like; the user runs `/pipeline next`.
+
+## With queue: github
+
+When `get` answers `"queue": "github"`, the open issues carrying the queue label are the backlog and an issue number is the id. The rules above hold, except these.
+
+- `add` creates a labelled issue with the title, and the note as its body, and answers its number: `added 12 · inbox · no spec`. There are no `needs` in this mode: leave them out, and say a dependency in the spec's prose.
+- The spec is not a file. Write its text with the five headings of `templates/spec.md` and post it with `{ "action": "spec", "id": "12", "text": "<the spec>" }`; the tool puts it on the issue as the spec comment, or replaces the one there. Do not Write a spec file and do not `update` a `spec` path.
+- A question is not an Open section: ask it with `{ "action": "question", "id": "12", "text": "<the question>" }`. The tool posts it on the issue, where the author is notified, and holds the item until the author or you answer there.
+- The one-line answer is `12 added · M · open: none`, with the question after `open:` when you asked one.
+- Never edit an issue, a label or a comment with `gh` yourself: the tool's actions do every change, so its cache and the issue stay in step.
