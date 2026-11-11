@@ -127,6 +127,8 @@ function ghWorld(on: On, state: GhState) {
       if (who && !i.assignees.includes(who)) i.assignees.push(who)
       const off = flag('--remove-assignee')
       if (off) i.assignees = i.assignees.filter(a => a !== off)
+      const body = flag('--body')
+      if (body !== undefined) i.body = body
       state.onEdit?.(i)
       return ok()
     }
@@ -656,7 +658,7 @@ const FILE_BACKLOG = JSON.stringify({
     { id: 'p1', title: 'Login', status: 'merged', pr: '#1' },
     { id: 'p2', title: 'Export', status: 'building', spec: 'docs/pipeline/specs/p2.md', plan: 'docs/pipeline/plans/p2.md', branch: 'feat/p2', ledger: 'docs/pipeline/ledgers/p2.json' },
     { id: 'p3', title: 'Dark mode', status: 'parked' },
-    { id: 'p4', title: 'Import', status: 'inbox', note: 'bob asked for it' },
+    { id: 'p4', title: 'Import', status: 'inbox', note: 'bob asked for it', needs: ['p1', 'p2'] },
   ],
 }, null, 2) + '\n'
 const FILE_LEDGER = JSON.stringify({
@@ -697,6 +699,20 @@ test('migrate-github without apply answers the draft and writes nothing', async 
   expect(runs.some(r => r[0] === 'gh')).toBe(false)
 })
 
+test('add with needs writes the Needs line, and the new issue waits for the open one', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH })
+  const gh: GhState = { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('50')] })] }
+  const runs = ghWorld(on, gh)
+  await call($, { action: 'add', item: { title: 'Import', note: 'bob asked for it', needs: ['2', '#77', 'p9'] } })
+  const made = runs.find(r => r[1] === 'issue' && r[2] === 'create')!
+  expect(made[made.indexOf('--body') + 1]).toBe('bob asked for it\n\nNeeds: #2, #77')
+  const n = gh.issues.find(i => i.title === 'Import')!.number
+  await call($, { action: 'spec', id: String(n), text: SPEC })
+  const out = await json($, { action: 'get', id: String(n) })
+  expect(out.item.status).toBe('inbox')
+  expect(out.item.readiness).toEqual({ ready: false, reason: 'waits for #2' })
+})
+
 test('migrate-github apply creates the issues, posts the specs, copies the active ledger, flips the config and lists what to git rm', async ($, on) => {
   const { files } = world(on, { ...FILE_PROJECT, [EXCLUDE]: '' })
   listFiles(on, files)
@@ -705,8 +721,11 @@ test('migrate-github apply creates the issues, posts the specs, copies the activ
   const answer = text(await call($, { action: 'migrate-github', apply: true }))
   const creates = runs.filter(r => r[0] === 'gh' && r[1] === 'issue' && r[2] === 'create')
   expect(creates.length).toBe(2)
-  expect(creates[0]).toEqual(['gh', 'issue', 'create', '--title', 'Export', '--body', '### What\n\nCSV export of the list.\n\n### Why\n\nUsers asked for it.', '--label', 'pipeline'])
-  expect(creates[1]).toEqual(['gh', 'issue', 'create', '--title', 'Import', '--body', 'bob asked for it', '--label', 'pipeline'])
+  expect(creates[0]).toEqual(['gh', 'issue', 'create', '--title', 'Export', '--body', '### What\n\nCSV export of the list.\n\n### Why\n\nUsers asked for it.\n\nMigrated from p2.', '--label', 'pipeline'])
+  expect(creates[1]).toEqual(['gh', 'issue', 'create', '--title', 'Import', '--body', 'bob asked for it\n\nMigrated from p4.', '--label', 'pipeline'])
+  // p4 needed p1 (merged: no issue) and p2 (now the first issue): the dependency is on its body, and it waits.
+  const export_ = gh.issues.find(i => i.title === 'Export')!.number
+  expect(gh.issues.find(i => i.title === 'Import')!.body).toBe(`bob asked for it\n\nMigrated from p4.\n\nNeeds: #${export_}`)
   expect(gh.issues[0]!.labels).toEqual(['pipeline', 'pipeline:building'])
   expect(gh.issues[0]!.assignees).toEqual(['me'])
   expect(gh.issues[0]!.comments[0]!.body.split('\n').slice(0, 2)).toEqual([SPEC_MARK, '**Pipeline** · building'])

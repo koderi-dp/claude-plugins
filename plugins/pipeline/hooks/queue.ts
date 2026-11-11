@@ -26,6 +26,19 @@ const STATUS_HEAD = '**Pipeline** · '
 const marked = (body: string) => body.trimStart().startsWith(SPEC_MARK) || body.trimStart().startsWith(QUESTION_MARK)
 const idOf = (issue: Issue) => String(issue.number)
 
+/** The issue numbers a `Needs: #12, #14` line of an issue's body names: the issues this one waits for. */
+export function needsOf(body: string): string[] {
+  const line = /^\s*Needs:\s*(.+)$/im.exec(body)?.[1] ?? ''
+  return [...new Set([...line.matchAll(/#(\d+)/g)].map(m => m[1]!))]
+}
+
+/** A body with its `Needs:` line set to the given issue numbers; an existing line is replaced, none is added for no numbers. */
+export function withNeeds(body: string, needs: string[]): string {
+  const kept = body.split('\n').filter(l => !/^\s*Needs:\s/i.test(l)).join('\n').trimEnd()
+  if (!needs.length) return kept
+  return `${kept}${kept ? '\n\n' : ''}Needs: ${needs.map(n => `#${n}`).join(', ')}`
+}
+
 /** The queue label and the three state labels named after it. */
 export function labelsOf(label: string): { queue: string; building: string; blocked: string; needsInfo: string } {
   return { queue: label, building: `${label}:building`, blocked: `${label}:blocked`, needsInfo: `${label}:needs-info` }
@@ -110,8 +123,12 @@ export function toBacklog(issues: Issue[], extras: Extras, label: string, me: st
   const items: Item[] = []
   const readiness: Record<string, Readiness> = {}
   const answered: string[] = []
+  // An issue named on a `Needs:` line holds the one that names it while it is open; a closed or unknown one does not.
+  const open = new Set(issues.filter(i => i.state === 'open').map(idOf))
   for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
     const id = idOf(issue)
+    const needs = needsOf(issue.body).filter(n => n !== id)
+    const waits = needs.filter(n => open.has(n))
     const extra = extras.items[id]
     const has = (l: string) => issue.labels.includes(l)
     const spec = specCommentOf(issue, me)
@@ -129,7 +146,10 @@ export function toBacklog(issues: Issue[], extras: Extras, label: string, me: st
       readiness[id] = { ready: false, reason: 'open question on the issue' }
     } else {
       if (has(L.needsInfo)) answered.push(id)
-      if (spec) {
+      if (waits.length) {
+        status = 'inbox'
+        readiness[id] = { ready: false, reason: `waits for ${waits.map(n => `#${n}`).join(', ')}` }
+      } else if (spec) {
         status = 'ready'
         readiness[id] = { ready: true }
       } else {
@@ -137,7 +157,7 @@ export function toBacklog(issues: Issue[], extras: Extras, label: string, me: st
         readiness[id] = { ready: false, reason: 'no spec' }
       }
     }
-    const item: Item = { id, title: issue.title, status, source: issue.url, updatedAt: issue.createdAt, spec: null }
+    const item: Item = { id, title: issue.title, status, source: issue.url, updatedAt: issue.createdAt, spec: null, ...(needs.length ? { needs } : {}) }
     for (const k of KEPT) if (extra?.[k] !== undefined) (item as Record<string, unknown>)[k] = extra[k]
     items.push(item)
   }
@@ -252,12 +272,13 @@ export function migrationOf(backlog: Backlog): { create: Item[]; active: Item[];
   }
 }
 
-/** The body of an issue made from a file item: its spec's What and Why, or its note when it has no spec or both are empty. */
-export function issueBodyOf(specMd: string | null, note: string | undefined): string {
+/** The body of an issue made from a file item: its spec's What and Why, or its note when it has no spec or both are empty; then the id it had. */
+export function issueBodyOf(specMd: string | null, note: string | undefined, was?: string): string {
   const what = specMd === null ? '' : specPart(specMd, 'What')
   const why = specMd === null ? '' : specPart(specMd, 'Why')
-  if (!what && !why) return (note ?? '').trim()
-  return [...(what ? ['### What', '', what] : []), ...(what && why ? [''] : []), ...(why ? ['### Why', '', why] : [])].join('\n')
+  const text = !what && !why ? (note ?? '').trim() : [...(what ? ['### What', '', what] : []), ...(what && why ? [''] : []), ...(why ? ['### Why', '', why] : [])].join('\n')
+  // The id the item had in the file backlog, so a `p78` in an old spec, commit or PR can still be found.
+  return was ? `${text}${text ? '\n\n' : ''}Migrated from ${was}.` : text
 }
 
 /** The text of a spec's Open section without the template's italic placeholder lines; empty when there is no question. */

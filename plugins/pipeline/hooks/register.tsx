@@ -12,7 +12,7 @@ import type { Places } from './files'
 import * as tracker from './tracker'
 import { QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
-import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import type { Extras, Leftover, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
 import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
@@ -537,7 +537,9 @@ async function issueState($: EngineInterface, found: string, id: string, fallbac
 async function addIssue($: EngineInterface, found: string, c: Config | null, e: ToolInput): Promise<string> {
   const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
   if (!title) throw new Refused('add needs item.title')
-  const body = typeof e.item === 'string' ? '' : (e.item?.note ?? '')
+  // The issues this one waits for go on a `Needs:` line of the body, where the tool reads them back.
+  const needs = typeof e.item === 'string' || !Array.isArray(e.item?.needs) ? [] : e.item.needs.map(n => String(n).replace(/^#/, '')).filter(n => /^\d+$/.test(n))
+  const body = withNeeds(typeof e.item === 'string' ? '' : (e.item?.note ?? ''), needs)
   const r = await tracker.create(ghRun($, found), { title, body, labels: [labelOf(c)] })
   if (!r.ok) throw new Refused(r.error)
   const n = r.value
@@ -2250,6 +2252,7 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
   const extras = await extrasOrRefuse($, found)
 
   const ids = new Map<string, string>()
+  const bodies = new Map<string, string>()
   const lines: string[] = []
   const stop = (error: string) => new Refused([`migration stopped: ${error}`, ...lines, 'the issues above stay; apply again and it skips them'].join('\n'))
   for (const item of m.create) {
@@ -2263,10 +2266,13 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
     let n: number
     if (there) {
       n = there.number
+      bodies.set(item.id, there.body)
     } else {
-      const made = await tracker.create(run, { title: item.title, body: issueBodyOf(spec, item.note), labels: [label] })
+      const body = issueBodyOf(spec, item.note, item.id)
+      const made = await tracker.create(run, { title: item.title, body, labels: [label] })
       if (!made.ok) throw stop(made.error)
       n = made.value
+      bodies.set(item.id, body)
     }
     ids.set(item.id, String(n))
     lines.push(`${item.id} → #${n}`)
@@ -2284,6 +2290,17 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
       const labelledNow = await tracker.edit(run, n, isActive ? { add: [add], assign: me } : { add: [add] })
       if (!labelledNow.ok) throw stop(labelledNow.error)
     }
+  }
+
+  // The dependencies, once every issue has its number: a `Needs:` line on each issue whose item waited for others that
+  // became issues. A merged or parked item it needed has no issue and is left out.
+  for (const item of m.create) {
+    const needs = (item.needs ?? []).map(n => ids.get(n)).filter((n): n is string => n !== undefined)
+    const body = bodies.get(item.id) ?? ''
+    const next = withNeeds(body, needs)
+    if (!needs.length || next === body) continue
+    const set = await tracker.setBody(run, Number(ids.get(item.id)), next)
+    if (!set.ok) throw stop(set.error)
   }
 
   // The records of the items in flight, under the issue's number; the branch and the worktree stay what they were.

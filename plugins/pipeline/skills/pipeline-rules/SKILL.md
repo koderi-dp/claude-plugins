@@ -38,4 +38,4 @@ When `config.queue` is `github`, the open issues with the queue label are the ba
 | `<worktree>/.pipeline/<id>/plan.md` | you | never |
 | `<worktree>/.pipeline/<id>/` briefs; reports | the tool; the subagents | never |
 
-`.pipeline/` is ignored through `.git/info/exclude`, so `git status` shows none of it. Never write under `.git/pipeline/` and never change an issue with `gh` yourself: the tool's actions do both. There is no `move` and no `needs` in this mode, and an item is `ready` once its issue has a spec comment and no open question.
+`.pipeline/` is ignored through `.git/info/exclude`, so `git status` shows none of it. Never write under `.git/pipeline/` and never change an issue with `gh` yourself: the tool's actions do both. There is no `move` in this mode. An item is `ready` once its issue has a spec comment, no open question, and no open issue named on a `Needs: #12` line of its body.

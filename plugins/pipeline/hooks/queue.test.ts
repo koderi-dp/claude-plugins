@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Backlog, Item } from '../types'
 
 import { section } from './plan'
-import { EMPTY_EXTRAS, applyOps, extrasOf, isAnswered, isTrusted, issueBodyOf, labelsOf, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import { EMPTY_EXTRAS, applyOps, extrasOf, isAnswered, isTrusted, issueBodyOf, labelsOf, migrationOf, needsOf, withNeeds, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import { QUESTION_MARK, SPEC_MARK } from './tracker'
 import type { Issue, IssueComment } from './tracker'
 
@@ -193,6 +193,29 @@ test('quoted: title, author, a multi-line body and a comment by me, each line qu
   expect(q).toContain('> @me, 2026-11-02T10:00:00Z:\n> Noted')
 })
 
+test('a Needs line holds an issue while an issue it names is open; a closed or unknown one does not', () => {
+  const spec = c('me', renderSpecComment(SPEC, 'ready', ''))
+  expect(needsOf('We need it\n\nNeeds: #3, #14 and #3')).toEqual(['3', '14'])
+  expect(needsOf('It needs: care, not #3')).toEqual([])
+  expect(withNeeds('Body', ['3', '14'])).toBe('Body\n\nNeeds: #3, #14')
+  expect(withNeeds('Body\n\nNeeds: #9', ['3'])).toBe('Body\n\nNeeds: #3')
+  expect(withNeeds('Body\n\nNeeds: #9', [])).toBe('Body')
+  const issues = [
+    issue(3, { comments: [spec] }),
+    issue(4, { body: 'After the export\n\nNeeds: #3', comments: [spec] }),          // waits: #3 is open
+    issue(5, { body: 'Needs: #99', comments: [spec] }),                              // #99 is not in the queue: not held
+    issue(6, { body: 'Needs: #7', comments: [spec] }),                               // #7 is closed: not held
+    issue(7, { state: 'closed' }),
+    issue(8, { body: 'Needs: #3' }),                                                 // waits, and has no spec either
+  ]
+  const { backlog, readiness } = toBacklog(issues, EMPTY_EXTRAS, 'pipeline', 'me')
+  expect(backlog.items.map(i => `${i.id} ${i.status}`)).toEqual(['3 ready', '4 inbox', '5 ready', '6 ready', '8 inbox'])
+  expect(readiness['4']).toEqual({ ready: false, reason: 'waits for #3' })
+  expect(readiness['8']).toEqual({ ready: false, reason: 'waits for #3' })
+  expect(backlog.items.find(i => i.id === '4')!.needs).toEqual(['3'])
+  expect(backlog.items.find(i => i.id === '3')!.needs).toBeUndefined()
+})
+
 test('migrationOf: open items become issues, merged and parked do not', () => {
   const b: Backlog = { version: 1, items: [{ id: 'p1', title: 'a', status: 'merged' }, { id: 'p2', title: 'b', status: 'building' }, { id: 'p3', title: 'c', status: 'parked' }, { id: 'p4', title: 'd', status: 'inbox' }, { id: 'p5', title: 'e', status: 'blocked' }] }
   const m = migrationOf(b)
@@ -206,6 +229,8 @@ test('issueBodyOf: the spec\'s What and Why, the note without a spec or when bot
   expect(issueBodyOf(null, 'alice asked for it')).toBe('alice asked for it')
   expect(issueBodyOf('## What\n\n*What it does.*\n\n## Why\n\n', 'the note')).toBe('the note')
   expect(issueBodyOf(null, undefined)).toBe('')
+  expect(issueBodyOf(null, 'alice asked for it', 'p78')).toBe('alice asked for it\n\nMigrated from p78.')
+  expect(issueBodyOf(null, undefined, 'p78')).toBe('Migrated from p78.')
 })
 
 test('openQuestionOf: the Open section without the template placeholders', () => {

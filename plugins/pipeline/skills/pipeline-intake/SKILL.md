@@ -22,7 +22,7 @@ A request becomes an item in `docs/pipeline/backlog.json` and a spec in `docs/pi
 
 When `get` answers `"queue": "github"`, the open issues carrying the queue label are the backlog and an issue number is the id. The rules above hold, except these.
 
-- `add` creates a labelled issue with the title, and the note as its body, and answers its number: `added 12 · inbox · no spec`. There are no `needs` in this mode: leave them out, and say a dependency in the spec's prose.
+- `add` creates a labelled issue with the title, and the note as its body, and answers its number: `added 12 · inbox · no spec`. `needs` holds issue numbers (`"needs": ["12"]`): the tool writes them as a `Needs: #12` line in the issue's body, and the issue waits while one it names is open in the queue.
 - The spec is not a file. Write its text with the five headings of `templates/spec.md` and post it with `{ "action": "spec", "id": "12", "text": "<the spec>" }`; the tool puts it on the issue as the spec comment, or replaces the one there. Do not Write a spec file and do not `update` a `spec` path.
 - A question is not an Open section: ask it with `{ "action": "question", "id": "12", "text": "<the question>" }`. The tool posts it on the issue, where the author is notified, and holds the item until the author or you answer there.
 - The one-line answer is `12 added · M · open: none`, with the question after `open:` when you asked one.

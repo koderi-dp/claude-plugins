@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { NO_AUTH, NO_GH, close, comment, create, edit, editComment, ensureLabels, list, me, read } from './tracker'
+import { NO_AUTH, NO_GH, close, comment, create, edit, editComment, ensureLabels, list, me, read, setBody } from './tracker'
 import type { Run } from './tracker'
 
 type Answer = { exitCode?: number; stdout?: string; stderr?: string } | null
@@ -52,6 +52,12 @@ test('edit sends only the flags it was given, and none means no call', async () 
   expect(calls.length).toBe(1)
   await edit(run, 12, { unassign: 'me' })
   expect(calls[1]).toEqual(['gh', 'issue', 'edit', '12', '--remove-assignee', 'me'])
+})
+
+test('setBody replaces the body of an issue', async () => {
+  const { run, calls } = fake({ 'gh issue edit': { stdout: '' } })
+  expect(await setBody(run, 12, 'new body')).toEqual({ ok: true, value: true })
+  expect(calls[0]).toEqual(['gh', 'issue', 'edit', '12', '--body', 'new body'])
 })
 
 test('editComment patches by id; ensureLabels creates each with --force', async () => {

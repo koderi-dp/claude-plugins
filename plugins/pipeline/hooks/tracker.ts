@@ -129,6 +129,12 @@ export async function edit(run: Run, number: number, change: { add?: string[]; r
   return r.ok ? { ok: true, value: true } : r
 }
 
+/** Replaces an issue's body. Used only on issues the tool opened itself (a migrated item's dependencies). */
+export async function setBody(run: Run, number: number, body: string): Promise<Result<true>> {
+  const r = await gh(run, ['issue', 'edit', String(number), '--body', body])
+  return r.ok ? { ok: true, value: true } : r
+}
+
 /** Closes an issue. */
 export async function close(run: Run, number: number): Promise<Result<true>> {
   const r = await gh(run, ['issue', 'close', String(number)])

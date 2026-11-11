@@ -30,7 +30,7 @@ Who it is for: the user of a GitHub repository whose requests are issues, who wa
 | Modes | A config key `queue`: `file` (default, today) or `github`. | Solo projects where Claude owns the list keep what works. |
 | What is in the queue | Open issues carrying the label in `queueLabel` (default `pipeline`). | Labelling needs triage or write access, so a stranger's issue on a public repository is never built hands-off. |
 | Order | Oldest issue first. `/pipeline run <n>` runs a named issue. | GitHub issues have no manual order; Projects is out of scope. |
-| Dependencies | Not enforced. `needs` and `move` do not exist in this mode. | The tracker is where a dependency is written; enforcing it means parsing prose. |
+| Dependencies | A `Needs: #12, #14` line in the issue's body: the issue waits while one it names is open in the queue (added in 0.4.1; first built as not enforced). `move` does not exist in this mode. | The tracker is where a dependency is written; enforcing it means parsing prose. |
 | The spec | The pipeline's one comment on the issue, in full; a local file is a cache of it. | The spec is one page; on the issue it is visible to the author before the build and survives the machine. |
 | The issue body | Never edited. | It is the author's request as written. |
 | Status on the issue | Labels, and the same one comment edited in place. | Every new comment notifies every subscriber. |
