@@ -106,7 +106,7 @@ The limits of this mode: issues have no order of their own, so the oldest ready 
 | `models` | sonnet medium, opus high, opus xhigh, opus high | `implementer`, `reviewer`, `final`, `escalate`, each `{ model, effort }` |
 | `limits` | `fixRounds` 3, `silentMinutes` 10, `taskMinutes` 45, `itemTokens` 4000000, `parallel` 1 | What the watchdog and the run skill enforce; `parallel` is how many child sessions `run all` keeps going under `runner: session` |
 | `runner` | `subagent` | `subagent` runs an item in your session with subagents; `session` runs each item in a headless child session of its own (below) |
-| `merge` | `pr` | `auto` merges on green CI with no open Critical or Important finding; `pr` stops at an open PR |
+| `merge` | `pr` | `auto` merges on green CI with no open Critical or Important finding; `pr` stops at an open PR. The lead merges with `gh pr merge` itself, so `auto` needs no auto-merge setting on GitHub and works on a private repository |
 | `mergeMethod` | `merge` | `merge` (a merge commit) or `squash` |
 | `stop` | six conditions | Free text the run skill reads: when it blocks the item and asks instead of deciding |
 | `afterMerge` | `["docs/pipeline/BACKLOG.md"]` | Paths to regenerate, commands to run or skills to invoke after a merge |
