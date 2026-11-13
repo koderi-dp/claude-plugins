@@ -134,6 +134,8 @@ function ghWorld(on: On, state: GhState) {
       if (off) i.assignees = i.assignees.filter(a => a !== off)
       const body = flag('--body')
       if (body !== undefined) i.body = body
+      const title = flag('--title')
+      if (title !== undefined) i.title = title
       state.onEdit?.(i)
       return ok()
     }
@@ -889,4 +891,39 @@ test('a second apply does not ask the open question twice', async ($, on) => {
   expect(text(await call($, { action: 'migrate-github', apply: true }))).toContain('p9 → #2')
   expect(gh.issues[0]!.comments.filter(c => c.body.startsWith(QUESTION_MARK)).length).toBe(1)
   expect(gh.issues[0]!.labels).toEqual(['pipeline', 'pipeline:needs-info'])
+})
+
+test('0.4.5: update rewrites an issue body and title through the tool, and never loses the Needs line', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH })
+  const state: GhState = { me: 'me', issues: [issueOf(1, 'Schema'), issueOf(2, 'Export', { body: 'Export, please\n\nNeeds: #1' })] }
+  const runs = ghWorld(on, state)
+  await json($, { action: 'get' })
+  // A new body that names no dependency keeps the one the issue had.
+  expect(text(await call($, { action: 'update', id: '2', set: { body: '## What\n\nCSV export of the list.', title: 'CSV export' } }))).toBe('2 · inbox · waits for #1 · set title, body')
+  expect(state.issues[1]).toMatchObject({ title: 'CSV export', body: '## What\n\nCSV export of the list.\n\nNeeds: #1' })
+  expect(has(runs, ['gh', 'issue', 'edit', '2', '--title', 'CSV export'])).toBe(true)
+  expect((await json($, { action: 'get', id: '2' }))['item']).toMatchObject({ title: 'CSV export', needs: ['1'] })
+  // needs sets the line; an empty list removes it.
+  await call($, { action: 'add', item: { title: 'Auth' } })
+  expect(text(await call($, { action: 'update', id: '2', set: { needs: ['#1', 3] } }))).toContain('set needs')
+  expect(state.issues[1]!.body).toBe('## What\n\nCSV export of the list.\n\nNeeds: #1, #3')
+  await call($, { action: 'update', id: '2', set: { needs: [] } })
+  expect(state.issues[1]!.body).toBe('## What\n\nCSV export of the list.')
+  // A body with its own Needs line is taken at its word; the same text again changes nothing.
+  await call($, { action: 'update', id: '2', set: { body: 'Short.\n\nNeeds: #3' } })
+  expect(state.issues[1]!.body).toBe('Short.\n\nNeeds: #3')
+  const edits = runs.filter(r => r[1] === 'issue' && r[2] === 'edit').length
+  expect(text(await call($, { action: 'update', id: '2', set: { body: 'Short.\n\nNeeds: #3' } }))).toContain('nothing: the issue already reads so')
+  expect(runs.filter(r => r[1] === 'issue' && r[2] === 'edit').length).toBe(edits)
+  expect(text(await call($, { action: 'update', id: '2', set: { body: 7 } }))).toBe('refused: update: body is text')
+})
+
+test('0.4.5: update with a body and a status does both', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const state: GhState = { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('200')] })] }
+  ghWorld(on, state)
+  expect(text(await call($, { action: 'update', id: '2', set: { status: 'blocked', note: 'waits on the API key', body: 'New text.' } }))).toBe('2 · blocked · set body, note')
+  expect(state.issues[0]!.body).toBe('New text.')
+  expect(state.issues[0]!.labels).toContain('pipeline:blocked')
+  expect(JSON.parse(files.get(ITEMS)!).items['2']).toMatchObject({ status: 'blocked' })
 })

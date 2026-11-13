@@ -129,7 +129,13 @@ export async function edit(run: Run, number: number, change: { add?: string[]; r
   return r.ok ? { ok: true, value: true } : r
 }
 
-/** Replaces an issue's body. Used only on issues the tool opened itself (a migrated item's dependencies). */
+/** Replaces an issue's title. */
+export async function setTitle(run: Run, number: number, title: string): Promise<Result<true>> {
+  const r = await gh(run, ['issue', 'edit', String(number), '--title', title])
+  return r.ok ? { ok: true, value: true } : r
+}
+
+/** Replaces an issue's body: a migrated item's dependencies, and `update` with a body or needs. */
 export async function setBody(run: Run, number: number, body: string): Promise<Result<true>> {
   const r = await gh(run, ['issue', 'edit', String(number), '--body', body])
   return r.ok ? { ok: true, value: true } : r

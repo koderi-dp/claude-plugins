@@ -33,6 +33,7 @@ When `config.queue` is `github`, the open issues with the queue label are the ba
 | --- | --- | --- |
 | `docs/pipeline/config.json`, `docs/pipeline/rules.md` | you or the user, by hand | yes, on `mainBranch` |
 | The issue's spec comment and labels | the tool (`add`, `spec`, `question`, `update`, `park`, `unpark`, `begin`, `close`) | on GitHub |
+| The issue's title, body and `Needs:` line | the tool: `update` with `set: { title?, body?, needs? }`; a new body keeps the dependencies unless `needs` is given, `needs: []` removes them | on GitHub |
 | `.git/pipeline/issues.json`, `items.json`, `facts.md`, `<id>/ledger.json` | the tool only | never |
 | `<worktree>/.pipeline/<id>/spec.md` | the tool, at `begin` and `spec` | never |
 | `<worktree>/.pipeline/<id>/plan.md` | you | never |

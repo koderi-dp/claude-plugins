@@ -12,7 +12,7 @@ import type { Places } from './files'
 import * as tracker from './tracker'
 import { QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
-import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, needsOf, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import type { Extras, Leftover, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
 import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
@@ -58,7 +58,7 @@ const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', '
 const TOOL_DESCRIPTION =
   'The pipeline of this project: backlog, ledgers and the build loop. Main session only; a subagent\'s call is ignored. Every write answers one line. The pipeline-run and pipeline-rules skills say when to call what. Actions: ' +
   '`get` { id?, titles?, full? } → JSON: the active item of this session, its resume block, open watchdog signals (each delivered once), children, siblings, counts, the next three items, the config keys a run reads, and `mergedPending` (items whose PR was merged by hand; close them first). `signals` → the open signals only. `status` { id? } → the status block, or one item\'s ledger as text. ' +
-  'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set }, `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
+  'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set } (under queue github, set { title?, body?, needs? } rewrites the issue\'s own text: a new body keeps the issue\'s Needs: line unless needs is given, and an empty needs list removes it; never edit an issue with gh yourself), `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
   'Run, in order: `begin` { item } claims the item, makes its worktree and branch, records the base and answers the worktree to enter. `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
   '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
   '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. `merge` { item, pr? } ends an item whose PR is open: it waits for the PR\'s checks itself however long they take, merges with config.mergeMethod through gh (no auto-merge setting needed) and runs close; red checks answer their names, for a fix wave and another merge. ' +
@@ -548,6 +548,47 @@ async function addIssue($: EngineInterface, found: string, c: Config | null, e: 
   const at = await nowIso($)
   await editCache($, found, issues => [...issues.filter(i => i.number !== n), { number: n, title, body, author: self.me, labels: [labelOf(c)], assignees: [], state: 'open', url: '', createdAt: at, comments: [] }])
   return `added ${n} · ${await issueState($, found, String(n), 'inbox · no spec')}`
+}
+
+/**
+ * `update` with `title`, `body` or `needs` under queue github: the issue's own text, written through the tool so
+ * the `Needs:` line is never lost. A new body that names no dependencies keeps the ones the issue had; `needs`
+ * sets them, and an empty list removes them. Answers what it changed.
+ */
+async function editIssueText($: EngineInterface, found: string, id: string, set: Record<string, unknown>): Promise<string[]> {
+  const run = ghRun($, found)
+  const issue = (await readCache($, found))?.issues.find(i => String(i.number) === id) ?? self.queue?.issues.find(i => String(i.number) === id)
+  if (!issue) throw new Refused(`no issue ${id} in the queue`)
+  const done: string[] = []
+  let title = issue.title
+  let body = issue.body
+  if ('title' in set) {
+    if (typeof set['title'] !== 'string' || !set['title'].trim()) throw new Refused('update: title is text')
+    if (set['title'].trim() !== issue.title) {
+      const r = await tracker.setTitle(run, issue.number, set['title'].trim())
+      if (!r.ok) throw new Refused(r.error)
+      title = set['title'].trim()
+      done.push('title')
+    }
+  }
+  if ('body' in set || 'needs' in set) {
+    if ('body' in set && typeof set['body'] !== 'string') throw new Refused('update: body is text')
+    if ('needs' in set && !Array.isArray(set['needs'])) throw new Refused('update: needs is a list of issue numbers')
+    const given = typeof set['body'] === 'string' ? set['body'] : issue.body
+    const needs = Array.isArray(set['needs'])
+      ? set['needs'].map(n => String(n).replace(/^#/, '')).filter(n => /^\d+$/.test(n))
+      : needsOf(/^\s*Needs:\s/im.test(given) ? given : issue.body)
+    const next = withNeeds(given, needs)
+    if (next !== issue.body) {
+      const r = await tracker.setBody(run, issue.number, next)
+      if (!r.ok) throw new Refused(r.error)
+      body = next
+      if ('body' in set) done.push('body')
+      if ('needs' in set || needsOf(issue.body).join() !== needs.join()) done.push('needs')
+    }
+  }
+  if (done.length) await editCache($, found, issues => issues.map(i => (i.number === issue.number ? { ...i, title, body } : i)))
+  return done.length ? [...new Set(done)] : ['nothing: the issue already reads so']
 }
 
 /** `spec`: edits the spec comment (its state and detail kept) or posts one as ready; rewrites the worktree's spec.md. */
@@ -1171,9 +1212,18 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
     case 'update': {
       const id = need(e.id)
       if (!e.set || typeof e.set !== 'object') throw new Refused('update needs set')
+      // Under queue github the title, the body and the dependencies are the issue's own text.
+      const TEXT = ['title', 'body', 'needs']
+      let said: string[] = []
+      let fields = e.set as Record<string, unknown>
+      if (isGithub(c) && TEXT.some(k => k in fields)) {
+        said = await editIssueText($, found, id, fields)
+        fields = Object.fromEntries(Object.entries(fields).filter(([k]) => !TEXT.includes(k)))
+        if (!Object.keys(fields).length) return `${id} · ${await issueState($, found, id, 'updated')} · set ${said.join(', ')}`
+      }
       const before = current.items.find(i => i.id === id)
-      const next = updateItem(current, id, e.set as Partial<Item>, now)
-      const others = Object.keys(e.set).filter(k => k !== 'status')
+      const next = updateItem(current, id, fields as Partial<Item>, now)
+      const others = [...said, ...Object.keys(fields).filter(k => k !== 'status')]
       const out = await writeLine($, found, next, id, state => [id, state, ...(others.length ? [`set ${others.join(', ')}`] : [])].join(' · '))
       const after = next.items.find(i => i.id === id)
       if (before && after && startsRun(before.status, after.status)) await queueRename($, c, after)
