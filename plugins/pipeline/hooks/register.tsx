@@ -35,9 +35,9 @@ import type { Call } from './watch'
 
 const TOOL = 'mcp__pipeline__pipeline'
 const PANE = 'pipeline'
-const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
+const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `discuss`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
 const USAGE =
-  'pipeline: status [id] | panel | config [key=value] | init | add <text> | next | run <id> | run all | migrate | migrate github | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
+  'pipeline: status [id] | panel | config [key=value] | init | add <text> | discuss <text or id> | next | run <id> | run all | migrate | migrate github | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
 const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'mode', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers', 'pushMain', 'queue', 'queueLabel']
 const CONFIG_FILE = 'docs/pipeline/config.json'
 const BACKLOG_FILE = 'docs/pipeline/backlog.json'
@@ -188,6 +188,9 @@ async function autoOpen($: EngineInterface, reason: string): Promise<void> {
 // ---------- prompts the commands hand the model ----------
 
 const call = (input: Record<string, unknown>) => `${TOOL} ${JSON.stringify(input)}`
+
+const DISCUSS_PROMPT = (text: string) =>
+  `Use the pipeline-discuss skill for this: "${text}". First tool call: ${call({ action: 'get', titles: true })} (is it an item already, or a new request). Then ask me about it one question at a time, show me the spec, and save it once I agree. Never start the build.`
 
 const INTAKE_PROMPT = (text: string) =>
   `Use the pipeline-intake skill for this request: "${text}". First tool call: ${call({ action: 'get', titles: true })} (the duplicate check: every item as id, status and title). Then add the item and write its spec as the skill says, and answer in one line. Never start the build.`
@@ -3288,6 +3291,9 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
     case 'add':
       if (!arg) return { text: 'pipeline: add needs the request, as /pipeline add <text>' }
       return prompt(`pipeline: intake of "${arg}"…`, INTAKE_PROMPT(arg))
+    case 'discuss':
+      if (!arg) return { text: 'pipeline: discuss needs a request or an item, as /pipeline discuss <text or id>' }
+      return prompt(`pipeline: discussing "${arg}"…`, DISCUSS_PROMPT(arg))
     case 'next': {
       const begun = await beginInCode($, '')
       if (begun) return 'refused' in begun ? { text: `pipeline: ${begun.refused}` } : prompt(`pipeline: ${begun.id} begun…`, DIRECT_PROMPT(begun.answer, begun.id, false))

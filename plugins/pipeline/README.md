@@ -84,6 +84,7 @@ The limits of this mode: issues have no order of their own, so the oldest ready 
 | `/pipeline migrate` | Move an existing project onto the pipeline (below) |
 | `/pipeline migrate github` | Move a project that already has a file backlog onto GitHub issues (below) |
 | `/pipeline add <text>` | Intake: an item and its spec, in one line back; never starts the build |
+| `/pipeline discuss <text or id>` | The slow intake: asks you a few questions one at a time, shows the spec, saves it once you agree; for a new request or an existing item |
 | `/pipeline next` | Run the first ready item (under `runner: session`, start its child session) |
 | `/pipeline run <id>` / `run all` | Run one item, or until nothing is ready or a stop condition fires |
 | `/pipeline status [id]` | The status block, or one item's ledger as text; works on a phone over Remote Control |
@@ -174,6 +175,7 @@ The run skill calls `get` once per item and after a restart, `signals` for watch
 ## The skills
 
 - `pipeline-intake`: a request in any wording becomes an item and a spec; at most one question, never a build.
+- `pipeline-discuss`: the interview before a spec; loads only on `/pipeline discuss` or when you ask to talk an item through.
 - `pipeline-run`: one item from pick to merge, with the plan format, briefs rendered by the tool, the ledger and one line per turn; resumes from the ledger's `resume` block after a restart.
 - `pipeline-init`: sets a new project up: config fitted to its scripts and layout, an empty backlog, a rules.md; hands over to migrate when a queue exists. Also reachable as the `/pipeline-init` skill when the `/pipeline` command is not listed.
 - `pipeline-rules`: loaded in every session of a project with a pipeline; where the files are, who writes them, the reply shape.
@@ -232,7 +234,7 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 
 | Part | Name |
 | --- | --- |
-| Skills | `pipeline-init`, `pipeline-intake`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
+| Skills | `pipeline-init`, `pipeline-intake`, `pipeline-discuss`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
 | Templates | `templates/spec.md`; the four briefs (implementer, fix, review, final) are in `hooks/templates.ts` and rendered by the tool's `brief` action; a project file `docs/pipeline/templates/<kind>.md` replaces one |
 | Tool | `mcp__pipeline__pipeline` |
 | Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `merged.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts`; under `queue: github`, `tracker.ts` (the only module that runs `gh`) and `queue.ts` (issues to items and back) |
