@@ -267,14 +267,15 @@ test('0.5.4: a host that refuses the tool is told at start, and /pipeline next c
   const { submitted, writes } = world(on, { [CONFIG]: VALID_CONFIG })
   const toasts: string[] = []
   on('ui.toast', (_$, e) => {
-    toasts.push(String((e as { message?: string }).message ?? e))
+    toasts.push(String((e as { text?: string }).text ?? (e as { message?: string }).message ?? ''))
     return { value: undefined } as never
   })
   await ($ as unknown as { session: { start: (e: never) => Promise<unknown> } }).session.start({ cwd: MAIN, surface: 'terminal', isInteractive: true } as never)
   const next = await run($, 'next')
   expect(next.text).toContain('could not be registered in this session (')
   expect(submitted).toEqual([])
-  expect(writes).toEqual([])
+  // Nothing claimed: only the session's own heartbeat file was written.
+  expect(writes.filter(w => !w.endsWith('pipeline-live.json'))).toEqual([])
   expect((await run($, 'status')).text).toContain('could not be registered')
   expect(toasts.some(t => t.includes('could not be registered'))).toBe(true)
   refusesTool = false
