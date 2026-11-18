@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { NO_AUTH, NO_GH, close, comment, create, createPr, edit, editComment, ensureLabels, list, me, read, setBody, setTitle, checks, mergePr, watchChecks } from './tracker'
+import { NO_AUTH, NO_GH, close, comment, create, createPr, edit, editComment, ensureLabels, list, me, read, setBody, setTitle, checks, mergePr, prInfo, watchChecks } from './tracker'
 import type { Issue, Run } from './tracker'
 import { api, restGithub } from './fixtures/github'
 import type { RestState } from './fixtures/github'
@@ -382,4 +382,10 @@ test('watchChecks with CI expected waits five minutes for a first check: one tha
   const never = polled([[]])
   expect(await watchChecks(never.run, 96, never.wait, true)).toEqual({ ok: true, value: { state: 'none', failing: [] } })
   expect(never.waits.length).toBe(60)
+})
+
+test('prInfo answers the head branch of a pull request and whether GitHub merged it', async () => {
+  const { run } = fake({ [`GET ${R}/pulls/114`]: json({ number: 114, head: { ref: 'fix/51-brand-review', sha: 'abc' }, merged: true }), [`GET ${R}/pulls/7`]: json({ number: 7, head: { sha: 'abc' } }) })
+  expect(await prInfo(run, 114)).toEqual({ ok: true, value: { head: 'fix/51-brand-review', merged: true } })
+  expect(await prInfo(run, 7)).toEqual({ ok: true, value: { head: '', merged: false } })
 })

@@ -910,3 +910,12 @@ test('0.5.2: a repository with workflows whose checks never report is not merged
   expect(runs.filter(r => r[0] === 'sleep').length).toBe(60)
   expect(text(await call($, { action: 'merge', item: '2', force: true }))).toContain('2 merged · PR #5')
 })
+
+test('0.5.4: a ledger written for an issue not yet begun is the item\'s own on the next write, never a stale file', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  runWorld(on, { checks: null, issues: [issueOf(2, 'Export', { labels: ['pipeline'], comments: [] })] })
+  expect(text(await call($, { action: 'ledger', item: '2', set: { branch: 'fix/1-follow-up', pr: '#5' } }))).not.toContain('refused')
+  const again = text(await call($, { action: 'ledger', item: '2', set: { blockers: ['waits for CI'] } }))
+  expect(again).not.toContain('refused')
+  expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ branch: 'fix/1-follow-up', pr: '#5', blockers: ['waits for CI'] })
+})

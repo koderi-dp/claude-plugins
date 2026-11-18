@@ -296,6 +296,15 @@ export async function createPr(run: Run, input: { base: string; head: string; ti
   return typeof n === 'number' ? { ok: true, value: n } : fail(r)
 }
 
+/** A pull request's head branch and whether GitHub has merged it; an unknown one reads as an empty branch, not merged. */
+export async function prInfo(run: Run, pr: number): Promise<Result<{ head: string; merged: boolean }>> {
+  const r = await api(run, 'GET', `${REPO}/pulls/${pr}`)
+  if (!r.ok) return fail(r)
+  const o = obj(parse(r.value))
+  const ref = obj(o['head'])['ref']
+  return { ok: true, value: { head: typeof ref === 'string' ? ref : '', merged: o['merged'] === true || typeof o['merged_at'] === 'string' } }
+}
+
 /** Merges a pull request now, with a merge commit or squashed. Never auto-merge: that needs a repository setting. */
 export async function mergePr(run: Run, pr: number, method: 'merge' | 'squash'): Promise<Result<true>> {
   return done(await api(run, 'PUT', `${REPO}/pulls/${pr}/merge`, [['merge_method', method]]))

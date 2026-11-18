@@ -1204,7 +1204,9 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       if (onDisk.error) throw new Refused(onDisk.error)
       // A ledger file the item does not link is a leftover of a removed item: never merged into silently.
       const linked = current.items.find(i => i.id === id)?.ledger
-      if (onDisk.value && (linked === null || linked === undefined)) {
+      // With queue: github an issue number is never used twice and the link of an item not yet in flight is not kept,
+      // so a ledger on disk under this id is this item's own: it is taken, never a dead end.
+      if (onDisk.value && (linked === null || linked === undefined) && !isGithub(c)) {
         throw new Refused(`${ledgerFile} exists but ${id} has no ledger link: a stale file of an earlier item; move or delete it, or link it with update { id: "${id}", set: { ledger: "${ledgerFile}" } }`)
       }
       // A wrong shape is refused before anything is written; what was plainly meant (text for the resume state) is kept.
@@ -1590,6 +1592,12 @@ async function mergeAction($: EngineInterface, found: string, c: Config | null, 
   const n = Number(/(\d+)\/?$/.exec(pr)?.[1])
   if (!n) throw new Refused(`merge needs the pull request: pass "pr": "#31" (${id} carries none)`)
   const yourself = `merge pull request #${n} yourself, then close`
+  // A pull request the item did not open itself (a follow-up branch, a PR made by hand): its head is the item's
+  // branch from here on, so close looks for the right one.
+  if (!(typeof ledger?.branch === 'string' && ledger.branch) && !item.branch) {
+    const info = await tracker.prInfo(ghRun($, found), n)
+    if (info.ok && info.value.head) await runTool($, { action: 'ledger', item: id, set: { branch: info.value.head, pr: `#${n}` } })
+  }
   // A real wait between polls: `sleep` as a process, so it does not hang on a clock that only a test moves; the clock where there is no sleep.
   const wait = async (ms: number): Promise<void> => {
     try {
@@ -1874,7 +1882,13 @@ async function closeAction($: EngineInterface, found: string, c: Config | null, 
   }
   if (item.status !== 'merged' && !e.force) {
     const tip = (await gitOut($, found, ['rev-parse', '--verify', '-q', branch])) ?? (await gitOut($, found, ['rev-parse', '--verify', '-q', `origin/${branch}`]))
-    const isIn = tip !== null && (await gitMain($, found, ['merge-base', '--is-ancestor', tip, `origin/${main}`])).ok
+    let isIn = tip !== null && (await gitMain($, found, ['merge-base', '--is-ancestor', tip, `origin/${main}`])).ok
+    // GitHub saying the pull request is merged settles it, also after a squash and for a branch of another name.
+    const prN = Number(/(\d+)\/?$/.exec(pr ?? '')?.[1])
+    if (!isIn && prN) {
+      const there = await tracker.prInfo(ghRun($, found), prN)
+      isIn = there.ok && there.value.merged
+    }
     if (!isIn) throw new Refused(`${branch} is not on origin/${main}: the pull request is not merged yet; after a squash merge pass "force": true`)
   }
 

@@ -168,7 +168,7 @@ export function restGithub(state: RestState, now: number): (argv: readonly strin
       const number = state.pull ?? 31
       return ok({ number, html_url: `https://github.com/o/r/pull/${number}` })
     }
-    if ((m = on('GET', /^pulls\/(\d+)$/))) return ok({ number: Number(m[1]), state: 'open', head: { sha: HEAD_SHA } })
+    if ((m = on('GET', /^pulls\/(\d+)$/))) return ok({ number: Number(m[1]), state: 'open', head: { sha: HEAD_SHA, ref: `feat/${m[1]}` }, merged: false })
     if (on('PUT', /^pulls\/\d+\/merge$/)) return ok({ merged: true, message: 'Pull Request successfully merged' })
     if (on('GET', /^commits\/[0-9a-f]+\/check-runs$/)) {
       const rows = (state.checks ?? []).map(k => ({
