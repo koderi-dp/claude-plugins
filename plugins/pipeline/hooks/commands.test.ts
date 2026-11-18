@@ -48,7 +48,10 @@ function world(on: On, seed: Record<string, string> = {}) {
   on('session.id', () => ({ value: 'self' }))
   on('env.get', () => ({ value: undefined }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
-  on('tool.register', (_$, e) => ({ value: { tool: e.name } }))
+  on('tool.register', (_$, e) => {
+    if (refusesTool) throw new Error('tools from mods are not available here')
+    return { value: { tool: e.name } }
+  })
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
   on('ui.panes', () => ({ value: [] }) as never)
@@ -62,6 +65,8 @@ function world(on: On, seed: Record<string, string> = {}) {
 }
 
 type Answer = { text?: string; context?: readonly string[] }
+/** Set by the one test whose host takes the command and refuses the tool. */
+let refusesTool = false
 // A prompt the command submits goes out from a timer after the hook returns; the mock clock runs it.
 let clock: { advance: (ms: number) => Promise<void> } | null = null
 const run = async ($: { command: { run: (e: never) => Promise<unknown> } }, args: string) => {
@@ -255,4 +260,22 @@ test('parseValue and setPath', async () => {
   expect(setPath({ a: 1 }, 'b.c', 2)).toEqual({ a: 1, b: { c: 2 } })
   expect(setPath({ a: { x: 1 } }, 'a.y', 2)).toEqual({ a: { x: 1, y: 2 } })
   expect(setPath({ a: 'text' }, 'a.y', 2)).toEqual({ a: { y: 2 } })
+})
+
+test('0.5.4: a host that refuses the tool is told at start, and /pipeline next claims nothing', async ($, on) => {
+  refusesTool = true
+  const { submitted, writes } = world(on, { [CONFIG]: VALID_CONFIG })
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(String((e as { message?: string }).message ?? e))
+    return { value: undefined } as never
+  })
+  await ($ as unknown as { session: { start: (e: never) => Promise<unknown> } }).session.start({ cwd: MAIN, surface: 'terminal', isInteractive: true } as never)
+  const next = await run($, 'next')
+  expect(next.text).toContain('could not be registered in this session (')
+  expect(submitted).toEqual([])
+  expect(writes).toEqual([])
+  expect((await run($, 'status')).text).toContain('could not be registered')
+  expect(toasts.some(t => t.includes('could not be registered'))).toBe(true)
+  refusesTool = false
 })

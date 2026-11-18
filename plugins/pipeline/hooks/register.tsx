@@ -242,6 +242,8 @@ const QUEUE_PROMPT = (input: Record<string, unknown>) => `Under the pipeline-rul
 const self = {
   hasRepo: false,
   sessionRoot: '',
+  /** Why the tool could not be given to the model in this session; empty when it was. */
+  toolError: '',
   startedAt: '',
   lastWrite: -Infinity,
   wakeUntil: -Infinity,
@@ -2972,14 +2974,12 @@ export const register: Register = (on, options) => {
     try {
       await $.command.register({ name: 'pipeline', description: DESCRIPTION, argumentHint: 'subcommand' })
     } catch {}
-    try {
-      // In a project without a pipeline the tool is listed by name only, so it costs no context there.
-      let hasPipeline = false
+    // A host that takes the command but not the tool leaves the model with nothing to call: said once, never hidden.
+    if (!(await registerTool($))) {
       try {
-        hasPipeline = await $.fs.exists(paths(await resolveRoot($)).config)
+        await $.ui.toast(`pipeline: ${NO_TOOL()}`)
       } catch {}
-      await $.tool.register({ name: 'pipeline', description: TOOL_DESCRIPTION, isDeferred: !hasPipeline, inputSchema: TOOL_SCHEMA })
-    } catch {}
+    }
     let loaded: { found: string; config: Config | null; backlog: Backlog | null } | null = null
     try {
       const found = await resolveRoot($)
@@ -3264,6 +3264,27 @@ export const register: Register = (on, options) => {
 
 // ---------- the commands ----------
 
+/** Gives the model the tool; false, with the reason kept, when this host refuses it. */
+async function registerTool($: EngineInterface): Promise<boolean> {
+  try {
+    // In a project without a pipeline the tool is listed by name only, so it costs no context there.
+    let hasPipeline = false
+    try {
+      hasPipeline = await $.fs.exists(paths(await resolveRoot($)).config)
+    } catch {}
+    await $.tool.register({ name: 'pipeline', description: TOOL_DESCRIPTION, isDeferred: !hasPipeline, inputSchema: TOOL_SCHEMA })
+    self.toolError = ''
+    return true
+  } catch (err) {
+    self.toolError = (err instanceof Error ? err.message : String(err)) || 'no reason given'
+    return false
+  }
+}
+
+const NO_TOOL = () => `the pipeline tool could not be registered in this session (${self.toolError}), so the model cannot call it here: commands that only show or set things still work, building does not. Start the session in a terminal or the desktop app on the machine itself.`
+/** The subcommands that hand the work to the model, which needs the tool. */
+const NEEDS_TOOL = ['add', 'discuss', 'next', 'run', 'init', 'migrate']
+
 type CommandAnswer = { text?: string; context?: readonly string[] }
 
 const ID = /^(?:[a-z][a-z0-9-]*|#?\d+)$/i
@@ -3287,9 +3308,11 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
     })
     return { text }
   }
+  // Without the tool the model would be sent into a dead end: one more try, then said plainly before anything is claimed.
+  if (self.toolError && NEEDS_TOOL.includes(sub) && !(await registerTool($))) return { text: `pipeline: ${NO_TOOL()}` }
   switch (sub) {
     case 'status':
-      return { text: await runTool($, { action: 'status', ...(arg ? { id: arg } : {}) }) }
+      return { text: `${await runTool($, { action: 'status', ...(arg ? { id: arg } : {}) })}${self.toolError ? `\n\n${NO_TOOL()}` : ''}` }
     case 'panel': {
       const isOpen = await togglePane($)
       return { text: isOpen ? 'Pipeline panel opened.' : 'Pipeline panel closed.' }
