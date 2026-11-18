@@ -116,7 +116,7 @@ You are the final reviewer. Read-only: no edit and no commit, nothing under \`{{
 ## Read
 
 - \`git diff {{base}}..{{head}}\`: every file, not a sample.
-- The spec \`{{spec}}\`; the plan \`{{plan}}\` for intent.
+- The spec \`{{spec}}\`; the plan \`{{plan}}\` for intent, when there is one.
 - Scope of this review: {{findings}}
 
 ## Rulings the lead made; the code must keep each

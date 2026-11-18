@@ -24,6 +24,8 @@ Under `merge: pr` you merge the PR yourself. The next `get` or `signals` sees th
 
 ## The loop
 
+**Two modes.** In `mode: direct`, the default, the pipeline is a tool around the work and says nothing about how to build: `begin` claims the item and makes its worktree, the agent builds it the way plain Claude Code would, `gate` checks that the work is committed and runs the gate itself, then the pull request, `merge` and `close`. No plan file, no implementer subagents, no briefs, no final review; the one exception is a branch that touches a `riskyPaths` entry, which gets one independent review before the gate (`taskReview: off` turns that off too). On a small benchmark item the full loop below cost three to five times what plain Claude Code did and took seven times as long for the same result against hidden checks, and direct mode exists for that reason. `mode: full` is the loop described next, for projects that want a written plan, subagents and reviews on every item.
+
 A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording that asks for something to be built). It is `ready` once the spec has no open question and its `needs` are merged. `/pipeline next` picks the first ready item (an item that has only a note gets its spec written from it on pick, and stops only for an open question or an unmerged need): a worktree and branch, a plan in the plugin's own format that the tool checks (`plan`), then task by task an implementer from a brief the tool renders (`brief`), the lead's own run of the task's check, fix rounds up to the limit, an independent reviewer per `taskReview` (by default only when the diff touches a risky path), a final review over the whole branch, the gate, the PR, the merge, the ledger, the clean-up, and one line to you. Statuses: `inbox`, `ready`, `planning`, `building`, `review`, `merged`, `blocked`, `parked`.
 
 ## Queue: GitHub issues
@@ -101,6 +103,7 @@ The limits of this mode: issues have no order of their own, so the oldest ready 
 | `branch` | `feat/<id>` | The branch name per item |
 | `checks` | `{}` | `fast` per edit, `task` before each hand-back, `gate` before the PR; any tier may be omitted |
 | `riskyPaths` | `[]` | Globs; a task whose diff touches one gets an independent reviewer who probes |
+| `mode` | `direct` | `direct`: the agent builds the item its own way between `begin` and `gate`; `full`: a written plan, implementer subagents from rendered briefs, a final review |
 | `taskReview` | `risky` | Per-task review: `risky` gives a task an independent reviewer only when its diff touches `riskyPaths`; `always` gives every task one; `off` gives none, the lead's own reading of the diff is the review. The final review runs whatever the setting. `/pipeline config taskReview=off` |
 | `protectedPaths` | `[".github/workflows/**"]` | Globs; a subagent's Edit or Write there is denied by the mod |
 | `models` | sonnet medium, opus high, opus xhigh, opus high | `implementer`, `reviewer`, `final`, `escalate`, each `{ model, effort }` |

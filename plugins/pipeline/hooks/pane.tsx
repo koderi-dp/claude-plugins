@@ -441,7 +441,8 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
     state: `${active.status.toUpperCase()} · ${idLabel(active.id).toUpperCase()}`,
     headline: displayTitle(active.title),
     line: d.activeLine || active.note || ledger?.resume?.state || line([active.size, active.status]),
-    progress: { done, total: tasks.length },
+    // Direct mode has no tasks to count: the steps alone say where the item is.
+    ...(tasks.length ? { progress: { done, total: tasks.length } } : {}),
     steps: stepsOf(active, ledger),
   }
   const drawn = heroSvg(W, hero)
@@ -472,16 +473,16 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
   const nextReason = next ? d.readiness[next.id] : undefined
   return (
     <Box flexDirection="column">
-      <Svg source={drawn.source} alt={`${hero.state}: ${hero.headline}, ${done} of ${tasks.length} tasks accepted`} width={W} height={drawn.height} />
+      <Svg source={drawn.source} alt={tasks.length ? `${hero.state}: ${hero.headline}, ${done} of ${tasks.length} tasks accepted` : `${hero.state}: ${hero.headline}, ${hero.steps?.find(x => x.state === 'current')?.name ?? 'Build'}`} width={W} height={drawn.height} />
       <Svg key="caption-usage" source={captionSvg(W, usage)} alt={usage} width={W} height={CAPTION_H} />
-      {heading(u, 'Tasks', `${done} of ${tasks.length} accepted`)}
-      <Svg source={taskBarSvg(W, segments)} alt={`Task progress: ${legend.map(l => `${l.n} ${l.word}`).join(', ')}`} width={W} height={TASK_BAR_H} />
+      {tasks.length ? heading(u, 'Tasks', `${done} of ${tasks.length} accepted`) : null}
+      {tasks.length ? <Svg source={taskBarSvg(W, segments)} alt={`Task progress: ${legend.map(l => `${l.n} ${l.word}`).join(', ')}`} width={W} height={TASK_BAR_H} /> : null}
       {taskRows.length ? (
         <Box flexDirection="column">{taskRows}</Box>
       ) : (
         <Box flexDirection="column">
           {cards}
-          <Text dimColor>No ledger yet.</Text>
+          {ledger ? null : <Text dimColor>No ledger yet.</Text>}
         </Box>
       )}
       {childRows(u, d)}

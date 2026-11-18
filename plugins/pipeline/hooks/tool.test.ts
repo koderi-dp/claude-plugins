@@ -443,7 +443,7 @@ test('0.2.2: get answers a slim compact JSON under 8,000 characters for a 71-ite
     { id: 'p6', title: expect.stringContaining('p6-slug'), size: 'L', spec: 'docs/pipeline/specs/p6.md', reason: 'ready' },
     { id: 'p7', title: expect.stringContaining('p7-slug'), size: 'S', spec: 'docs/pipeline/specs/p7.md', reason: 'ready' },
   ])
-  expect(Object.keys(got.config).sort()).toEqual(['checks', 'limits', 'merge', 'mergeMethod', 'models', 'protectedPaths', 'riskyPaths', 'runner', 'superpowers', 'taskReview'])
+  expect(Object.keys(got.config).sort()).toEqual(['checks', 'limits', 'merge', 'mergeMethod', 'mode', 'models', 'protectedPaths', 'riskyPaths', 'runner', 'superpowers', 'taskReview'])
   expect(got.config).toMatchObject({ runner: 'subagent', taskReview: 'risky', merge: 'pr', mergeMethod: 'merge', limits: { fixRounds: expect.any(Number), silentMinutes: expect.any(Number) }, models: { implementer: expect.any(Object), final: expect.any(Object) } })
   // The full answer is today's shape, pretty-printed.
   const all = JSON.parse(full)
@@ -745,10 +745,10 @@ test('begin claims a ready item: the worktree on the item branch off origin/main
   const { files } = world(on, READY_SEED)
   const runs = choreWorld(on)
   const line = text(await call($, { action: 'begin', item: 'p1' }))
-  expect(line).toBe(`p1 · planning · branch feat/p1 · base ba5e000 · EnterWorktree { "path": "${WT}" } · next: read docs/pipeline/specs/p1.md, write docs/pipeline/plans/p1.md, then plan`)
+  expect(line).toBe(`p1 · building · branch feat/p1 · base ba5e000 · worktree ${WT} · next: build it your own way in ${WT}, commit, then gate\n\nThe spec (docs/pipeline/specs/p1.md):\n\n# p1\n\n## What\n\nx\n\n## Acceptance\n\n- [ ] A CSV downloads.\n\n## Open`)
   expect(runs).toContainEqual(['git', 'worktree', 'add', WT, '-b', 'feat/p1', 'origin/main'])
   expect(buildLedger(files)).toMatchObject({ branch: 'feat/p1', worktree: '.claude/worktrees/p1', base: 'ba5e00011122' })
-  expect(items(files)[0]).toMatchObject({ status: 'planning', branch: 'feat/p1' })
+  expect(items(files)[0]).toMatchObject({ status: 'building', branch: 'feat/p1' })
   expect(JSON.parse(text(await call($, { action: 'get' }))).active.id).toBe('p1')
   // An inbox item is not begun.
   await call($, { action: 'add', item: { title: 'No spec yet' } })
@@ -986,4 +986,93 @@ test('a write waits while another session holds the lock, and goes on when it is
   expect(text(await pending)).toBe('added p1 · inbox · no spec')
   expect(runs.filter(r => r[0] === 'mkdir').length).toBeGreaterThan(2)
   expect(files.has(`${MAIN}/.git/pipeline.lock`)).toBe(false)
+})
+
+// ---------- 0.5.0: direct mode ----------
+
+const DIRECT_SEED = {
+  [CONFIG]: JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: { gate: 'npm run gate' }, riskyPaths: ['db/**'], merge: 'pr' }),
+  [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'CSV export', status: 'ready', spec: 'docs/pipeline/specs/p1.md' }] }),
+  [`${DIR}/specs/p1.md`]: '# p1\n\n## What\n\nx\n\n## Acceptance\n\n- [ ] A CSV downloads.\n\n## Open\n',
+}
+/** A git for a direct run: `head` answers HEAD, `changed` the files of the branch, `dirty` the status. */
+function directWorld(on: On, opts: { head?: string; changed?: string[]; dirty?: string; gate?: number } = {}) {
+  const runs: string[][] = []
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    runs.push(argv)
+    const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    const sub = argv[0] === 'git' && argv[1] === '-C' ? argv[3] : argv[1]
+    if (sub === 'rev-parse' && argv.includes('--verify')) return { value: { ...ok, stdout: 'aaa\n' } } as never
+    if (sub === 'rev-parse' && argv.at(-1) === 'HEAD') return { value: { ...ok, stdout: `${opts.head ?? 'c0de111'}\n` } } as never
+    if (sub === 'rev-parse') return { value: { ...ok, stdout: `${String(argv.at(-1)).slice(0, 7)}\n` } } as never
+    if (sub === 'merge-base') return { value: { ...ok, stdout: 'ba5e000111222\n' } } as never
+    if (sub === 'status') return { value: { ...ok, stdout: opts.dirty ?? '' } } as never
+    if (sub === 'diff') return { value: { ...ok, stdout: (opts.changed ?? ['src/route.ts']).join('\n') + '\n' } } as never
+    return { value: ok } as never
+  })
+  on('process.spawn', async function* (_$, e) {
+    runs.push([...(e as unknown as { argv: readonly string[] }).argv])
+    yield { stream: 'stdout', text: opts.gate ? 'not ok 1\n' : '# pass 4\n' } as never
+    return { value: { code: opts.gate ?? 0, signal: null } } as never
+  })
+  return runs
+}
+const ledgerP1 = (files: Map<string, string>) => JSON.parse(files.get(`${DIR}/ledgers/p1.json`)!) as Record<string, any>
+
+test('direct mode is the default: begin sets the item building, and gate checks the branch in with no plan, task or brief', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  const runs = directWorld(on)
+  expect(text(await call($, { action: 'begin', item: 'p1' }))).toContain('p1 · building · branch feat/p1 · base ba5e000 ·')
+  expect(items(files)[0]).toMatchObject({ status: 'building' })
+  expect(text(await call($, { action: 'gate', item: 'p1' }))).toBe('p1 · gate green · final no review asked · pushed · next: open the PR')
+  const l = ledgerP1(files)
+  expect(l.tasks).toEqual([])
+  expect(l.final).toEqual({ verdict: 'no review asked', gate: 'green', commits: 'ba5e000..c0de111' })
+  expect(l.resume).toMatchObject({ state: 'gate run', lastVerified: 'c0de111' })
+  expect(runs).toContainEqual(['sh', '-c', 'npm run gate'])
+  expect(runs).toContainEqual(['git', '-C', `${MAIN}/.claude/worktrees/p1`, 'push', '-q', '-u', 'origin', 'feat/p1'])
+  // No brief and no plan were written.
+  expect([...files.keys()].some(k => k.includes('-brief.md') || k.includes('/plans/'))).toBe(false)
+})
+
+test('direct gate refuses a branch with nothing built or with uncommitted changes, and says a red gate', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  directWorld(on, { head: 'ba5e000' })
+  await call($, { action: 'begin', item: 'p1' })
+  expect(text(await call($, { action: 'gate', item: 'p1' }))).toBe('refused: p1 has no commit after ba5e000: build it and commit, then gate')
+  void files
+})
+
+test('direct gate with uncommitted work is refused; a red gate answers its tail and is recorded', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  directWorld(on, { dirty: ' M src/route.ts', gate: 1 })
+  await call($, { action: 'begin', item: 'p1' })
+  expect(text(await call($, { action: 'gate', item: 'p1' }))).toBe('refused: uncommitted changes in the worktree: commit them, then gate\nM src/route.ts')
+})
+
+test('direct gate asks for a review first when the branch touches a risky path; the review brief needs no plan', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  directWorld(on, { changed: ['db/schema.sql', 'src/route.ts'] })
+  await call($, { action: 'begin', item: 'p1' })
+  expect(text(await call($, { action: 'gate', item: 'p1' }))).toBe('refused: review first: the branch touches db/schema.sql · brief { item: "p1", kind: "final" }, the Agent call it answers, then gate with "verdict"')
+  expect(text(await call($, { action: 'brief', item: 'p1', kind: 'final' }))).toContain('final review · Agent subagent_type pipeline:reviewer')
+  expect(files.get(`${MAIN}/.claude/worktrees/p1/docs/pipeline/ledgers/p1/final-brief.md`)).toContain('- [ ] A CSV downloads.')
+  expect(text(await call($, { action: 'gate', item: 'p1', verdict: 'approved', tokens: 20000 }))).toBe('p1 · gate green · final approved · pushed · next: open the PR')
+})
+
+test('mode full keeps the planning stage and the plan', async ($, on) => {
+  const { files } = world(on, { ...DIRECT_SEED, [CONFIG]: DIRECT_SEED[CONFIG].replace('"merge"', '"mode": "full", "merge"') })
+  directWorld(on)
+  expect(text(await call($, { action: 'begin', item: 'p1' }))).toContain('p1 · planning · ')
+  expect(text(await call($, { action: 'begin', item: 'p1' }))).toContain('write docs/pipeline/plans/p1.md, then plan')
+  expect(items(files)[0]).toMatchObject({ status: 'planning' })
+})
+
+test('begin with no item takes the first ready one; nothing ready is refused', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  directWorld(on)
+  expect(text(await call($, { action: 'begin' }))).toContain('p1 · building · branch feat/p1')
+  expect(items(files)[0]).toMatchObject({ status: 'building' })
+  expect(text(await call($, { action: 'begin' }))).toBe('refused: nothing is ready: every item waits for a spec, an answer or another item')
 })

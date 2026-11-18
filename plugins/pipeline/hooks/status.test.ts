@@ -533,3 +533,15 @@ test('the status block, the idle line and the band show an issue id with its has
   expect(idleLine(b.items)).toBe('idle · 0 inbox · next: #13 Item 13')
   expect(bandOf(b.items[0]!, null, undefined, NOW).id).toBe('#12')
 })
+
+test('0.5.0: stepsOf in direct mode reads Build, Gate, PR, Merge from the gate record and the status', () => {
+  const led = (extra: Partial<Ledger>): Ledger => ({ item: 'p1', pr: null, tasks: [], rulings: [], blockers: [], tokens: 0, base: 'abc', ...extra })
+  const it = (status: Item['status']): Item => ({ id: 'p1', title: 'X', status })
+  const names = (s: ReturnType<typeof stepsOf>) => s.map(x => `${x.name}:${x.state}`).join(' ')
+  expect(names(stepsOf(it('building'), led({})))).toBe('Build:current Gate:pending PR:pending Merge:pending')
+  expect(names(stepsOf(it('building'), led({ resume: { task: 1, state: 'gate running', at: '' } })))).toBe('Build:done Gate:current PR:pending Merge:pending')
+  expect(names(stepsOf(it('building'), led({ final: { verdict: 'x', gate: 'green' } })))).toBe('Build:done Gate:done PR:current Merge:pending')
+  expect(names(stepsOf(it('review'), led({ final: { verdict: 'x', gate: 'green' } })))).toBe('Build:done Gate:done PR:done Merge:current')
+  // A full-loop item keeps Plan, Build, Review, Merge.
+  expect(stepsOf(it('building'), led({ tasks: [{ n: 1, title: 'A', status: 'running', dispatches: [] }] })).map(x => x.name)).toEqual(['Plan', 'Build', 'Review', 'Merge'])
+})

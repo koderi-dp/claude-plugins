@@ -205,13 +205,20 @@ export function heroSentence(items: Item[]): string {
 }
 
 export type StepState = 'done' | 'current' | 'pending'
-export type Step = { name: 'Plan' | 'Build' | 'Review' | 'Merge'; state: StepState }
+export type Step = { name: 'Plan' | 'Build' | 'Gate' | 'PR' | 'Review' | 'Merge'; state: StepState }
 
 /** Whether the ledger says the final review is under way: a final block, or a resume state that names it. */
 const inFinalReview = (ledger: Ledger | null) => !!ledger && (!!ledger.final || /final/i.test(ledger.resume?.state ?? ''))
 
 /** Plan · Build · Review · Merge for an item: done, current and pending from its status and its ledger. */
 export function stepsOf(item: Item | null, ledger: Ledger | null): Step[] {
+  // Direct mode (an item in flight with no tasks): Build · Gate · PR · Merge, from the gate's record and the status.
+  if (item && item.status !== 'planning' && ledger && !(ledger.tasks ?? []).length && (ledger.resume || ledger.final || ledger.base)) {
+    const gate = String(ledger.final?.gate ?? '')
+    const isGated = gate.startsWith('green') || gate.startsWith('none')
+    const at = item.status === 'merged' ? 4 : item.status === 'review' ? 3 : isGated ? 2 : /gate/.test(ledger.resume?.state ?? '') ? 1 : 0
+    return (['Build', 'Gate', 'PR', 'Merge'] as const).map((name, i) => ({ name, state: i < at ? 'done' : i === at ? 'current' : 'pending' }))
+  }
   const names: Step['name'][] = ['Plan', 'Build', 'Review', 'Merge']
   const current = !item ? -1 : item.status === 'merged' ? 4 : item.status === 'review' || (item.status === 'building' && inFinalReview(ledger)) ? 2 : item.status === 'building' ? 1 : item.status === 'planning' ? 0 : -1
   return names.map((name, i) => ({ name, state: i < current ? 'done' : i === current ? 'current' : 'pending' }))

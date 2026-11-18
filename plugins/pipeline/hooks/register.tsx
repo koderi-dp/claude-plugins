@@ -15,7 +15,7 @@ import type { Issue, Run } from './tracker'
 import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, needsOf, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import type { Extras, Leftover, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
-import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches } from './plan'
+import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches, section } from './plan'
 import { PLAN_FORMAT } from './templates'
 import type { BriefKind } from './templates'
 import type { LedgerSet } from './ledger'
@@ -38,7 +38,7 @@ const PANE = 'pipeline'
 const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
 const USAGE =
   'pipeline: status [id] | panel | config [key=value] | init | add <text> | next | run <id> | run all | migrate | migrate github | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
-const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers', 'pushMain', 'queue', 'queueLabel']
+const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'mode', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers', 'pushMain', 'queue', 'queueLabel']
 const CONFIG_FILE = 'docs/pipeline/config.json'
 const BACKLOG_FILE = 'docs/pipeline/backlog.json'
 const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
@@ -59,7 +59,7 @@ const TOOL_DESCRIPTION =
   'The pipeline of this project: backlog, ledgers and the build loop. Main session only; a subagent\'s call is ignored. Every write answers one line. The pipeline-run and pipeline-rules skills say when to call what. Actions: ' +
   '`get` { id?, titles?, full? } → JSON: the active item of this session, its resume block, open watchdog signals (each delivered once), children, siblings, counts, the next three items, the config keys a run reads, and `mergedPending` (items whose PR was merged by hand; close them first). `signals` → the open signals only. `status` { id? } → the status block, or one item\'s ledger as text. ' +
   'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set } (under queue github, set { title?, body?, needs? } rewrites the issue\'s own text: a new body keeps the issue\'s Needs: line unless needs is given, and an empty needs list removes it; never edit an issue with gh yourself), `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
-  'Run, in order: `begin` { item } claims the item, makes its worktree and branch, records the base and answers the worktree to enter. `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
+  'Run, in order: `begin` { item? } claims the item (the first ready one when none is named), makes its worktree and branch, records the base and answers the worktree and, under mode direct, the spec itself. Under mode direct (the default) the agent then builds the item its own way and calls `gate`; `pr` { item, title?, body? } opens the pull request through gh and records it; `merge` and `close` finish. Under mode full: `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
   '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
   '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. `merge` { item, pr? } ends an item whose PR is open: it waits for the PR\'s checks itself however long they take, merges with config.mergeMethod through gh (no auto-merge setting needed) and runs close; red checks answer their names, for a fix wave and another merge. ' +
   '`close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is (also from inside the item\'s worktree): the main checkout on mainBranch and pulled, the item merged, what config.retain lets go removed, docs/pipeline committed on mainBranch and pushed unless config.pushMain is false, the worktree and local branch removed (a worktree this session is inside is left and removed by a later begin or close). ' +
@@ -71,7 +71,7 @@ const TOOL_DESCRIPTION =
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'pr', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
@@ -771,6 +771,8 @@ type ToolInput = {
   minutes?: number
   verdict?: string
   review?: string
+  title?: string
+  body?: string
   fact?: string
   pr?: string
   force?: boolean
@@ -961,7 +963,7 @@ async function markDelivered($: EngineInterface): Promise<void> {
 }
 
 /** The actions that change the backlog or a ledger: each runs alone across every session on the repository. */
-const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'start', 'stop', 'init', 'migrate-apply', 'migrate-github', 'spec', 'question'])
+const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'pr', 'start', 'stop', 'init', 'migrate-apply', 'migrate-github', 'spec', 'question'])
 const LOCK_WAIT_MS = 250
 const LOCK_TRIES = 120
 
@@ -1187,8 +1189,15 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       if (Object.keys(mirror).length) await writeBacklog($, found, updateItem(current, id, mirror, now))
       return ledgerLine(merged)
     }
-    case 'begin':
-      return beginAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+    case 'begin': {
+      // With no item named: the first ready one, picked under the lock, so the lead needs no `get` first.
+      const named = typeof e.item === 'string' ? e.item : e.item?.id ?? e.id
+      const first = named ?? current.items.find(i => i.status === 'ready')?.id
+      if (!first) throw new Refused('nothing is ready: every item waits for a spec, an answer or another item')
+      return beginAction($, found, c, current, need(first), e)
+    }
+    case 'pr':
+      return prAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'accept':
       return acceptAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'close':
@@ -1316,10 +1325,14 @@ async function gitOut($: EngineInterface, wt: string, args: string[]): Promise<s
 }
 
 /** The plan of an item, parsed and sound, or refused with the format or the problems. */
-async function loadPlan($: EngineInterface, found: string, wt: string, id: string, ledger: Ledger | null) {
+async function loadPlan($: EngineInterface, found: string, wt: string, id: string, ledger: Ledger | null, allowNone = false) {
   const rel = typeof ledger?.plan === 'string' && ledger.plan ? ledger.plan : placesOf(found, await read($, config)).planRel(id)
   const text = await readItemFile($, found, wt, rel)
-  if (text === null) throw new Refused(`no plan at ${rel}; write it in this format, then call plan again:\n\n${PLAN_FORMAT}`)
+  if (text === null) {
+    // Direct mode writes no plan: the one brief it may ask for, the review of the whole branch, needs none.
+    if (allowNone && !(ledger?.tasks ?? []).length) return { plan: { title: '', constraints: '', parked: '', tasks: [] }, rel }
+    throw new Refused(`no plan at ${rel}; write it in this format, then call plan again:\n\n${PLAN_FORMAT}`)
+  }
   const plan = parsePlan(text)
   const problems = checkPlan(plan)
   if (problems.length) throw new Refused(`${rel} cannot be built:\n${problems.map(x => `- ${x}`).join('\n')}\n\nThe format:\n\n${PLAN_FORMAT}`)
@@ -1406,7 +1419,9 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
   }
   const base = ledger?.base ?? (await gitOut($, wt, ['merge-base', 'HEAD', from])) ?? (await gitOut($, wt, ['rev-parse', 'HEAD'])) ?? undefined
   const hasTasks = (ledger?.tasks ?? []).length > 0
-  const status = item.status === 'ready' || (item.status === 'blocked' && !hasTasks) ? 'planning' : item.status === 'blocked' ? 'building' : item.status
+  // Direct mode has no planning stage: the agent builds the item its own way, so a begun item is building.
+  const isDirect = normalizeConfig(c ?? DEFAULTS).config.mode === 'direct' && !hasTasks
+  const status = item.status === 'ready' || (item.status === 'blocked' && !hasTasks) ? (isDirect ? 'building' : 'planning') : item.status === 'blocked' ? 'building' : item.status
   self.item = id
   const record = () => runTool($, { action: 'ledger', item: id, set: { branch, worktree: rel, ...(base ? { base: base.slice(0, 12) } : {}) } })
   if (!gh) await record()
@@ -1437,8 +1452,11 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
   await heartbeat($, true)
   const spec = gh ? P.specRel(id) : item.spec ?? P.specRel(id)
   const r = ledger?.resume
-  const next = hasTasks && r ? `resume: task ${r.task}/${ledger!.tasks.length} · ${r.state}${r.lastVerified ? ` · verified ${r.lastVerified}` : ''}` : `next: read ${spec}, write ${P.planRel(id)}, then plan`
-  return `${id} · ${status} · branch ${branch} · base ${(base ?? '?').slice(0, 7)} · ${isChild ? 'this directory is the worktree' : `EnterWorktree { "path": "${wt}" }`} · ${next}`
+  // Direct mode hands the spec over with the answer, so the lead spends no turn reading it.
+  const specBody = isDirect ? ((await readItemFile($, found, wt, spec)) ?? '').trim() : ''
+  const specText = specBody ? `\n\nThe spec (${spec}):\n\n${specBody.length > 6000 ? `${specBody.slice(0, 6000)}\n… (cut: read the file for the rest)` : specBody}` : ` (the spec: ${spec})`
+  const next = hasTasks && r ? `resume: task ${r.task}/${ledger!.tasks.length} · ${r.state}${r.lastVerified ? ` · verified ${r.lastVerified}` : ''}` : isDirect ? `next: build it your own way in ${isChild ? 'this directory' : wt}, commit, then gate${specText}` : `next: read ${spec}, write ${P.planRel(id)}, then plan`
+  return `${id} · ${status} · branch ${branch} · base ${(base ?? '?').slice(0, 7)} · ${isChild ? 'this directory is the worktree' : isDirect ? `worktree ${wt}` : `EnterWorktree { "path": "${wt}" }`} · ${next}`
 }
 
 /**
@@ -1551,7 +1569,31 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
   const ledger = await loadLedger($, found, id)
   if (!ledger) throw new Refused(`${id} has no ledger`)
   const wt = worktreePath(found, ledger)
-  const command = normalizeConfig(c ?? DEFAULTS).config.checks.gate?.trim()
+  const cfg = normalizeConfig(c ?? DEFAULTS).config
+  const command = cfg.checks.gate?.trim()
+  // Direct mode: there are no tasks, so the gate is where the work is checked in. What `accept` asks of a task
+  // is asked here of the whole branch: committed, something built, and reviewed first when it touches a risky path.
+  const isDirect = !ledger.tasks.length
+  let range = ''
+  let verified = ledger.resume?.lastVerified ?? ''
+  if (isDirect) {
+    const base = ledger.base ?? ''
+    const head = (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? ''
+    if (base && head && (await gitOut($, wt, ['rev-parse', '--short', base])) === head) throw new Refused(`${id} has no commit after ${base.slice(0, 7)}: build it and commit, then gate`)
+    const dirty = await gitOut($, wt, ['status', '--porcelain', '--untracked-files=no', '--', '.', ':(exclude)docs/pipeline', ':(exclude).pipeline'])
+    if (dirty) throw new Refused(`uncommitted changes in the worktree: commit them, then gate\n${dirty.split('\n').slice(0, 8).join('\n')}`)
+    range = base && head ? `${base.slice(0, 7)}..${head}` : ''
+    if (head) verified = head
+    const reviewed = Boolean(e.verdict?.trim() || ledger.final?.verdict)
+    if (!reviewed && cfg.taskReview !== 'off' && range) {
+      const names = await gitOut($, wt, ['diff', '--name-only', `${base}..${head}`])
+      const risky = names === null ? [] : riskyMatches(names.split('\n').map(l => l.trim()).filter(Boolean), cfg.riskyPaths)
+      if (cfg.taskReview === 'always' || risky.length) {
+        throw new Refused(`review first: ${risky.length ? `the branch touches ${risky[0]}` : 'taskReview is always'} · brief { item: "${id}", kind: "final" }, the Agent call it answers, then gate with "verdict"`)
+      }
+    }
+    await runTool($, { action: 'ledger', item: id, set: { resume: { task: 1, state: 'gate running', ...(head ? { lastVerified: head } : {}) } } })
+  }
   let gate = 'none configured'
   let output = ''
   if (command) {
@@ -1563,14 +1605,40 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
       throw new Refused(`the gate could not be run here (${err instanceof Error ? err.message : String(err)}): run \`${command}\` yourself and record it with ledger { final: { verdict, gate } }`)
     }
   }
-  const verdict = e.verdict?.trim() || ledger.final?.verdict || 'not reviewed'
-  const final = { ...(ledger.final ?? {}), verdict, gate, ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}) }
-  await runTool($, { action: 'ledger', item: id, set: { final, resume: { task: ledger.resume?.task ?? ledger.tasks.length, state: gate.startsWith('red') ? 'gate red' : 'gate run', ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) }, ...(await recordLead($, ledger)) } })
+  const verdict = e.verdict?.trim() || ledger.final?.verdict || (isDirect ? 'no review asked' : 'not reviewed')
+  const final = { ...(ledger.final ?? {}), verdict, gate, ...(range ? { commits: range } : {}), ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}) }
+  await runTool($, { action: 'ledger', item: id, set: { final, resume: { task: isDirect ? 1 : (ledger.resume?.task ?? ledger.tasks.length), state: gate.startsWith('red') ? 'gate red' : 'gate run', ...(verified ? { lastVerified: verified } : {}) }, ...(await recordLead($, ledger)) } })
   if (gate.startsWith('red')) return `${id} · gate ${gate} · \`${command}\`\n${output}`
   const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
   if (!isGithub(c)) await commitPaths($, wt, [placesOf(found, c).briefDir(id)], `${id}: final review record`, attribution)
   const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
-  return `${id} · gate ${gate} · final ${verdict} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${/approved/i.test(verdict) ? 'open the PR' : 'the final review'}`
+  return `${id} · gate ${gate} · final ${verdict} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${isDirect || /approved/i.test(verdict) ? 'open the PR' : 'the final review'}`
+}
+
+/**
+ * `pr`: opens the item's pull request through gh and records it, in one call. The title is the item's, the body
+ * the spec's What and Acceptance unless one is given. Under `merge: pr` the item waits in review for the user.
+ */
+async function prAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const cfg = normalizeConfig(c ?? DEFAULTS).config
+  const item = current.items.find(i => i.id === id)!
+  const ledger = await loadLedger($, found, id)
+  if (!ledger?.branch) throw new Refused(`${id} has no branch on record: begin it first`)
+  if (item.pr || ledger.pr) return `${id} · PR ${item.pr ?? ledger.pr} is already open · next: ${cfg.merge === 'auto' ? 'merge' : 'the user merges it'}`
+  const wt = worktreePath(found, ledger)
+  const P = placesOf(found, c)
+  const spec = (await readItemFile($, found, wt, isGithub(c) ? P.specRel(id) : item.spec ?? P.specRel(id))) ?? ''
+  const acceptance = section(spec, 'Acceptance')
+  const what = section(spec, 'What')
+  const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string).trim() : ''
+  const body = typeof e.body === 'string' && e.body.trim() ? e.body.trim() : [what, acceptance ? `## Acceptance\n\n${acceptance}` : '', isGithub(c) ? `Closes #${id}` : '', attribution].filter(Boolean).join('\n\n')
+  const title = typeof e.title === 'string' && e.title.trim() ? e.title.trim() : isGithub(c) ? item.title : `${id}: ${item.title}`
+  const made = await tracker.createPr(ghRun($, found), { base: cfg.mainBranch, head: ledger.branch, title, body })
+  if (!made.ok) throw new Refused(`${made.error} · or open it yourself (gh pr create), then update with "pr"`)
+  const pr = `#${made.value}`
+  await runTool($, { action: 'ledger', item: id, set: { pr } })
+  await runTool($, { action: 'update', id, set: { status: 'review', pr } })
+  return `${id} review · PR ${pr} · next: ${cfg.merge === 'auto' ? `merge { item: "${id}" }` : 'the user merges it; close runs on a later get'}`
 }
 
 /** One git answer in the main checkout: the exit code and the first line of what it said. */
@@ -1772,7 +1840,7 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
   const cfg = normalizeConfig(c ?? DEFAULTS).config
   const ledger = (await loadLedger($, found, id)) ?? emptyLedger(id)
   const wt = worktreePath(found, ledger)
-  const { plan } = await loadPlan($, found, wt, id, ledger)
+  const { plan } = await loadPlan($, found, wt, id, ledger, kind === 'final')
   const n = kind === 'final' ? plan.tasks.length : Number(e.task)
   if (kind !== 'final' && !plan.tasks.some(t => t.n === n)) throw new Refused(`brief needs task: 1 to ${plan.tasks.length}`)
   const P = placesOf(found, c)
@@ -2930,7 +2998,7 @@ export const register: Register = (on, options) => {
       const input = e as unknown as ToolInput
       const result = await runTool($, input)
       // The lead's own work on an item makes it this session's: the panel, the band and `get` follow it.
-      const worked = ['ledger', 'plan', 'brief', 'begin', 'accept', 'gate'].includes(input.action) ? (typeof input.item === 'string' ? input.item : input.item?.id ?? input.id) : input.action === 'update' && ['planning', 'building'].includes(String((input.set as Partial<Item> | undefined)?.status)) ? input.id : undefined
+      const worked = ['ledger', 'plan', 'brief', 'begin', 'accept', 'gate', 'pr'].includes(input.action) ? (typeof input.item === 'string' ? input.item : input.item?.id ?? input.id) : input.action === 'update' && ['planning', 'building'].includes(String((input.set as Partial<Item> | undefined)?.status)) ? input.id : undefined
       if (worked && !(await read($, children)).some(ch => ch.item === worked)) self.item = worked
       return { result }
     } catch (err) {
