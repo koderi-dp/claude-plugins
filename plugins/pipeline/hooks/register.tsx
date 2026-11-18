@@ -1285,7 +1285,11 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       const others = [...said, ...Object.keys(fields).filter(k => k !== 'status')]
       const out = await writeLine($, found, next, id, state => [id, state, ...(others.length ? [`set ${others.join(', ')}`] : [])].join(' · '))
       const after = next.items.find(i => i.id === id)
-      if (before && after && startsRun(before.status, after.status)) await queueRename($, c, after)
+      if (before && after && startsRun(before.status, after.status)) {
+        await queueRename($, c, after)
+        // Direct mode dispatches no agents, so the start of a run is what opens the panel.
+        await autoOpen($, 'run')
+      }
       return out
     }
     case 'move': {
@@ -3300,6 +3304,11 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
   // the turn the hook holds), so the submit goes out from a timer once this hook is done.
   const prompt = (text: string, instruction: string): CommandAnswer => {
     $.clock.after(50, async () => {
+      // An item begun by the command is named now, while no turn runs: at the turn's end would be after the whole build.
+      // Never waited on for long: a surface that holds the rename back must not hold the prompt back.
+      try {
+        await Promise.race([renameNow($), new Promise<void>(done => $.clock.after(1500, () => done()))])
+      } catch {}
       try {
         await $.prompt.submit({ text: instruction })
       } catch (err) {

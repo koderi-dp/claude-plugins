@@ -572,7 +572,7 @@ export function bandOf(item: Item, ledger: Ledger | null, agent: AgentRun | unde
       : item.status === 'merged'
         ? line(['Merged', prLabel(item.pr)?.label])
         : isRunning
-          ? ledger?.resume?.state || 'Waiting for the next dispatch'
+          ? ledger?.resume?.state || (tasks.length ? 'Waiting for the next dispatch' : item.status === 'planning' ? 'Planning' : 'Building')
           : 'Next in queue · waiting to start'
   const running = segments.filter(s => s === 'current').length
   const blocked = segments.filter(s => s === 'blocked').length

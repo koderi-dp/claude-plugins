@@ -308,7 +308,7 @@ test('bandOf: the state tag and colour per status, the count, the segments and t
   expect(building.summary).toBe('2 accepted · 1 running')
   expect(building.tasks[2]).toEqual({ title: 'The route', segment: 'current' })
   expect(bandOf(item('p12', 'review'), LEDGER, undefined, NOW)).toMatchObject({ state: 'REVIEW', color: BAND_COLORS.running, clock: '—', activity: 'fix round 2 dispatched', summary: '2 accepted · 1 in review' })
-  expect(bandOf(item('p12', 'planning'), null, undefined, NOW)).toMatchObject({ state: 'PLANNING', count: '', segments: [], activity: 'Waiting for the next dispatch', summary: '0 accepted · 0 pending' })
+  expect(bandOf(item('p12', 'planning'), null, undefined, NOW)).toMatchObject({ state: 'PLANNING', count: '', segments: [], activity: 'Planning', summary: '0 accepted · 0 pending' })
   const blocked = bandOf(item('p12', 'blocked', { note: 'Lint check failed' }), { ...LEDGER, tasks: LEDGER.tasks.map(t => (t.n === 3 ? { ...t, status: 'blocked' as const } : t)) }, undefined, NOW)
   expect(blocked).toMatchObject({ state: 'BLOCKED', color: BAND_COLORS.blocked, count: 'Task 3 / 6', activity: 'Lint check failed', summary: '2 accepted · 1 blocked' })
   expect(blocked.segments[2]).toBe('blocked')
