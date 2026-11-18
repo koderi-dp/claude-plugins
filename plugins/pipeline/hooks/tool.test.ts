@@ -1076,3 +1076,100 @@ test('begin with no item takes the first ready one; nothing ready is refused', a
   expect(items(files)[0]).toMatchObject({ status: 'building' })
   expect(text(await call($, { action: 'begin' }))).toBe('refused: nothing is ready: every item waits for a spec, an answer or another item')
 })
+
+// ---------- 0.5.0: ship and the other combined calls ----------
+
+/** directWorld plus a gh that opens PR 31 and reports green checks. */
+function shipWorld(on: On, opts: { dirty?: string; changed?: string[]; gate?: number; gh?: boolean } = {}) {
+  const runs: string[][] = []
+  let isDirty = Boolean(opts.dirty)
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    runs.push(argv)
+    const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
+    if (argv[0] === 'gh') {
+      if (opts.gh === false) return { deny: 'ENOENT: gh' } as never
+      if (argv[1] === 'pr' && argv[2] === 'create') return ok('https://github.com/o/r/pull/31\n')
+      if (argv[1] === 'pr' && argv[2] === 'checks') return ok(JSON.stringify([{ name: 'ci', bucket: 'pass' }]))
+      return ok()
+    }
+    const sub = argv[0] === 'git' && argv[1] === '-C' ? argv[3] : argv[1]
+    if (sub === 'rev-parse' && argv.includes('--abbrev-ref')) return ok('main\n')
+    if (sub === 'rev-parse' && argv.includes('--verify')) return ok('aaa\n')
+    if (sub === 'rev-parse' && argv.at(-1) === 'HEAD') return ok('c0de111\n')
+    if (sub === 'rev-parse') return ok(`${String(argv.at(-1)).slice(0, 7)}\n`)
+    if (sub === 'merge-base' && argv.includes('--is-ancestor')) return ok()
+    if (sub === 'merge-base') return ok('ba5e000111222\n')
+    if (sub === 'status') return ok(isDirty ? (opts.dirty ?? '') : '')
+    if (sub === 'commit' && argv[2]?.includes('worktrees')) {
+      isDirty = false
+      return ok()
+    }
+    if (sub === 'diff') return ok((opts.changed ?? ['src/route.ts']).join('\n') + '\n')
+    if (sub === 'for-each-ref') return ok('main\nfeat/p1\n')
+    return ok()
+  })
+  on('process.spawn', async function* (_$, e) {
+    runs.push([...(e as unknown as { argv: readonly string[] }).argv])
+    yield { stream: 'stdout', text: opts.gate ? 'not ok 1\n' : '# pass 4\n' } as never
+    return { value: { code: opts.gate ?? 0, signal: null } } as never
+  })
+  return runs
+}
+const AUTO_SEED = { ...DIRECT_SEED, [CONFIG]: DIRECT_SEED[CONFIG].replace('"merge":"pr"', '"merge":"auto"') }
+
+test('ship commits what is uncommitted, runs the gate, opens the PR and leaves the item in review under merge pr', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  const runs = shipWorld(on, { dirty: 'M src/route.ts' })
+  await call($, { action: 'begin' })
+  expect(text(await call($, { action: 'ship', item: 'p1', message: 'Add the CSV export', attribution: 'Co-Authored-By: X' }))).toBe('p1 review · PR #31 · next: the user merges it; close runs on a later get')
+  const WTP = `${MAIN}/.claude/worktrees/p1`
+  expect(runs).toContainEqual(['git', '-C', WTP, 'commit', '-q', '-m', 'Add the CSV export', '-m', 'Co-Authored-By: X'])
+  expect(runs).toContainEqual(['sh', '-c', 'npm run gate'])
+  expect(runs.some(r => r[0] === 'gh' && r[2] === 'create')).toBe(true)
+  expect(items(files)[0]).toMatchObject({ status: 'review', pr: '#31' })
+  expect(ledgerP1(files).final).toMatchObject({ gate: 'green' })
+})
+
+test('ship under merge auto goes on to wait for CI, merge and close in the same call', async ($, on) => {
+  const { files } = world(on, AUTO_SEED)
+  const runs = shipWorld(on)
+  await call($, { action: 'begin' })
+  const line = text(await call($, { action: 'ship', item: 'p1' }))
+  expect(line).toContain('p1 merged · PR #31')
+  expect(line).toContain('CI green')
+  expect(runs.some(r => r[0] === 'gh' && r[1] === 'pr' && r[2] === 'merge')).toBe(true)
+  expect(items(files)[0]).toMatchObject({ status: 'merged' })
+})
+
+test('ship stops where the lead must act: uncommitted work with no message, a red gate, a review to dispatch, no gh', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  shipWorld(on, { dirty: 'M src/route.ts', gate: 1, gh: false })
+  await call($, { action: 'begin' })
+  expect(text(await call($, { action: 'ship', item: 'p1' }))).toBe('refused: uncommitted changes in the worktree: pass "message" and ship commits them')
+  expect(text(await call($, { action: 'ship', item: 'p1', message: 'x' }))).toContain('p1 · gate red (exit 1)')
+  expect(items(files)[0]).toMatchObject({ status: 'building' })
+})
+
+test('ship on a risky branch answers the reviewer call itself; with the verdict it goes on; without gh it says what is left', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  shipWorld(on, { changed: ['db/schema.sql'], gh: false })
+  await call($, { action: 'begin' })
+  const first = text(await call($, { action: 'ship', item: 'p1' }))
+  expect(first).toContain('p1 · review first: the branch touches db/schema.sql · final review · Agent subagent_type pipeline:reviewer')
+  expect(first).toContain('Then ship again with "verdict".')
+  const second = text(await call($, { action: 'ship', item: 'p1', verdict: 'approved' }))
+  expect(second).toContain('p1 · gate green · final approved · pushed · PR not opened (')
+  expect(second).toContain('open it yourself')
+  void files
+})
+
+test('add with the spec text writes and links the spec, so the item is ready in one call; blocked writes the ledger too', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: VALID_CONFIG })
+  expect(text(await call($, { action: 'add', item: { title: 'CSV export' }, text: '## What\n\nx\n\n## Acceptance\n\n- [ ] y\n\n## Open\n' }))).toBe('added p1 · ready')
+  expect(files.get(`${DIR}/specs/p1.md`)).toContain('## Acceptance')
+  expect(items(files)[0]).toMatchObject({ spec: 'docs/pipeline/specs/p1.md', status: 'ready' })
+  await call($, { action: 'ledger', item: 'p1', set: { branch: 'feat/p1' } })
+  await call($, { action: 'update', id: 'p1', set: { status: 'blocked', note: 'waits on the API key' } })
+  expect(ledgerP1(files).blockers).toEqual(['waits on the API key'])
+})

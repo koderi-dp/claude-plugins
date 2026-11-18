@@ -59,7 +59,7 @@ const TOOL_DESCRIPTION =
   'The pipeline of this project: backlog, ledgers and the build loop. Main session only; a subagent\'s call is ignored. Every write answers one line. The pipeline-run and pipeline-rules skills say when to call what. Actions: ' +
   '`get` { id?, titles?, full? } → JSON: the active item of this session, its resume block, open watchdog signals (each delivered once), children, siblings, counts, the next three items, the config keys a run reads, and `mergedPending` (items whose PR was merged by hand; close them first). `signals` → the open signals only. `status` { id? } → the status block, or one item\'s ledger as text. ' +
   'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set } (under queue github, set { title?, body?, needs? } rewrites the issue\'s own text: a new body keeps the issue\'s Needs: line unless needs is given, and an empty needs list removes it; never edit an issue with gh yourself), `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
-  'Run, in order: `begin` { item? } claims the item (the first ready one when none is named), makes its worktree and branch, records the base and answers the worktree and, under mode direct, the spec itself. Under mode direct (the default) the agent then builds the item its own way and calls `gate`; `pr` { item, title?, body? } opens the pull request through gh and records it; `merge` and `close` finish. Under mode full: `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
+  'Run, in order: `begin` { item? } claims the item (the first ready one when none is named), makes its worktree and branch, records the base and answers the worktree and, under mode direct, the spec itself. Under mode direct (the default) the agent then builds the item its own way and calls `gate`; then one call ends it: `ship` { item, message?, attribution?, verdict?, next? } commits what is uncommitted with the message, runs the gate, opens the pull request and, under merge auto, waits for CI, merges and closes; it stops at a red gate, a review to dispatch or red CI and says what to do, and with next it begins the next ready item in the same answer. `gate`, `pr` { item, title?, body? }, `merge` and `close` are its steps, callable alone. `add` takes the spec as text and writes and links it. Under mode full: `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
   '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
   '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. `merge` { item, pr? } ends an item whose PR is open: it waits for the PR\'s checks itself however long they take, merges with config.mergeMethod through gh (no auto-merge setting needed) and runs close; red checks answer their names, for a fix wave and another merge. ' +
   '`close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is (also from inside the item\'s worktree): the main checkout on mainBranch and pulled, the item merged, what config.retain lets go removed, docs/pipeline committed on mainBranch and pushed unless config.pushMain is false, the worktree and local branch removed (a worktree this session is inside is left and removed by a later begin or close). ' +
@@ -71,7 +71,7 @@ const TOOL_DESCRIPTION =
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'pr', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'pr', 'ship', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
@@ -107,7 +107,11 @@ const TOOL_SCHEMA = {
     attribution: { type: 'string', description: 'For plan or brief: the attribution lines this session was given; kept in the ledger, so once per item is enough.' },
     escalate: { type: 'boolean', description: 'For an implementer or fix brief: dispatch at config.models.escalate.' },
     rules: { type: 'array', description: 'For migrate-apply: the corrected rules, each { group, line, source }.', items: { type: 'object' } },
-    text: { type: 'string', description: 'For spec: the spec, with the template\'s headings. For question: the question to ask on the issue.' },
+    text: { type: 'string', description: 'For spec and for add: the spec, with the template\'s headings (add writes and links it). For question: the question to ask on the issue.' },
+    message: { type: 'string', description: 'For ship: the commit message for what is not committed yet.' },
+    next: { type: 'boolean', description: 'For ship: also begin the next ready item and answer it (run all).' },
+    title: { type: 'string', description: 'For pr and ship: the pull request title; default the item\'s.' },
+    body: { type: 'string', description: 'For pr and ship: the pull request body; default the spec\'s What and Acceptance.' },
     queue: { type: 'string', enum: ['file', 'github'], description: 'For init: github sets the project up with the issues as the queue.' },
     apply: { type: 'boolean', description: 'For migrate-github: move the file backlog onto issues; without it the action answers the draft and writes nothing.' },
   },
@@ -190,6 +194,17 @@ const INTAKE_PROMPT = (text: string) =>
 
 const RUN_PROMPT = (target: string) =>
   `Use the pipeline-run skill. First tool call: ${call({ action: 'get' })}. Then ${target === 'all' ? 'run ready items until none is left' : target ? `run item ${target}` : 'run the first ready item'} as the skill says, from pick to merge, one line per turn.`
+
+/**
+ * What the model is told when the command itself began the item (mode direct): the tool's answer with the spec,
+ * and the one call that ends the work. No skill is loaded and no `get` or `begin` is spent.
+ */
+const DIRECT_PROMPT = (answer: string, id: string, isAll: boolean) =>
+  `Pipeline item ${id} is claimed for this session and its worktree is ready. The tool answered:\n\n${answer}\n\n` +
+  `Build it your own way, as you would with no plugin, working in that worktree: cd to it in your shell commands and use its path for file edits; do not call EnterWorktree. The spec's Acceptance list is what done means. If docs/pipeline/rules.md lists rules, they are the project's own. ` +
+  `When it is built and its tests pass, make one call: ${TOOL} {"action":"ship","item":"${id}","message":"<commit message>","attribution":"<the attribution lines this session was given>"${isAll ? ',"next":true' : ''}}. ` +
+  `It commits what is uncommitted, runs the gate, opens the pull request and, where the config says so, waits for CI, merges and closes. Its answer says what is next: a red gate or red CI means fix and ship again; "review first" means make the Agent call it names, then ship with "verdict"${isAll ? '; a next item in the answer is built the same way' : ''}. ` +
+  `Never edit the backlog or ledger files yourself. End with one line saying where the item stands.`
 
 /** With runner session the lead only starts children: the mod's `start` does the worktree and the child does the rest. */
 const SESSION_RUN_PROMPT = (target: string) => {
@@ -773,6 +788,8 @@ type ToolInput = {
   review?: string
   title?: string
   body?: string
+  message?: string
+  next?: boolean
   fact?: string
   pr?: string
   force?: boolean
@@ -1196,6 +1213,8 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       if (!first) throw new Refused('nothing is ready: every item waits for a spec, an answer or another item')
       return beginAction($, found, c, current, need(first), e)
     }
+    case 'ship':
+      return shipAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'pr':
       return prAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'accept':
@@ -1211,11 +1230,22 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
     case 'brief':
       return briefAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'add': {
-      if (isGithub(c)) return addIssue($, found, c, e)
+      if (isGithub(c)) {
+        const added = await addIssue($, found, c, e)
+        const n = /^added (\d+)/.exec(added)?.[1]
+        if (n && typeof e.text === 'string' && e.text.trim()) return `${added.split(' · ')[0]} · ${withoutId(n, await specIssue($, found, n, e))}`
+        return added
+      }
       const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
       if (!title) throw new Refused('add needs item.title')
-      const next = addItem(current, { ...(e.item as Partial<Item>), title }, now)
+      let next = addItem(current, { ...(e.item as Partial<Item>), title }, now)
       const id = next.items[next.items.length - 1]!.id
+      // The spec given with the item is written and linked in the same call.
+      if (typeof e.text === 'string' && e.text.trim()) {
+        const rel = `docs/pipeline/specs/${id}.md`
+        await $.fs.write(`${found}/${rel}`, e.text.endsWith('\n') ? e.text : `${e.text}\n`)
+        next = updateItem(next, id, { spec: rel }, now)
+      }
       return writeLine($, found, next, id, state => `added ${id} · ${state}`)
     }
     case 'update': {
@@ -1377,6 +1407,10 @@ async function recordLead($: EngineInterface, ledger: Ledger | null): Promise<Re
  * there), the base, the status and the ledger in one call; the answer names the worktree to enter and what is next.
  */
 async function beginAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput = { action: 'begin' }): Promise<string> {
+  // An item whose pull request was merged by hand is closed here, in code, so the lead spends no call on it.
+  try {
+    for (const m of await checkMerged($, found, c, current)) if (m.id !== id) await runTool($, { action: 'close', item: m.id, ...(m.pr ? { pr: m.pr } : {}) })
+  } catch {}
   const item = current.items.find(i => i.id === id)!
   const isChild = await isChildSession($)
   const isActive = (ACTIVE_STATUSES as readonly string[]).includes(item.status)
@@ -1613,6 +1647,59 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
   if (!isGithub(c)) await commitPaths($, wt, [placesOf(found, c).briefDir(id)], `${id}: final review record`, attribution)
   const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
   return `${id} · gate ${gate} · final ${verdict} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${isDirect || /approved/i.test(verdict) ? 'open the PR' : 'the final review'}`
+}
+
+/**
+ * `ship`: everything after the building, in one call. What is uncommitted is committed with the message, the gate
+ * is run, the pull request opened and, under `merge: auto`, CI waited for, the PR merged and the item closed. It
+ * stops at the first thing the lead must act on (a red gate, a review to dispatch, red CI) and says what.
+ */
+async function shipAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const cfg = normalizeConfig(c ?? DEFAULTS).config
+  const ledger = await loadLedger($, found, id)
+  if (!ledger?.branch) throw new Refused(`${id} has no branch on record: begin it first`)
+  if (ledger.tasks.length) throw new Refused(`${id} runs on the full loop (its ledger has tasks): accept its tasks, then gate, pr and merge`)
+  const wt = worktreePath(found, ledger)
+  if (typeof e.attribution === 'string') await runTool($, { action: 'ledger', item: id, set: { attribution: e.attribution } })
+  const attribution = typeof e.attribution === 'string' ? e.attribution : typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
+  const SCOPE = ['--', '.', ':(exclude)docs/pipeline', ':(exclude).pipeline']
+  const dirty = await gitOut($, wt, ['status', '--porcelain', ...SCOPE])
+  if (dirty) {
+    if (!e.message?.trim()) throw new Refused('uncommitted changes in the worktree: pass "message" and ship commits them')
+    await gitOut($, wt, ['add', '-A', ...SCOPE])
+    const done = await gitOut($, wt, ['commit', '-q', '-m', e.message.trim(), ...(attribution.trim() ? ['-m', attribution.trim()] : [])])
+    if (done === null) throw new Refused('git commit failed in the worktree: commit it yourself, then ship')
+  }
+  // The gate, with the review a risky branch needs answered as the call to make.
+  let gated: string
+  try {
+    gated = await runTool($, { action: 'gate', item: id, ...(e.verdict ? { verdict: e.verdict } : {}), ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}) })
+  } catch (err) {
+    const said = err instanceof Error ? err.message : String(err)
+    if (!said.startsWith('review first')) throw err
+    const after = (await loadBacklog($, found)).value ?? current
+    const brief = await briefAction($, found, c, after, id, { action: 'brief', kind: 'final' })
+    return `${id} · ${said.split(' · ')[0]} · ${withoutId(id, brief)} Then ship again with "verdict".`
+  }
+  if (/· gate red/.test(gated.split('\n')[0] ?? '')) return gated
+  // The pull request; without gh the branch is pushed and the rest is the lead's.
+  let opened: string
+  try {
+    opened = await runTool($, { action: 'pr', item: id, ...(e.title ? { title: e.title } : {}), ...(e.body ? { body: e.body } : {}) })
+  } catch (err) {
+    return `${gated.replace(/ · next: .*$/, '')} · PR not opened (${err instanceof Error ? err.message.split(' · ')[0] : String(err)}): open it yourself, then update with "pr" and "status": "review"`
+  }
+  let out = opened
+  if (cfg.merge === 'auto') out = await runTool($, { action: 'merge', item: id })
+  // Under run all, the next item is begun with the same answer.
+  if (e.next && (cfg.merge !== 'auto' || / merged/.test(out))) {
+    try {
+      out = `${out}\n\nNext item:\n${await runTool($, { action: 'begin' })}`
+    } catch (err) {
+      out = `${out} · ${err instanceof Error ? err.message : String(err)}`
+    }
+  }
+  return out
 }
 
 /**
@@ -2998,8 +3085,17 @@ export const register: Register = (on, options) => {
       const input = e as unknown as ToolInput
       const result = await runTool($, input)
       // The lead's own work on an item makes it this session's: the panel, the band and `get` follow it.
-      const worked = ['ledger', 'plan', 'brief', 'begin', 'accept', 'gate', 'pr'].includes(input.action) ? (typeof input.item === 'string' ? input.item : input.item?.id ?? input.id) : input.action === 'update' && ['planning', 'building'].includes(String((input.set as Partial<Item> | undefined)?.status)) ? input.id : undefined
+      const worked = ['ledger', 'plan', 'brief', 'begin', 'accept', 'gate', 'pr', 'ship'].includes(input.action) ? (typeof input.item === 'string' ? input.item : input.item?.id ?? input.id) : input.action === 'update' && ['planning', 'building'].includes(String((input.set as Partial<Item> | undefined)?.status)) ? input.id : undefined
       if (worked && !(await read($, children)).some(ch => ch.item === worked)) self.item = worked
+      // A block the lead sets goes into the item's record too, so one call does both. Only for the lead's own
+      // call: a migration that carries a blocked item over writes its record itself.
+      const set = input.action === 'update' ? (input.set as Record<string, unknown> | undefined) : undefined
+      if (input.id && set?.['status'] === 'blocked' && typeof set['note'] === 'string' && set['note'].trim() && !String(result).startsWith('refused')) {
+        try {
+          const root = await resolveRoot($)
+          if (await loadLedger($, root, input.id)) await runTool($, { action: 'ledger', item: input.id, set: { blockers: [set['note'].trim()] } })
+        } catch {}
+      }
       return { result }
     } catch (err) {
       return { result: `refused: ${err instanceof Error ? err.message : String(err)}` }
@@ -3171,11 +3267,17 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
     case 'add':
       if (!arg) return { text: 'pipeline: add needs the request, as /pipeline add <text>' }
       return prompt(`pipeline: intake of "${arg}"…`, INTAKE_PROMPT(arg))
-    case 'next':
+    case 'next': {
+      const begun = await beginInCode($, '')
+      if (begun) return 'refused' in begun ? { text: `pipeline: ${begun.refused}` } : prompt(`pipeline: ${begun.id} begun…`, DIRECT_PROMPT(begun.answer, begun.id, false))
       return prompt('pipeline: running the first ready item…', (await isSessionRunner($)) ? SESSION_RUN_PROMPT('') : RUN_PROMPT(''))
-    case 'run':
+    }
+    case 'run': {
       if (!arg || (arg !== 'all' && !ID.test(arg))) return { text: 'pipeline: run needs an id or all, as /pipeline run p12' }
+      const begun = await beginInCode($, arg === 'all' ? '' : arg)
+      if (begun) return 'refused' in begun ? { text: `pipeline: ${begun.refused}` } : prompt(`pipeline: ${begun.id} begun…`, DIRECT_PROMPT(begun.answer, begun.id, arg === 'all'))
       return prompt(arg === 'all' ? 'pipeline: running until nothing is ready…' : `pipeline: running ${arg}…`, (await isSessionRunner($)) ? SESSION_RUN_PROMPT(arg) : RUN_PROMPT(arg))
+    }
     case 'stop':
       if (arg && ID.test(arg)) return { text: await runTool($, { action: 'stop', item: arg }) }
       return prompt('pipeline: stopping after the running task…', STOP_PROMPT)
@@ -3211,6 +3313,30 @@ async function isIssueQueue($: EngineInterface): Promise<boolean> {
 }
 
 /** Whether the config on disk says `runner: session`, so the commands hand the model the start prompt. */
+/**
+ * Mode direct with the in-session runner: the command claims the item itself, before the model runs, so the model
+ * starts with the spec in hand. Answers null when the skill should drive instead (mode full, the session runner,
+ * an item whose ledger already has tasks), and the refusal when nothing can be begun.
+ */
+async function beginInCode($: EngineInterface, target: string): Promise<{ id: string; answer: string } | { refused: string } | null> {
+  try {
+    const found = (await read($, root)) || (await resolveRoot($))
+    const { config: c, backlog: b } = await loadAll($, found)
+    const cfg = normalizeConfig(c ?? DEFAULTS).config
+    if (!c || cfg.mode !== 'direct' || cfg.runner === 'session') return null
+    // An item this session already runs is resumed, not passed over for the next ready one.
+    const id = target || (await activeItem($, b))?.id || ''
+    if (id && ((await loadLedger($, found, id))?.tasks.length ?? 0) > 0) return null
+    const answer = await runTool($, { action: 'begin', ...(id ? { item: id } : {}) })
+    return { id: answer.split(' · ')[0] ?? id, answer }
+  } catch (err) {
+    const said = err instanceof Error ? err.message : String(err)
+    // Nothing to begin, or the item is someone else's: said at once. Anything else (an item that still needs its
+    // spec written, an id the backlog does not know) is the skill's to sort out.
+    return /nothing is ready|another session|being built by|child session/.test(said) ? { refused: said } : null
+  }
+}
+
 async function isSessionRunner($: EngineInterface): Promise<boolean> {
   try {
     const found = (await read($, root)) || (await resolveRoot($))

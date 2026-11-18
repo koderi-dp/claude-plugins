@@ -871,7 +871,9 @@ test('migrate-github keeps a blocked item, an open question, a PR link, and give
   expect(got['item']).toMatchObject({ status: 'inbox', readiness: { ready: false, reason: 'open question on the issue' } })
   expect(building!.labels).toEqual(['pipeline', 'pipeline:building'])
   expect(text(await call($, { action: 'begin', item: '4' }))).toContain('4 · building · branch feat/p8')
-  expect(runs.some(r => r[0] === 'gh' && r.includes('--remove-label'))).toBe(false)
+  // begin took no label off the item it began. (This world's git says every branch is on main, so begin also closed
+  // the review item, issue 3, whose PR it takes for merged: that is begin closing what was merged by hand.)
+  expect(runs.some(r => r[0] === 'gh' && r.includes('--remove-label') && r[3] !== '3')).toBe(false)
 })
 
 test('a second apply does not ask the open question twice', async ($, on) => {

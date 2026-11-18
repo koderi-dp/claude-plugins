@@ -142,13 +142,13 @@ test('the prompts: each submits a turn that names its skill and its first tool c
   await run($, 'add')
   expect(submitted).toHaveLength(1)
 
-  await run($, 'next')
-  expect(last()).toContain('pipeline-run')
-  expect(last()).toContain('run the first ready item')
+  // Mode direct begins the item in code: with nothing ready it says so at once and submits no turn.
+  const none = await run($, 'next')
+  expect(none.text).toBe('pipeline: nothing is ready: every item waits for a spec, an answer or another item')
+  expect(submitted).toHaveLength(1)
   await run($, 'run p12')
   expect(last()).toContain('run item p12')
-  await run($, 'run all')
-  expect(last()).toContain('until none is left')
+  expect((await run($, 'run all')).text).toBe('pipeline: nothing is ready: every item waits for a spec, an answer or another item')
   const before = submitted.length
   await run($, 'run')
   expect(submitted).toHaveLength(before)
