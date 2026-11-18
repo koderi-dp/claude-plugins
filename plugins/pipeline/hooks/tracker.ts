@@ -180,6 +180,15 @@ export async function checks(run: Run, pr: number): Promise<Result<Checks>> {
   return unexpected(args)
 }
 
+/** Opens a pull request from `head` into `base` and answers its number. */
+export async function createPr(run: Run, input: { base: string; head: string; title: string; body: string }): Promise<Result<number>> {
+  const args = ['pr', 'create', '--base', input.base, '--head', input.head, '--title', input.title, '--body', input.body]
+  const r = await gh(run, args)
+  if (!r.ok) return r
+  const n = Number(/\/pull\/(\d+)/.exec(r.value)?.[1])
+  return n ? { ok: true, value: n } : unexpected(args)
+}
+
 /** Merges a pull request now, with a merge commit or squashed. Never `--auto`: that needs a repository setting. */
 export async function mergePr(run: Run, pr: number, method: 'merge' | 'squash'): Promise<Result<true>> {
   const r = await gh(run, ['pr', 'merge', String(pr), method === 'squash' ? '--squash' : '--merge'])

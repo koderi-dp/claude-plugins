@@ -441,9 +441,9 @@ test('begin labels and assigns the issue, writes the spec cache in the worktree 
   expect(has(runs, ['gh', 'issue', 'edit', '2', '--add-label', 'pipeline:building', '--add-assignee', 'me'])).toBe(true)
   expect(files.get(`${WT2}/.pipeline/2/spec.md`)).toContain('## Acceptance')
   expect(files.get(EXCLUDE)).toContain('.pipeline/')
-  expect(line).toContain('next: read .pipeline/2/spec.md, write .pipeline/2/plan.md, then plan')
+  expect(line).toContain('next: build it your own way in /p/main/.claude/worktrees/2, commit, then gate\n\nThe spec (.pipeline/2/spec.md):\n\n## What\n\nCSV export of the list.')
   expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ branch: 'feat/2', worktree: '.claude/worktrees/2' })
-  expect(JSON.parse(files.get(ITEMS)!).items['2']).toMatchObject({ status: 'planning', ledger: '.git/pipeline/2/ledger.json' })
+  expect(JSON.parse(files.get(ITEMS)!).items['2']).toMatchObject({ status: 'building', ledger: '.git/pipeline/2/ledger.json' })
   // The fresh read before the worktree and the one after labelling.
   expect(runs.filter(r => r[0] === 'gh' && r[1] === 'issue' && r[2] === 'view' && r[3] === '2').length).toBe(2)
 })
@@ -483,7 +483,7 @@ test('begin that loses the race lets go: its worktree removed, its user unassign
 test('begin that wins the race keeps the claim: the login that sorts first keeps it', async ($, on) => {
   const { files } = world(on, { [CONFIG]: CONFIG_GH })
   const { runs } = runWorld(on, { onEdit: racer('zoe') })
-  expect(text(await call($, { action: 'begin', item: '2' }))).toContain('2 · planning · branch feat/2')
+  expect(text(await call($, { action: 'begin', item: '2' }))).toContain('2 · building · branch feat/2')
   expect(runs.some(r => r.includes('--remove-assignee') || r.includes('remove'))).toBe(false)
   expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ worktree: '.claude/worktrees/2' })
 })
@@ -688,7 +688,7 @@ test('a worktree close had to leave is recorded, listed by clean, and swept by a
   expect(text(await call($, { action: 'clean' }))).toBe('.claude/worktrees/2\nbranch:feat/2')
   where.cwd = WORKTREE
   const before = runs.length
-  expect(text(await call($, { action: 'begin', item: '3' }))).toContain('3 · planning')
+  expect(text(await call($, { action: 'begin', item: '3' }))).toContain('3 · building')
   expect(runs.slice(before)).toContainEqual(['git', '-C', MAIN, 'worktree', 'remove', '--force', '.claude/worktrees/2'])
   expect(runs.slice(before)).toContainEqual(['git', '-C', MAIN, 'branch', '-D', 'feat/2'])
   expect(JSON.parse(files.get(ITEMS)!).leftover ?? []).toEqual([])
@@ -871,7 +871,9 @@ test('migrate-github keeps a blocked item, an open question, a PR link, and give
   expect(got['item']).toMatchObject({ status: 'inbox', readiness: { ready: false, reason: 'open question on the issue' } })
   expect(building!.labels).toEqual(['pipeline', 'pipeline:building'])
   expect(text(await call($, { action: 'begin', item: '4' }))).toContain('4 · building · branch feat/p8')
-  expect(runs.some(r => r[0] === 'gh' && r.includes('--remove-label'))).toBe(false)
+  // begin took no label off the item it began. (This world's git says every branch is on main, so begin also closed
+  // the review item, issue 3, whose PR it takes for merged: that is begin closing what was merged by hand.)
+  expect(runs.some(r => r[0] === 'gh' && r.includes('--remove-label') && r[3] !== '3')).toBe(false)
 })
 
 test('a second apply does not ask the open question twice', async ($, on) => {
@@ -926,4 +928,31 @@ test('0.4.5: update with a body and a status does both', async ($, on) => {
   expect(state.issues[0]!.body).toBe('New text.')
   expect(state.issues[0]!.labels).toContain('pipeline:blocked')
   expect(JSON.parse(files.get(ITEMS)!).items['2']).toMatchObject({ status: 'blocked' })
+})
+
+test('0.5.0: pr opens the pull request through gh with the spec as its body, records it and sets the item to review', async ($, on) => {
+  const { files } = world(on, {
+    [CONFIG]: VALID_CONFIG,
+    [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'CSV export', status: 'building', spec: 'docs/pipeline/specs/p1.md', ledger: 'docs/pipeline/ledgers/p1.json' }] }),
+    [`${DIR}/ledgers/p1.json`]: JSON.stringify({ item: 'p1', branch: 'feat/p1', worktree: '.claude/worktrees/p1', attribution: 'Co-Authored-By: X', tasks: [], rulings: [], blockers: [], tokens: 0 }),
+    [`${DIR}/specs/p1.md`]: SPEC,
+  })
+  const runs: string[][] = []
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    runs.push(argv)
+    const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
+    if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'create') return ok('https://github.com/o/r/pull/31\n')
+    return ok()
+  })
+  expect(text(await call($, { action: 'pr', item: 'p1' }))).toBe('p1 review · PR #31 · next: the user merges it; close runs on a later get')
+  const create = runs.find(r => r[0] === 'gh' && r[2] === 'create')!
+  expect(create.slice(0, 9)).toEqual(['gh', 'pr', 'create', '--base', 'main', '--head', 'feat/p1', '--title', 'p1: CSV export'])
+  expect(create[10]).toContain('CSV export of the list.')
+  expect(create[10]).toContain('## Acceptance\n\n- [ ] a csv downloads')
+  expect(create[10]).toContain('Co-Authored-By: X')
+  expect(JSON.parse(files.get(BACKLOG)!).items[0]).toMatchObject({ status: 'review', pr: '#31' })
+  // Asked again, it opens no second one.
+  expect(text(await call($, { action: 'pr', item: 'p1' }))).toContain('PR #31 is already open')
+  expect(runs.filter(r => r[0] === 'gh' && r[2] === 'create').length).toBe(1)
 })

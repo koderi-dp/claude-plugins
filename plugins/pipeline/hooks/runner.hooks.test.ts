@@ -536,6 +536,9 @@ test('runner subagent: next and run keep the in-session prompt', async ($, on) =
   await $.command.run({ command: 'pipeline', args: 'next', origin: { kind: 'composer' } } as never)
   await clock.advance(100)
   for (let i = 0; i < 5; i++) await Promise.resolve()
-  expect(submitted[0]).toContain('run the first ready item')
+  // Mode direct: the command began the item itself, and the turn starts with the spec and the one closing call.
+  expect(submitted[0]).toContain('Pipeline item p12 is claimed for this session')
+  expect(submitted[0]).toContain('"action":"ship","item":"p12"')
+  expect(submitted[0]).not.toContain('pipeline-run skill')
   expect(submitted[0]).not.toContain('"start"')
 })

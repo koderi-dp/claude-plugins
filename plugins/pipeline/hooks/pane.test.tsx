@@ -935,9 +935,10 @@ test('review 0.2 C1: a ledger file without a tasks array (valid JSON) draws the 
   const ui = await mount($ as never, 'desktop')
   expect(await ui.find({ type: 'Text', text: /^pipeline: / })).toBeUndefined()
   const a = await alts(ui)
-  expect(a[0]).toBe('BUILDING · P2: Export, 0 of 0 tasks accepted')
+  expect(a[0]).toBe('BUILDING · P2: Export, Build')
   expect(a.length).toBeGreaterThanOrEqual(2)
-  expect((await ui.find({ type: 'Text', text: 'No ledger yet.' }))?.text).toBe('No ledger yet.')
+  // A ledger with no tasks is a direct-mode item: the steps say where it is, and no "No ledger yet." line is drawn.
+  expect(await ui.find({ type: 'Text', text: 'No ledger yet.' })).toBeUndefined()
   await ui.unmount()
   // The band above the prompt draws from the same ledger.
   const bar = await band($ as never, 'desktop')
