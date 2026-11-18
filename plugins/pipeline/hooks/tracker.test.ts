@@ -370,3 +370,16 @@ test('mergePr merges with the method and never asks for auto-merge', async () =>
   expect(calls).toEqual([['gh', 'api', '-X', 'PUT', `${R}/pulls/96/merge`, '-f', 'merge_method=merge'], ['gh', 'api', '-X', 'PUT', `${R}/pulls/96/merge`, '-f', 'merge_method=squash']])
   expect(await mergePr(fake({ [`PUT ${R}/pulls/96/merge`]: http(405, 'Pull Request is not mergeable') }).run, 96, 'merge')).toEqual({ ok: false, error: 'gh: gh: Pull Request is not mergeable (HTTP 405)' })
 })
+
+test('watchChecks with CI expected waits five minutes for a first check: one that appears after 40 s is seen, and none at all is still none', async () => {
+  // As in the live run: nothing for eight polls (40 s), then the check, already failed.
+  const late = polled([[], [], [], [], [], [], [], [], [done('test', 'failure')]])
+  expect(await watchChecks(late.run, 96, late.wait, true)).toEqual({ ok: true, value: { state: 'red', failing: ['test'] } })
+  expect(late.waits.length).toBe(8)
+  // Without the expectation the same pull request reads as having no CI after 30 s.
+  const early = polled([[], [], [], [], [], [], [], [], [done('test', 'failure')]])
+  expect((await watchChecks(early.run, 96, early.wait)).ok && (await watchChecks(early.run, 96, early.wait))).toBeTruthy()
+  const never = polled([[]])
+  expect(await watchChecks(never.run, 96, never.wait, true)).toEqual({ ok: true, value: { state: 'none', failing: [] } })
+  expect(never.waits.length).toBe(60)
+})

@@ -1598,8 +1598,14 @@ async function mergeAction($: EngineInterface, found: string, c: Config | null, 
     await pause($, ms)
   }
   const run = ghRun($, found)
-  const state = await tracker.watchChecks(run, n, wait)
+  // A repository with workflow files is expected to report: no check within five minutes is then not "no CI",
+  // and the pull request is not merged on it (unless forced).
+  const wtOf = worktreePath(found, ledger)
+  const flows = [...(await listDir($, `${wtOf}/.github/workflows`)), ...(wtOf === found ? [] : await listDir($, `${found}/.github/workflows`))]
+  const expectsCi = flows.some(f => /\.ya?ml$/i.test(f))
+  const state = await tracker.watchChecks(run, n, wait, expectsCi)
   if (!state.ok) throw new Refused(`${state.error} · or ${yourself}`)
+  if (state.value.state === 'none' && expectsCi && !e.force) return `${id} · CI has not reported on PR #${n} after five minutes although the repository has workflows · not merged · look at the Actions tab, then merge again, or merge with "force": true`
   if (state.value.state === 'red') return `${id} · CI red · ${state.value.failing.join(', ')} · PR #${n} not merged · one fix wave, then merge again`
   if (state.value.state === 'pending') return `${id} · CI still running on PR #${n} · merge again`
   const merged = await tracker.mergePr(run, n, cfg.mergeMethod)

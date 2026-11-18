@@ -257,15 +257,20 @@ export async function checks(run: Run, pr: number): Promise<Result<Checks>> {
   return { ok: true, value: { state: rows.some(c => c.is === 'pending') ? 'pending' : 'green', failing: [] } }
 }
 
+/** How often a first check is waited for when the repository has workflows: five minutes of 5 s polls. */
+export const NONE_POLLS_EXPECTED = 60
+
 /**
  * Polls a pull request's checks until they are through and answers where they stand; `wait` is the caller's sleep.
- * No checks at first: asked again every 5 s, six more times, since CI needs a moment to register after a pull
- * request opens, and `none` only when there are still none. Running: asked again every 15 s, 240 polls at most (an
+ * No checks at first: asked again every 5 s, since CI needs a moment to register after a pull request opens (in a
+ * live run the first check appeared 40 s after the pull request). Six more times when the repository is not known to
+ * have CI, sixty (five minutes) when `expectsCi` says it has workflows; `none` only when there are still none. Running: asked again every 15 s, 240 polls at most (an
  * hour), then the last `pending` is the answer. Green or red answers at once.
  */
-export async function watchChecks(run: Run, pr: number, wait: (ms: number) => Promise<void>): Promise<Result<Checks>> {
+export async function watchChecks(run: Run, pr: number, wait: (ms: number) => Promise<void>, expectsCi = false): Promise<Result<Checks>> {
   let r = await checks(run, pr)
-  for (let i = 0; r.ok && r.value.state === 'none' && i < NONE_POLLS; i++) {
+  const nonePolls = expectsCi ? NONE_POLLS_EXPECTED : NONE_POLLS
+  for (let i = 0; r.ok && r.value.state === 'none' && i < nonePolls; i++) {
     await wait(NONE_WAIT_MS)
     r = await checks(run, pr)
   }

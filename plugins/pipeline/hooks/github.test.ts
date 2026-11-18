@@ -555,15 +555,19 @@ test('close after the PR merged: labels gone, issue closed, worktree removed, no
 })
 
 /** The item 2 in review with PR #5, as the close test seeds it; the waits between polls (`sleep`) are recorded with the runs. */
-function mergeWorld(on: On, checks: GhState['checks']) {
+function mergeWorld(on: On, checks: GhState['checks'], hasWorkflows = false) {
   const { files } = world(on, {
     [CONFIG]: CONFIG_GH,
     [ITEMS]: JSON.stringify({ items: { '2': { status: 'review', branch: 'feat/2', pr: '#5', ledger: '.git/pipeline/2/ledger.json' } }, pending: [] }),
     [LEDGER2]: JSON.stringify({ item: '2', branch: 'feat/2', worktree: '.claude/worktrees/2', tasks: [{ n: 1, title: 'A', status: 'accepted', dispatches: [] }], rulings: [], blockers: [], tokens: 0 }),
     [`${MAIN}/.claude/worktrees`]: '',
+    ...(hasWorkflows ? { [`${MAIN}/.github/workflows`]: '' } : {}),
   })
   const { runs, gh } = runWorld(on, { checks, issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] })] })
-  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
+  on('fs.list', (_$, e) => {
+    const at = (e as { path: string }).path
+    return { value: at === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : hasWorkflows && at === `${MAIN}/.github/workflows` ? [{ name: 'ci.yml', kind: 'file' }] : [] } as never
+  })
   return { files, runs, gh }
 }
 
@@ -895,4 +899,14 @@ test('0.5.0: pr opens the pull request through gh with the spec as its body, rec
   // Asked again, it opens no second one.
   expect(text(await call($, { action: 'pr', item: 'p1' }))).toContain('PR #31 is already open')
   expect(runs.filter(r => isCall(r, 'POST', 'pulls')).length).toBe(1)
+})
+
+test('0.5.2: a repository with workflows whose checks never report is not merged; force merges it', async ($, on) => {
+  const { runs, gh } = mergeWorld(on, null, true)
+  expect(text(await call($, { action: 'merge', item: '2' }))).toBe('2 · CI has not reported on PR #5 after five minutes although the repository has workflows · not merged · look at the Actions tab, then merge again, or merge with "force": true')
+  expect(runs.some(r => r.includes('PUT'))).toBe(false)
+  expect(gh.issues[0]!.state).toBe('open')
+  // The five minutes were waited for: sixty polls 5 s apart.
+  expect(runs.filter(r => r[0] === 'sleep').length).toBe(60)
+  expect(text(await call($, { action: 'merge', item: '2', force: true }))).toContain('2 merged · PR #5')
 })
