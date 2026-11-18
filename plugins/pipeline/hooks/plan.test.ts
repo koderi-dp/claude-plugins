@@ -174,7 +174,8 @@ test('renderBrief refuses what it cannot fill', () => {
   expect(() => renderBrief({ ...base(), kind: 'implementer', task: 9 })).toThrow('the plan has no task 9')
   expect(() => renderBrief({ ...base(), kind: 'fix', task: 1 })).toThrow('a fix brief needs findings')
   expect(() => renderBrief({ ...base(), kind: 'review', task: 1 })).toThrow('a review brief needs commits')
-  expect(() => renderBrief({ ...base(), kind: 'final', task: 2, specMd: '# x' })).toThrow('has no Acceptance list')
+  // A request with no Acceptance list is reviewed against its whole text.
+  expect(renderBrief({ ...base(), kind: 'final', task: 2, specMd: '# Export\n\nCSV, please' }).text).toContain('judge the branch against the whole of it.)\n\n# Export\n\nCSV, please')
   expect(() => renderBrief({ ...base(), kind: 'implementer', task: 1, template: 'x {{nope}}' })).toThrow('{{nope}}')
 })
 

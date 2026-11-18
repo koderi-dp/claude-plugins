@@ -177,8 +177,9 @@ test('get lists the labelled issues as items, and writes nothing under docs/pipe
   const { writes } = world(on, { [CONFIG]: CONFIG_GH })
   const runs = ghWorld(on, { me: 'me', issues: [issueOf(1, 'Login'), issueOf(2, 'Export', { comments: [specComment('200')] })] })
   const got = await json($, { action: 'get' })
-  expect(got['next'][0]).toMatchObject({ id: '2', reason: 'ready' })
-  expect(got['counts']).toMatchObject({ inbox: 1, ready: 1 })
+  // An issue with no spec comment is ready too: its own text is the spec.
+  expect(got['next'][0]).toMatchObject({ id: '1', reason: 'ready' })
+  expect(got['counts']).toMatchObject({ inbox: 0, ready: 2 })
   await json($, { action: 'get' })
   expect(writes.filter(w => w.includes('/docs/pipeline/'))).toEqual([])
   expect(lists(runs)).toBe(1)
@@ -198,7 +199,7 @@ test('get { id } carries the quoted issue', async ($, on) => {
 test('add creates a labelled issue; spec posts the comment and the item is ready', async ($, on) => {
   const { writes } = world(on, { [CONFIG]: CONFIG_GH })
   const runs = ghWorld(on, { me: 'me', issues: [issueOf(1, 'Login'), issueOf(2, 'Export')] })
-  expect(text(await call($, { action: 'add', item: { title: 'CSV export', note: 'alice asked for it' } }))).toBe('added 3 · inbox · no spec')
+  expect(text(await call($, { action: 'add', item: { title: 'CSV export', note: 'alice asked for it' } }))).toBe('added 3 · ready')
   expect(has(runs, ['gh', 'issue', 'create', '--title', 'CSV export', '--body', 'alice asked for it', '--label', 'pipeline'])).toBe(true)
   expect(text(await call($, { action: 'spec', id: '3', text: SPEC }))).toBe('3 · ready · spec posted')
   const posted = runs.find(r => r[1] === 'issue' && r[2] === 'comment')!
@@ -258,11 +259,11 @@ test('park removes the queue label; unpark adds it back to an issue the list no 
   expect(text(await call($, { action: 'park', id: '2' }))).toBe('2 · parked')
   expect(has(runs, ['gh', 'issue', 'edit', '2', '--remove-label', 'pipeline'])).toBe(true)
   await clock.advance(MIN + 1000)
-  expect((await json($, { action: 'get', titles: true }))['titles']).toEqual(['1 inbox Login'])
+  expect((await json($, { action: 'get', titles: true }))['titles']).toEqual(['1 ready Login'])
   expect(text(await call($, { action: 'unpark', id: '2' }))).toBe('2 · ready')
   expect(runs.some(r => r[1] === 'issue' && r[2] === 'view' && r[3] === '2')).toBe(true)
   expect(has(runs, ['gh', 'issue', 'edit', '2', '--add-label', 'pipeline'])).toBe(true)
-  expect((await json($, { action: 'get', titles: true }))['titles']).toEqual(['1 inbox Login', '2 ready Export'])
+  expect((await json($, { action: 'get', titles: true }))['titles']).toEqual(['1 ready Login', '2 ready Export'])
   gh.issues[0]!.state = 'closed'
   expect(text(await call($, { action: 'unpark', id: '1' }))).toMatch(/^refused: /)
 })
@@ -307,7 +308,7 @@ test('offline with a cache: get answers from it and says how old it is', async (
   await clock.advance(14 * MIN)
   const got = await json($, { action: 'get' })
   expect(got['stale']).toBe('issues read 14 min ago')
-  expect(got['counts']).toMatchObject({ inbox: 1, ready: 1 })
+  expect(got['counts']).toMatchObject({ inbox: 0, ready: 2 })
   expect(got['error']).toBeUndefined()
 })
 
@@ -350,11 +351,12 @@ test('/pipeline run 12 and /pipeline run #12 reach the tool with id 12', async (
     for (let i = 0; i < 5; i++) await Promise.resolve()
     return answer
   }
-  expect((await run('run 12')).text).toBe('pipeline: running 12…')
-  expect((await run('run #12')).text).toBe('pipeline: running 12…')
+  expect((await run('run 12')).text).toBe('pipeline: 12 begun…')
+  expect((await run('run #12')).text).toBe('pipeline: 12 begun…')
   expect(submitted.length).toBe(2)
   for (const s of submitted) {
-    expect(s).toContain('run item 12 ')
+    expect(s).toContain('Pipeline item 12 is claimed for this session')
+    expect(s).toContain('"action":"ship","item":"12"')
     expect(s).not.toContain('#12')
   }
   expect((await run('move 12 top')).text).toBe('refused: move does not apply with queue: github: the issues are the queue')
@@ -456,12 +458,14 @@ test("begin refuses an issue another user's machine is building", async ($, on) 
   expect(files.has(LEDGER2)).toBe(false)
 })
 
-test('begin refuses an issue with no spec comment', async ($, on) => {
+test('begin takes an issue with no spec comment: its own title and body are the spec', async ($, on) => {
   const { files } = world(on, { [CONFIG]: CONFIG_GH })
   const { runs } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:blocked'] })] })
-  expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 has no spec comment: post one with spec')
-  expect(runs.some(r => r[1] === 'issue' && r[2] === 'edit')).toBe(false)
-  expect(files.has(LEDGER2)).toBe(false)
+  const begun = text(await call($, { action: 'begin', item: '2' }))
+  expect(begun).toContain('2 · building · branch feat/2')
+  expect(begun).toContain('The spec (.pipeline/2/spec.md):\n\n# Export\n\nExport, please')
+  expect(runs.some(r => r[1] === 'issue' && r[2] === 'edit')).toBe(true)
+  expect(files.has(LEDGER2)).toBe(true)
 })
 
 /** Another user labels and assigns the issue in the same second as this machine. */
@@ -524,14 +528,14 @@ test('start with force takes over an issue building on another machine', async (
   expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ branch: 'feat/2', worktree: '.claude/worktrees/2' })
 })
 
-test('start refuses an issue with no spec comment, as begin does', async ($, on) => {
+test('start takes an issue with no spec comment, as begin does', async ($, on) => {
   world(on, { [CONFIG]: JSON.stringify({ ...JSON.parse(CONFIG_GH), runner: 'session' }) })
   on('classic.UserPromptSubmit', () => ({}) as never)
   const { gh } = runWorld(on)
   await $.classic.UserPromptSubmit({ prompt: 'hi', permission_mode: 'auto' } as never)
   await call($, { action: 'get' })
   gh.issues[0]!.comments = []
-  expect(text(await call($, { action: 'start', item: '2' }))).toBe('refused: 2 has no spec comment: post one with spec')
+  expect(text(await call($, { action: 'start', item: '2' }))).toContain('started 2 in .claude/worktrees/2')
 })
 
 test('begin resumes an issue with a local ledger although a teammate was added as a second assignee', async ($, on) => {
@@ -766,7 +770,7 @@ test('migrate-github apply creates the issues, posts the specs, copies the activ
   const answer = text(await call($, { action: 'migrate-github', apply: true }))
   const creates = runs.filter(r => r[0] === 'gh' && r[1] === 'issue' && r[2] === 'create')
   expect(creates.length).toBe(2)
-  expect(creates[0]).toEqual(['gh', 'issue', 'create', '--title', 'Export', '--body', '### What\n\nCSV export of the list.\n\n### Why\n\nUsers asked for it.\n\nMigrated from p2.', '--label', 'pipeline'])
+  expect(creates[0]).toEqual(['gh', 'issue', 'create', '--title', 'Export', '--body', '### What\n\nCSV export of the list.\n\n### Why\n\nUsers asked for it.\n\n### Acceptance\n\n- [ ] a csv downloads\n\n### Out of scope\n\nExcel.\n\nMigrated from p2.', '--label', 'pipeline'])
   expect(creates[1]).toEqual(['gh', 'issue', 'create', '--title', 'Import', '--body', 'bob asked for it\n\nMigrated from p4.', '--label', 'pipeline'])
   // p4 needed p1 (merged: no issue) and p2 (now the first issue): the dependency is on its body, and it waits.
   const export_ = gh.issues.find(i => i.title === 'Export')!.number

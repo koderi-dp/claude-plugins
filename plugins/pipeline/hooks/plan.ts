@@ -198,9 +198,9 @@ export function renderBrief(input: BriefInput): { text: string; brief: string; r
   }
   if (kind === 'final') {
     const acceptance = section(input.specMd, 'Acceptance')
-    if (!acceptance) throw new Error(`${at.specRel} has no Acceptance list`)
+    // A request with no Acceptance heading (an issue's own text) is judged against the whole of what it says.
     const rulings = (ledger.rulings ?? []).map(r => `${r.n}. ${[r.text, r.why].filter(Boolean).join(' — ')}`).join('\n')
-    Object.assign(values, { base: or(ledger.base, c.mainBranch), head: or(input.head, 'HEAD'), acceptance, rulings: rulings || 'none', parked: or(plan.parked, 'nothing'), findings: or(input.findings, 'the whole branch'), rules: rulesGroup(input.rulesMd, 'Before the PR') })
+    Object.assign(values, { base: or(ledger.base, c.mainBranch), head: or(input.head, 'HEAD'), acceptance: acceptance || `(The request lists no acceptance criteria: judge the branch against the whole of it.)\n\n${input.specMd.trim()}`, rulings: rulings || 'none', parked: or(plan.parked, 'nothing'), findings: or(input.findings, 'the whole branch'), rules: rulesGroup(input.rulesMd, 'Before the PR') })
   }
   const { text, missing } = fill(input.template ?? TEMPLATES[kind], values)
   if (missing.length) throw new Error(`the ${kind} template names ${missing.map(x => `{{${x}}}`).join(', ')}, which the tool does not fill`)

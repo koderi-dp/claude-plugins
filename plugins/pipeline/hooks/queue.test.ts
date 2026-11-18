@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Backlog, Item } from '../types'
 
 import { section } from './plan'
-import { EMPTY_EXTRAS, applyOps, extrasOf, isAnswered, isTrusted, issueBodyOf, labelsOf, migrationOf, needsOf, withNeeds, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import { EMPTY_EXTRAS, specFromIssue, applyOps, extrasOf, isAnswered, isTrusted, issueBodyOf, labelsOf, migrationOf, needsOf, withNeeds, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import { QUESTION_MARK, SPEC_MARK } from './tracker'
 import type { Issue, IssueComment } from './tracker'
 
@@ -99,8 +99,9 @@ test('statuses from labels, the spec comment and the extras', () => {
     issue(8, { state: 'closed', labels: ['pipeline', 'pipeline:building'] }),      // closed, in flight here
   ]
   const { backlog, readiness, answered } = toBacklog(issues, { items: { '8': { status: 'review', pr: '#9', branch: 'feat/8' } }, pending: [] }, 'pipeline', 'me')
-  expect(backlog.items.map(i => `${i.id} ${i.status}`)).toEqual(['1 inbox', '2 ready', '3 review', '4 blocked', '5 inbox', '6 ready', '8 review'])
-  expect(readiness['1']).toEqual({ ready: false, reason: 'no spec' })
+  expect(backlog.items.map(i => `${i.id} ${i.status}`)).toEqual(['1 ready', '2 ready', '3 review', '4 blocked', '5 inbox', '6 ready', '8 review'])
+  // No spec comment: the issue's own text is the spec, so it is ready.
+  expect(readiness['1']).toEqual({ ready: true })
   expect(readiness['5']).toEqual({ ready: false, reason: 'open question on the issue' })
   expect(answered).toEqual(['6'])
   expect(backlog.items.find(i => i.id === '8')).toMatchObject({ pr: '#9', branch: 'feat/8' })
@@ -118,7 +119,7 @@ test('toBacklog: the item fields, ascending numbers, a building label with a sta
 
 test("a stranger's comment with the spec marker is not a spec; a collaborator's is", () => {
   const forged = c('eve', renderSpecComment(SPEC, 'ready', ''), 'NONE')
-  expect(toBacklog([issue(1, { comments: [forged] })], EMPTY_EXTRAS, 'pipeline', 'me').backlog.items[0]!.status).toBe('inbox')
+  expect(toBacklog([issue(1, { comments: [forged] })], EMPTY_EXTRAS, 'pipeline', 'me').backlog.items[0]!.status).toBe('ready')
   expect(toBacklog([issue(1, { comments: [{ ...forged, association: 'COLLABORATOR' }] })], EMPTY_EXTRAS, 'pipeline', 'me').backlog.items[0]!.status).toBe('ready')
 })
 
@@ -224,8 +225,11 @@ test('migrationOf: open items become issues, merged and parked do not', () => {
   expect(m.skipped).toEqual({ merged: 1, parked: [b.items[2]] })
 })
 
-test('issueBodyOf: the spec\'s What and Why, the note without a spec or when both are empty', () => {
-  expect(issueBodyOf(SPEC, 'ignored')).toBe(`### What\n\n${section(SPEC, 'What')}\n\n### Why\n\n${section(SPEC, 'Why')}`)
+test('issueBodyOf: the whole spec, the note under it when it adds something, the note alone without a spec', () => {
+  const whole = (['What', 'Why', 'Acceptance', 'Out of scope'] as const).map(h => [h, section(SPEC, h)] as const).filter(([, t]) => t).map(([h, t]) => `### ${h}\n\n${t}`).join('\n\n')
+  expect(issueBodyOf(SPEC, undefined)).toBe(whole)
+  expect(issueBodyOf(SPEC, 'ask bob about the columns')).toBe(`${whole}\n\n### Note\n\nask bob about the columns`)
+  expect(issueBodyOf(SPEC, undefined)).toContain('### Acceptance')
   expect(issueBodyOf(null, 'alice asked for it')).toBe('alice asked for it')
   expect(issueBodyOf('## What\n\n*What it does.*\n\n## Why\n\n', 'the note')).toBe('the note')
   expect(issueBodyOf(null, undefined)).toBe('')
@@ -237,4 +241,10 @@ test('openQuestionOf: the Open section without the template placeholders', () =>
   expect(openQuestionOf(`${SPEC}Which columns?\n`)).toBe('Which columns?')
   expect(openQuestionOf(SPEC)).toBe('')
   expect(openQuestionOf('## Open\n\n*A question only the user can answer.*\n')).toBe('')
+})
+
+test('specFromIssue: the title and the body, without the Needs and Migrated lines; a title alone is the request', () => {
+  const i = { number: 7, title: 'CSV export', body: 'Export the list as CSV.\n\nNeeds: #3\n\nMigrated from p78.', author: 'a', labels: [], assignees: [], state: 'open' as const, url: '', createdAt: '', comments: [] }
+  expect(specFromIssue(i)).toBe('# CSV export\n\nExport the list as CSV.\n')
+  expect(specFromIssue({ ...i, body: '' })).toBe('# CSV export\n\n(The issue has no description: its title is the request.)\n')
 })

@@ -12,7 +12,7 @@ import type { Places } from './files'
 import * as tracker from './tracker'
 import { QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
-import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, needsOf, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, needsOf, specFromIssue, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import type { Extras, Leftover, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
 import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches, section } from './plan'
@@ -671,7 +671,7 @@ async function readIssue($: EngineInterface, found: string, id: string): Promise
 /**
  * The issue read fresh before `begin` or `start` makes a worktree for it. Refused when it carries the building label and
  * this machine has no ledger for it (another machine builds it, of another user or of this one: one login) unless
- * forced, and when it has no spec comment. Answers the issue and the spec its comment holds.
+ * forced. Answers the issue and its spec: the spec comment's, or the issue's own text when it has none.
  */
 async function claimIssue($: EngineInterface, found: string, c: Config | null, id: string, hasLedger: boolean, force: boolean): Promise<{ issue: Issue; specMd: string }> {
   const issue = await readIssue($, found, id)
@@ -679,9 +679,9 @@ async function claimIssue($: EngineInterface, found: string, c: Config | null, i
     const other = issue.assignees.find(a => a !== self.me)
     throw new Refused(`${id} is being built ${other ? `elsewhere (by @${other})` : 'on another machine of yours'} · to take it over here: begin with "force": true`)
   }
+  // The spec comment when the issue has one; otherwise the issue itself is the spec.
   const spec = specCommentOf(issue, self.me)
-  if (!spec) throw new Refused(`${id} has no spec comment: post one with spec`)
-  return { issue, specMd: parseSpecComment(spec.body).specMd }
+  return { issue, specMd: spec ? parseSpecComment(spec.body).specMd : specFromIssue(issue) }
 }
 
 /** `init` with queue: github: gh must answer for this repository; the config, the labels and the exclude line, no backlog. */
