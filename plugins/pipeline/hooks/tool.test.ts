@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { isCall, restGithub } from './fixtures/github'
+
 const TOOL = 'mcp__pipeline__pipeline'
 const MAIN = '/p/main'
 const WORKTREE = '/p/wt/task-7'
@@ -8,6 +10,7 @@ const DIR = `${MAIN}/docs/pipeline`
 const CONFIG = `${DIR}/config.json`
 const BACKLOG = `${DIR}/backlog.json`
 const BACKLOG_MD = `${DIR}/BACKLOG.md`
+const GITIGNORE = `${MAIN}/.gitignore`
 const NOW = Date.parse('2026-11-05T10:00:00Z')
 
 const VALID_CONFIG = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: {}, merge: 'pr' }, null, 2) + '\n'
@@ -254,13 +257,31 @@ test('init writes the defaults and an empty backlog, and a second init changes n
   const { files, writes } = world(on)
   const r = text(await call($, { action: 'init' }))
   expect(r).toBe('wrote docs/pipeline/config.json, docs/pipeline/backlog.json, docs/pipeline/BACKLOG.md\ncommit docs/pipeline/ on main now: git add docs/pipeline && git commit')
-  expect(writes).toEqual([CONFIG, BACKLOG, BACKLOG_MD])
+  expect(writes).toEqual([CONFIG, BACKLOG, BACKLOG_MD, GITIGNORE])
+  expect(files.get(GITIGNORE)).toBe('.claude/worktrees/\n')
   expect(JSON.parse(files.get(CONFIG)!)).toMatchObject({ version: 1, merge: 'pr', protectedPaths: ['.github/workflows/**'] })
   expect(JSON.parse(files.get(BACKLOG)!)).toEqual({ version: 1, items: [] })
   expect(files.get(BACKLOG_MD)).toContain('No items.')
   const again = text(await call($, { action: 'init' }))
   expect(again).toBe('exists: docs/pipeline/config.json')
-  expect(writes.length).toBe(3)
+  expect(writes.length).toBe(4)
+})
+
+test('init adds .claude/worktrees/ to the .gitignore once: appended to a file that lacks it, a line break first when the file ends without one', async ($, on) => {
+  const { files, writes } = world(on, { [GITIGNORE]: 'node_modules/\ndist' })
+  await call($, { action: 'init' })
+  expect(files.get(GITIGNORE)).toBe('node_modules/\ndist\n.claude/worktrees/\n')
+  // A second init, with the config and the backlog there, leaves the file as it is.
+  await call($, { action: 'init' })
+  expect(writes.filter(w => w === GITIGNORE).length).toBe(1)
+  // A project that set up before 0.5.2 gets the line from an init that writes nothing else.
+  files.set(GITIGNORE, 'node_modules/\n')
+  expect(text(await call($, { action: 'init' }))).toBe('exists: docs/pipeline/config.json')
+  expect(files.get(GITIGNORE)).toBe('node_modules/\n.claude/worktrees/\n')
+  // A line that is there already, with spaces around it, is the line.
+  files.set(GITIGNORE, '  .claude/worktrees/  \nnode_modules/\n')
+  await call($, { action: 'init' })
+  expect(files.get(GITIGNORE)).toBe('  .claude/worktrees/  \nnode_modules/\n')
 })
 
 test('status without a config says so', async ($, on) => {
@@ -1082,6 +1103,7 @@ test('begin with no item takes the first ready one; nothing ready is refused', a
 /** directWorld plus a gh that opens PR 31 and reports green checks. */
 function shipWorld(on: On, opts: { dirty?: string; changed?: string[]; gate?: number; gh?: boolean } = {}) {
   const runs: string[][] = []
+  const github = restGithub({ me: 'me', issues: [], checks: [{ name: 'ci', bucket: 'pass' }] }, NOW)
   let isDirty = Boolean(opts.dirty)
   on('process.run', (_$, e) => {
     const argv = [...(e as { argv: readonly string[] }).argv]
@@ -1089,9 +1111,7 @@ function shipWorld(on: On, opts: { dirty?: string; changed?: string[]; gate?: nu
     const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
     if (argv[0] === 'gh') {
       if (opts.gh === false) return { deny: 'ENOENT: gh' } as never
-      if (argv[1] === 'pr' && argv[2] === 'create') return ok('https://github.com/o/r/pull/31\n')
-      if (argv[1] === 'pr' && argv[2] === 'checks') return ok(JSON.stringify([{ name: 'ci', bucket: 'pass' }]))
-      return ok()
+      return { value: { ...github(argv), isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     const sub = argv[0] === 'git' && argv[1] === '-C' ? argv[3] : argv[1]
     if (sub === 'rev-parse' && argv.includes('--abbrev-ref')) return ok('main\n')
@@ -1126,7 +1146,7 @@ test('ship commits what is uncommitted, runs the gate, opens the PR and leaves t
   const WTP = `${MAIN}/.claude/worktrees/p1`
   expect(runs).toContainEqual(['git', '-C', WTP, 'commit', '-q', '-m', 'Add the CSV export', '-m', 'Co-Authored-By: X'])
   expect(runs).toContainEqual(['sh', '-c', 'npm run gate'])
-  expect(runs.some(r => r[0] === 'gh' && r[2] === 'create')).toBe(true)
+  expect(runs.some(r => isCall(r, 'POST', 'pulls'))).toBe(true)
   expect(items(files)[0]).toMatchObject({ status: 'review', pr: '#31' })
   expect(ledgerP1(files).final).toMatchObject({ gate: 'green' })
 })
@@ -1138,7 +1158,7 @@ test('ship under merge auto goes on to wait for CI, merge and close in the same 
   const line = text(await call($, { action: 'ship', item: 'p1' }))
   expect(line).toContain('p1 merged · PR #31')
   expect(line).toContain('CI green')
-  expect(runs.some(r => r[0] === 'gh' && r[1] === 'pr' && r[2] === 'merge')).toBe(true)
+  expect(runs.some(r => isCall(r, 'PUT', 'pulls/31/merge'))).toBe(true)
   expect(items(files)[0]).toMatchObject({ status: 'merged' })
 })
 

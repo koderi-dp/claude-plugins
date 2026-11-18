@@ -232,6 +232,9 @@ test('migrate-apply writes the four files, the ledger of the building item, maps
   expect(r.endsWith('\n.superpowers/sdd/2026-11-01-search/task-1-brief.md\n.superpowers/sdd/2026-11-01-search/logs/task-1.log\ncommit docs/pipeline/ on main now: git add docs/pipeline && git commit')).toBe(true)
 
   expect(writes.slice(0, 2)).toEqual([`${DIR}/config.json`, `${DIR}/rules.md`])
+  // The worktrees' folder is ignored: the line is appended to the project's .gitignore, or the file made.
+  expect(files.get(`${MAIN}/.gitignore`)!.split('\n')).toContain('.claude/worktrees/')
+  expect(files.get(`${MAIN}/.gitignore`)!.endsWith('.claude/worktrees/\n')).toBe(true)
   expect(writes).toContain(`${DIR}/backlog.json`)
   expect(writes).toContain(`${DIR}/BACKLOG.md`)
   expect(JSON.parse(files.get(`${DIR}/config.json`)!)).toMatchObject({ version: 1, checks: { fast: 'npm run check:fast' }, limits: { fixRounds: 3 } })

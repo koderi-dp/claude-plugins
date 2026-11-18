@@ -3,6 +3,8 @@ import type { On } from 'claude-code'
 
 import { NO_GH, QUESTION_MARK, SPEC_MARK } from './tracker'
 import type { Issue } from './tracker'
+import { api, fieldOf, isCall, restGithub } from './fixtures/github'
+import type { RestState } from './fixtures/github'
 
 const TOOL = 'mcp__pipeline__pipeline'
 const MAIN = '/p/main'
@@ -62,26 +64,12 @@ const text = (r: unknown) => String((r as { result: unknown }).result)
 const call = ($: { tool: { call: (e: never) => Promise<unknown> } }, input: Record<string, unknown>) => $.tool.call({ tool: TOOL, ...input } as never)
 const json = async ($: { tool: { call: (e: never) => Promise<unknown> } }, input: Record<string, unknown>) => JSON.parse(text(await call($, input))) as Record<string, any>
 
-type GhState = { me: string; issues: Issue[]; checks?: { name: string; bucket: string }[] | null; fail?: boolean; missing?: boolean; labels?: string[]; git?: (argv: string[]) => string; onEdit?: (i: Issue) => void }
+type GhState = RestState & { fail?: boolean; missing?: boolean; git?: (argv: string[]) => string }
 
-/** gh's JSON for one issue, as `gh issue list --json` prints it. */
-const raw = (i: Issue) => ({
-  number: i.number,
-  title: i.title,
-  body: i.body,
-  author: { login: i.author },
-  labels: i.labels.map(name => ({ name })),
-  assignees: i.assignees.map(login => ({ login })),
-  state: i.state.toUpperCase(),
-  url: i.url,
-  createdAt: i.createdAt,
-  comments: i.comments.map(c => ({ url: `${i.url}#issuecomment-${c.id}`, author: { login: c.author }, authorAssociation: c.association, body: c.body, createdAt: c.at })),
-})
-
-/** A `process.run` over an in-memory GitHub: answers the tracker's argv lists, mutates the state, records every argv; git and the lock's mkdir answer exit 0. */
+/** A `process.run` over an in-memory GitHub: answers the tracker's REST calls, mutates the state, records every argv; git, sleep and the lock's mkdir answer exit 0. */
 function ghWorld(on: On, state: GhState) {
   const runs: string[][] = []
-  let nextComment = 900
+  const github = restGithub(state, NOW)
   on('process.run', (_$, e) => {
     const argv = [...(e as { argv: readonly string[] }).argv]
     runs.push(argv)
@@ -89,65 +77,7 @@ function ghWorld(on: On, state: GhState) {
     if (argv[0] !== 'gh') return ok(state.git?.(argv) ?? '')
     if (state.missing) return { deny: 'ENOENT: gh' } as never
     if (state.fail) return { value: { exitCode: 1, stdout: '', stderr: 'could not resolve host: api.github.com', isStdoutTruncated: false, isStderrTruncated: false } } as never
-    const [, a, b] = argv
-    const issue = (n: string) => state.issues.find(i => String(i.number) === n)
-    const flag = (name: string) => {
-      const at = argv.indexOf(name)
-      return at < 0 ? undefined : argv[at + 1]
-    }
-    if (a === 'api' && b === 'user') return ok(`${state.me}\n`)
-    if (a === 'pr' && b === 'checks') {
-      if (state.checks === null || state.checks === undefined) return { value: { exitCode: 1, stdout: '', stderr: "no checks reported on the 'feat/2' branch", isStdoutTruncated: false, isStderrTruncated: false } } as never
-      return ok(JSON.stringify(state.checks))
-    }
-    if (a === 'pr' && b === 'merge') return ok()
-    if (a === 'issue' && b === 'list') return ok(JSON.stringify(state.issues.filter(i => i.state === 'open' && i.labels.includes(flag('--label')!)).map(raw)))
-    if (a === 'issue' && b === 'view') {
-      const i = issue(argv[3]!)
-      return i ? ok(JSON.stringify(raw(i))) : ({ value: { exitCode: 1, stdout: '', stderr: 'could not find issue', isStdoutTruncated: false, isStderrTruncated: false } } as never)
-    }
-    if (a === 'issue' && b === 'create') {
-      const number = Math.max(0, ...state.issues.map(i => i.number)) + 1
-      state.issues.push({ number, title: flag('--title')!, body: flag('--body')!, author: state.me, labels: (flag('--label') ?? '').split(',').filter(Boolean), assignees: [], state: 'open', url: `https://github.com/o/r/issues/${number}`, createdAt: new Date(NOW).toISOString(), comments: [] })
-      return ok(`https://github.com/o/r/issues/${number}\n`)
-    }
-    if (a === 'issue' && b === 'comment') {
-      const i = issue(argv[3]!)!
-      const id = String(nextComment++)
-      i.comments.push({ id, author: state.me, association: 'OWNER', body: flag('--body')!, at: new Date(NOW).toISOString() })
-      return ok(`${i.url}#issuecomment-${id}\n`)
-    }
-    if (a === 'api' && b === '-X') {
-      const id = /comments\/(\d+)$/.exec(argv[4]!)![1]
-      const body = argv[6]!.slice('body='.length)
-      for (const i of state.issues) i.comments = i.comments.map(c => (c.id === id ? { ...c, body } : c))
-      return ok('{}')
-    }
-    if (a === 'issue' && b === 'edit') {
-      const i = issue(argv[3]!)!
-      const add = (flag('--add-label') ?? '').split(',').filter(Boolean)
-      const remove = (flag('--remove-label') ?? '').split(',').filter(Boolean)
-      i.labels = [...i.labels.filter(l => !remove.includes(l)), ...add.filter(l => !i.labels.includes(l))]
-      const who = flag('--add-assignee')
-      if (who && !i.assignees.includes(who)) i.assignees.push(who)
-      const off = flag('--remove-assignee')
-      if (off) i.assignees = i.assignees.filter(a => a !== off)
-      const body = flag('--body')
-      if (body !== undefined) i.body = body
-      const title = flag('--title')
-      if (title !== undefined) i.title = title
-      state.onEdit?.(i)
-      return ok()
-    }
-    if (a === 'issue' && b === 'close') {
-      issue(argv[3]!)!.state = 'closed'
-      return ok()
-    }
-    if (a === 'label' && b === 'create') {
-      ;(state.labels ??= []).push(argv[3]!)
-      return ok()
-    }
-    return { value: { exitCode: 1, stdout: '', stderr: `unknown command ${argv.join(' ')}`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+    return { value: { ...github(argv), isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   return runs
 }
@@ -170,7 +100,13 @@ const SPEC = '## What\n\nCSV export of the list.\n\n## Why\n\nUsers asked for it
 const specBody = (status: string) => `${SPEC_MARK}\n**Pipeline** · ${status}\n\n### Acceptance\n\n- [ ] a csv downloads\n\n<details><summary>Spec</summary>\n\n### What\n\nCSV export of the list.\n\n</details>`
 const specComment = (id: string, status = 'ready') => ({ id, author: 'me', association: 'OWNER', body: specBody(status), at: '2026-11-04T09:00:00Z' })
 
-const lists = (runs: string[][]) => runs.filter(r => r[0] === 'gh' && r[1] === 'issue' && r[2] === 'list').length
+const lists = (runs: string[][]) => runs.filter(r => isCall(r, 'GET', 'issues')).length
+const views = (runs: string[][], n: number) => runs.filter(r => isCall(r, 'GET', `issues/${n}`)).length
+const isLabelChange = (r: string[]) => isCall(r, 'POST', /^issues\/\d+\/labels$/) || isCall(r, 'DELETE', /^issues\/\d+\/labels\//)
+const isIssueEdit = (r: string[]) => isLabelChange(r) || isCall(r, 'POST', /^issues\/\d+\/assignees$/) || isCall(r, 'DELETE', /^issues\/\d+\/assignees$/) || (isCall(r, 'PATCH', /^issues\/\d+$/) && fieldOf(r, 'state') === undefined)
+const isCreate = (r: string[]) => isCall(r, 'POST', 'issues')
+const isComment = (r: string[]) => isCall(r, 'POST', /^issues\/\d+\/comments$/)
+const isCommentPatch = (r: string[]) => isCall(r, 'PATCH', /^issues\/comments\/\d+$/)
 const has = (runs: string[][], argv: string[]) => runs.some(r => JSON.stringify(r) === JSON.stringify(argv))
 
 test('get lists the labelled issues as items, and writes nothing under docs/pipeline', async ($, on) => {
@@ -183,7 +119,7 @@ test('get lists the labelled issues as items, and writes nothing under docs/pipe
   await json($, { action: 'get' })
   expect(writes.filter(w => w.includes('/docs/pipeline/'))).toEqual([])
   expect(lists(runs)).toBe(1)
-  expect(runs.filter(r => r[0] === 'gh' && r[1] === 'api' && r[2] === 'user').length).toBe(1)
+  expect(runs.filter(r => JSON.stringify(r) === JSON.stringify(['gh', 'api', 'user'])).length).toBe(1)
 })
 
 test('get { id } carries the quoted issue', async ($, on) => {
@@ -200,12 +136,12 @@ test('add creates a labelled issue; spec posts the comment and the item is ready
   const { writes } = world(on, { [CONFIG]: CONFIG_GH })
   const runs = ghWorld(on, { me: 'me', issues: [issueOf(1, 'Login'), issueOf(2, 'Export')] })
   expect(text(await call($, { action: 'add', item: { title: 'CSV export', note: 'alice asked for it' } }))).toBe('added 3 · ready')
-  expect(has(runs, ['gh', 'issue', 'create', '--title', 'CSV export', '--body', 'alice asked for it', '--label', 'pipeline'])).toBe(true)
+  expect(has(runs, api('POST', 'issues', 'title=CSV export', 'body=alice asked for it', 'labels[]=pipeline'))).toBe(true)
   expect(text(await call($, { action: 'spec', id: '3', text: SPEC }))).toBe('3 · ready · spec posted')
-  const posted = runs.find(r => r[1] === 'issue' && r[2] === 'comment')!
-  expect(posted.slice(0, 5)).toEqual(['gh', 'issue', 'comment', '3', '--body'])
-  expect(posted[5]!.startsWith(SPEC_MARK)).toBe(true)
-  expect(posted[5]).toContain('**Pipeline** · ready')
+  const posted = runs.find(isComment)!
+  expect(posted.slice(0, 6)).toEqual(['gh', 'api', '-X', 'POST', 'repos/{owner}/{repo}/issues/3/comments', '-f'])
+  expect(fieldOf(posted, 'body')!.startsWith(SPEC_MARK)).toBe(true)
+  expect(fieldOf(posted, 'body')).toContain('**Pipeline** · ready')
   const got = await json($, { action: 'get', id: '3' })
   expect(got['item']).toMatchObject({ id: '3', status: 'ready' })
   expect(lists(runs)).toBe(1)
@@ -216,11 +152,11 @@ test('spec on an issue that has one edits that comment and keeps its state', asy
   world(on, { [CONFIG]: CONFIG_GH, [ITEMS]: JSON.stringify({ items: { '2': { status: 'building', branch: 'feat/2' } }, pending: [] }) })
   const runs = ghWorld(on, { me: 'me', issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], comments: [specComment('200', 'building · task 2/5')] })] })
   expect(text(await call($, { action: 'spec', id: '2', text: SPEC.replace('Excel.', 'Excel and ODS.') }))).toBe('2 · building · spec posted')
-  const patch = runs.find(r => r[1] === 'api' && r[2] === '-X')!
+  const patch = runs.find(isCommentPatch)!
   expect(patch.slice(0, 6)).toEqual(['gh', 'api', '-X', 'PATCH', 'repos/{owner}/{repo}/issues/comments/200', '-f'])
   expect(patch[6]).toContain('**Pipeline** · building · task 2/5')
   expect(patch[6]).toContain('Excel and ODS.')
-  expect(runs.some(r => r[1] === 'issue' && r[2] === 'comment')).toBe(false)
+  expect(runs.some(isComment)).toBe(false)
 })
 
 test('question posts the marked comment and labels the issue; an answer by the author clears it on the next get', async ($, on) => {
@@ -228,14 +164,14 @@ test('question posts the marked comment and labels the issue; an answer by the a
   const gh: GhState = { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('200')] })] }
   const runs = ghWorld(on, gh)
   expect(text(await call($, { action: 'question', id: '2', text: 'Which columns?' }))).toBe('2 · inbox · open question on the issue')
-  expect(has(runs, ['gh', 'issue', 'comment', '2', '--body', `${QUESTION_MARK}\nWhich columns?`])).toBe(true)
-  expect(has(runs, ['gh', 'issue', 'edit', '2', '--add-label', 'pipeline:needs-info'])).toBe(true)
+  expect(has(runs, api('POST', 'issues/2/comments', `body=${QUESTION_MARK}\nWhich columns?`))).toBe(true)
+  expect(has(runs, api('POST', 'issues/2/labels', 'labels[]=pipeline:needs-info'))).toBe(true)
   expect((await json($, { action: 'get', id: '2' }))['item']).toMatchObject({ status: 'inbox', readiness: { ready: false, reason: 'open question on the issue' } })
   gh.issues[0]!.comments.push({ id: '950', author: 'alice', association: 'NONE', body: 'All of them.', at: '2026-11-05T10:05:00Z' })
   await clock.advance(MIN + 1000)
   const got = await json($, { action: 'get', id: '2' })
   expect(got['item']).toMatchObject({ status: 'ready' })
-  expect(has(runs, ['gh', 'issue', 'edit', '2', '--remove-label', 'pipeline:needs-info'])).toBe(true)
+  expect(has(runs, api('DELETE', 'issues/2/labels/pipeline%3Aneeds-info'))).toBe(true)
   expect(gh.issues[0]!.labels).toEqual(['pipeline'])
 })
 
@@ -243,8 +179,8 @@ test('update to blocked adds the label and rewrites the status line with the not
   const { files } = world(on, { [CONFIG]: CONFIG_GH })
   const runs = ghWorld(on, { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('200')] })] })
   expect(text(await call($, { action: 'update', id: '2', set: { status: 'blocked', note: 'waits on the API key' } }))).toBe('2 · blocked · set note')
-  expect(has(runs, ['gh', 'issue', 'edit', '2', '--add-label', 'pipeline:blocked'])).toBe(true)
-  const patch = runs.find(r => r[1] === 'api' && r[2] === '-X')!
+  expect(has(runs, api('POST', 'issues/2/labels', 'labels[]=pipeline:blocked'))).toBe(true)
+  const patch = runs.find(isCommentPatch)!
   expect(patch[4]).toBe('repos/{owner}/{repo}/issues/comments/200')
   expect(patch[6]).toContain('**Pipeline** · blocked · waits on the API key')
   expect(JSON.parse(files.get(ITEMS)!).items['2']).toMatchObject({ status: 'blocked', note: 'waits on the API key' })
@@ -257,12 +193,12 @@ test('park removes the queue label; unpark adds it back to an issue the list no 
   const gh: GhState = { me: 'me', issues: [issueOf(1, 'Login'), issueOf(2, 'Export', { comments: [specComment('200')] })] }
   const runs = ghWorld(on, gh)
   expect(text(await call($, { action: 'park', id: '2' }))).toBe('2 · parked')
-  expect(has(runs, ['gh', 'issue', 'edit', '2', '--remove-label', 'pipeline'])).toBe(true)
+  expect(has(runs, api('DELETE', 'issues/2/labels/pipeline'))).toBe(true)
   await clock.advance(MIN + 1000)
   expect((await json($, { action: 'get', titles: true }))['titles']).toEqual(['1 ready Login'])
   expect(text(await call($, { action: 'unpark', id: '2' }))).toBe('2 · ready')
-  expect(runs.some(r => r[1] === 'issue' && r[2] === 'view' && r[3] === '2')).toBe(true)
-  expect(has(runs, ['gh', 'issue', 'edit', '2', '--add-label', 'pipeline'])).toBe(true)
+  expect(views(runs, 2) > 0).toBe(true)
+  expect(has(runs, api('POST', 'issues/2/labels', 'labels[]=pipeline'))).toBe(true)
   expect((await json($, { action: 'get', titles: true }))['titles']).toEqual(['1 ready Login', '2 ready Export'])
   gh.issues[0]!.state = 'closed'
   expect(text(await call($, { action: 'unpark', id: '1' }))).toMatch(/^refused: /)
@@ -295,7 +231,7 @@ test('a failed GitHub update is kept pending, said in the answer, and retried by
   gh.fail = false
   const before = runs.length
   expect(text(await call($, { action: 'update', id: '1', set: { note: 'x' } }))).not.toContain('pending')
-  expect(has(runs.slice(before), ['gh', 'issue', 'edit', '1', '--add-label', 'pipeline:blocked'])).toBe(true)
+  expect(has(runs.slice(before), api('POST', 'issues/1/labels', 'labels[]=pipeline:blocked'))).toBe(true)
   expect(JSON.parse(files.get(ITEMS)!).pending).toEqual([])
 })
 
@@ -316,7 +252,7 @@ test('a closed issue with an entry in items.json is still listed', async ($, on)
   world(on, { [CONFIG]: CONFIG_GH, [ITEMS]: JSON.stringify({ items: { '5': { status: 'review', branch: 'feat/5', pr: '#9' } }, pending: [] }) })
   const runs = ghWorld(on, { me: 'me', issues: [issueOf(2, 'Export'), issueOf(5, 'Import', { state: 'closed', labels: ['pipeline', 'pipeline:building'], comments: [specComment('500', 'review · PR #9')] })] })
   const got = await json($, { action: 'get', full: true })
-  expect(runs.some(r => r[1] === 'issue' && r[2] === 'view' && r[3] === '5')).toBe(true)
+  expect(views(runs, 5) > 0).toBe(true)
   expect(got['backlog'].items.find((i: { id: string }) => i.id === '5')).toMatchObject({ status: 'review', pr: '#9', branch: 'feat/5' })
 })
 
@@ -335,10 +271,12 @@ test('init with queue github writes the config, creates the labels, ignores .pip
   expect(JSON.parse(files.get(CONFIG)!)).toMatchObject({ queue: 'github', queueLabel: 'pipeline', mainBranch: 'main' })
   expect(gh.labels).toEqual(['pipeline', 'pipeline:building', 'pipeline:blocked', 'pipeline:needs-info'])
   expect(files.get(EXCLUDE)!.split('\n')).toContain('.pipeline/')
+  expect(files.get(`${MAIN}/.gitignore`)).toBe('.claude/worktrees/\n')
   expect(writes.filter(w => w.includes('/docs/pipeline/'))).toEqual([CONFIG])
   // Again: the config says github, nothing is written twice and the exclude line stays one.
   await call($, { action: 'init' })
   expect(files.get(EXCLUDE)!.split('\n').filter(l => l === '.pipeline/').length).toBe(1)
+  expect(writes.filter(w => w === `${MAIN}/.gitignore`).length).toBe(1)
   expect(writes.filter(w => w === CONFIG).length).toBe(1)
 })
 
@@ -389,7 +327,7 @@ test('a pending GitHub update shows in the backlog until it is retried, and afte
   gh.fail = false
   const before = runs.length
   await call($, { action: 'update', id: '2', set: { note: 'later' } })
-  expect(has(runs.slice(before), ['gh', 'issue', 'edit', '1', '--add-label', 'pipeline:blocked'])).toBe(true)
+  expect(has(runs.slice(before), api('POST', 'issues/1/labels', 'labels[]=pipeline:blocked'))).toBe(true)
   expect(JSON.parse(files.get(ITEMS)!).pending).toEqual([])
   expect((await json($, { action: 'get', id: '1' }))['item']).toMatchObject({ status: 'blocked' })
 })
@@ -440,14 +378,15 @@ test('begin labels and assigns the issue, writes the spec cache in the worktree 
   const { files } = world(on, { [CONFIG]: CONFIG_GH })
   const { runs } = runWorld(on)
   const line = text(await call($, { action: 'begin', item: '2' }))
-  expect(has(runs, ['gh', 'issue', 'edit', '2', '--add-label', 'pipeline:building', '--add-assignee', 'me'])).toBe(true)
+  expect(has(runs, api('POST', 'issues/2/labels', 'labels[]=pipeline:building'))).toBe(true)
+  expect(has(runs, api('POST', 'issues/2/assignees', 'assignees[]=me'))).toBe(true)
   expect(files.get(`${WT2}/.pipeline/2/spec.md`)).toContain('## Acceptance')
   expect(files.get(EXCLUDE)).toContain('.pipeline/')
   expect(line).toContain('next: build it your own way in /p/main/.claude/worktrees/2, commit, then gate\n\nThe spec (.pipeline/2/spec.md):\n\n## What\n\nCSV export of the list.')
   expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ branch: 'feat/2', worktree: '.claude/worktrees/2' })
   expect(JSON.parse(files.get(ITEMS)!).items['2']).toMatchObject({ status: 'building', ledger: '.git/pipeline/2/ledger.json' })
   // The fresh read before the worktree and the one after labelling.
-  expect(runs.filter(r => r[0] === 'gh' && r[1] === 'issue' && r[2] === 'view' && r[3] === '2').length).toBe(2)
+  expect(views(runs, 2)).toBe(2)
 })
 
 test("begin refuses an issue another user's machine is building", async ($, on) => {
@@ -464,7 +403,7 @@ test('begin takes an issue with no spec comment: its own title and body are the 
   const begun = text(await call($, { action: 'begin', item: '2' }))
   expect(begun).toContain('2 · building · branch feat/2')
   expect(begun).toContain('The spec (.pipeline/2/spec.md):\n\n# Export\n\nExport, please')
-  expect(runs.some(r => r[1] === 'issue' && r[2] === 'edit')).toBe(true)
+  expect(runs.some(isIssueEdit)).toBe(true)
   expect(files.has(LEDGER2)).toBe(true)
 })
 
@@ -476,8 +415,8 @@ test('begin that loses the race lets go: its worktree removed, its user unassign
   const { runs, gh } = runWorld(on, { onEdit: racer('aaa') })
   expect(text(await call($, { action: 'begin', item: '2' }))).toBe('refused: 2 is being built by @aaa; pick the next item')
   expect(runs).toContainEqual(['git', '-C', MAIN, 'worktree', 'remove', '--force', WT2])
-  expect(has(runs, ['gh', 'issue', 'edit', '2', '--remove-assignee', 'me'])).toBe(true)
-  expect(runs.some(r => r[0] === 'gh' && r.includes('--remove-label'))).toBe(false)
+  expect(has(runs, api('DELETE', 'issues/2/assignees', 'assignees[]=me'))).toBe(true)
+  expect(runs.some(r => isCall(r, 'DELETE', /^issues\/\d+\/labels\//))).toBe(false)
   expect(gh.issues[0]!.labels).toContain('pipeline:building')
   expect(gh.issues[0]!.assignees).toEqual(['aaa'])
   expect(JSON.parse(files.get(ITEMS)!).items['2']).toBeUndefined()
@@ -488,7 +427,7 @@ test('begin that wins the race keeps the claim: the login that sorts first keeps
   const { files } = world(on, { [CONFIG]: CONFIG_GH })
   const { runs } = runWorld(on, { onEdit: racer('zoe') })
   expect(text(await call($, { action: 'begin', item: '2' }))).toContain('2 · building · branch feat/2')
-  expect(runs.some(r => r.includes('--remove-assignee') || r.includes('remove'))).toBe(false)
+  expect(runs.some(r => r.includes('DELETE') || r.includes('remove'))).toBe(false)
   expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ worktree: '.claude/worktrees/2' })
 })
 
@@ -604,7 +543,7 @@ test('close after the PR merged: labels gone, issue closed, worktree removed, no
   const { runs, gh } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] })] })
   on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
   expect(text(await call($, { action: 'close', item: '2' }))).toBe('2 merged · PR #5 · 2 tasks · issue closed · next: nothing ready')
-  expect(has(runs, ['gh', 'issue', 'close', '2'])).toBe(true)
+  expect(has(runs, api('PATCH', 'issues/2', 'state=closed'))).toBe(true)
   expect(gh.issues[0]!.labels).not.toContain('pipeline:building')
   expect(gh.issues[0]!.state).toBe('closed')
   expect(runs).toContainEqual(['git', '-C', MAIN, 'worktree', 'remove', '--force', '.claude/worktrees/2'])
@@ -615,7 +554,7 @@ test('close after the PR merged: labels gone, issue closed, worktree removed, no
   expect(JSON.parse(files.get(LEDGER2)!).resume.state).toBe('closed')
 })
 
-/** The item 2 in review with PR #5, as the close test seeds it; spawn (the CI watch) is recorded with the runs. */
+/** The item 2 in review with PR #5, as the close test seeds it; the waits between polls (`sleep`) are recorded with the runs. */
 function mergeWorld(on: On, checks: GhState['checks']) {
   const { files } = world(on, {
     [CONFIG]: CONFIG_GH,
@@ -625,20 +564,16 @@ function mergeWorld(on: On, checks: GhState['checks']) {
   })
   const { runs, gh } = runWorld(on, { checks, issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] })] })
   on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
-  on('process.spawn', async function* (_$, e) {
-    runs.push([...(e as unknown as { argv: readonly string[] }).argv])
-    yield { stream: 'stdout', text: 'All checks were successful\n' } as never
-    return { value: { code: 0, signal: null } } as never
-  })
   return { files, runs, gh }
 }
 
 test('merge waits for the checks, merges with gh and closes the item in one call', async ($, on) => {
   const { files, runs, gh } = mergeWorld(on, [{ name: 'test', bucket: 'pass' }])
   expect(text(await call($, { action: 'merge', item: '2' }))).toBe('2 merged · PR #5 · 1 task · issue closed · next: nothing ready · CI green')
-  const order = runs.filter(r => r[0] === 'gh' && r[1] === 'pr').map(r => r.slice(1).join(' '))
-  expect(order).toEqual(['pr checks 5 --watch', 'pr checks 5 --json name,bucket', 'pr merge 5 --merge'])
-  expect(runs.some(r => r.includes('--auto'))).toBe(false)
+  const order = runs.filter(r => r[0] === 'gh' && /\/(pulls|commits)\//.test(r.join(' '))).map(r => r.slice(2).join(' ').replace('repos/{owner}/{repo}/', '').replace(/commits\/[0-9a-f]+/, 'commits/<sha>'))
+  expect(order).toEqual(['pulls/5', 'commits/<sha>/check-runs?per_page=100', 'commits/<sha>/status', '-X PUT pulls/5/merge -f merge_method=merge'])
+  expect(runs.some(r => r.includes('--auto') || r.join(' ').includes('graphql'))).toBe(false)
+  expect(runs.some(r => r[0] === 'sleep')).toBe(false)
   expect(gh.issues[0]!.state).toBe('closed')
   expect(JSON.parse(files.get(ITEMS)!).items['2']).toBeUndefined()
 })
@@ -646,7 +581,7 @@ test('merge waits for the checks, merges with gh and closes the item in one call
 test('merge with red checks names them and merges nothing; a repository with no checks merges', async ($, on) => {
   const red = mergeWorld(on, [{ name: 'test', bucket: 'fail' }, { name: 'lint', bucket: 'pass' }])
   expect(text(await call($, { action: 'merge', item: '2' }))).toBe('2 · CI red · test · PR #5 not merged · one fix wave, then merge again')
-  expect(red.runs.some(r => r[1] === 'pr' && r[2] === 'merge')).toBe(false)
+  expect(red.runs.some(r => isCall(r, 'PUT', /^pulls\/\d+\/merge$/))).toBe(false)
   expect(red.gh.issues[0]!.state).toBe('open')
   red.gh.checks = null
   expect(text(await call($, { action: 'merge', item: '2' }))).toContain('2 merged · PR #5')
@@ -753,8 +688,8 @@ test('add with needs writes the Needs line, and the new issue waits for the open
   const gh: GhState = { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('50')] })] }
   const runs = ghWorld(on, gh)
   await call($, { action: 'add', item: { title: 'Import', note: 'bob asked for it', needs: ['2', '#77', 'p9'] } })
-  const made = runs.find(r => r[1] === 'issue' && r[2] === 'create')!
-  expect(made[made.indexOf('--body') + 1]).toBe('bob asked for it\n\nNeeds: #2, #77')
+  const made = runs.find(isCreate)!
+  expect(fieldOf(made, 'body')).toBe('bob asked for it\n\nNeeds: #2, #77')
   const n = gh.issues.find(i => i.title === 'Import')!.number
   await call($, { action: 'spec', id: String(n), text: SPEC })
   const out = await json($, { action: 'get', id: String(n) })
@@ -768,10 +703,10 @@ test('migrate-github apply creates the issues, posts the specs, copies the activ
   const gh: GhState = { me: 'me', issues: [] }
   const runs = ghWorld(on, gh)
   const answer = text(await call($, { action: 'migrate-github', apply: true }))
-  const creates = runs.filter(r => r[0] === 'gh' && r[1] === 'issue' && r[2] === 'create')
+  const creates = runs.filter(isCreate)
   expect(creates.length).toBe(2)
-  expect(creates[0]).toEqual(['gh', 'issue', 'create', '--title', 'Export', '--body', '### What\n\nCSV export of the list.\n\n### Why\n\nUsers asked for it.\n\n### Acceptance\n\n- [ ] a csv downloads\n\n### Out of scope\n\nExcel.\n\nMigrated from p2.', '--label', 'pipeline'])
-  expect(creates[1]).toEqual(['gh', 'issue', 'create', '--title', 'Import', '--body', 'bob asked for it\n\nMigrated from p4.', '--label', 'pipeline'])
+  expect(creates[0]).toEqual(api('POST', 'issues', 'title=Export', 'body=### What\n\nCSV export of the list.\n\n### Why\n\nUsers asked for it.\n\n### Acceptance\n\n- [ ] a csv downloads\n\n### Out of scope\n\nExcel.\n\nMigrated from p2.', 'labels[]=pipeline'))
+  expect(creates[1]).toEqual(api('POST', 'issues', 'title=Import', 'body=bob asked for it\n\nMigrated from p4.', 'labels[]=pipeline'))
   // p4 needed p1 (merged: no issue) and p2 (now the first issue): the dependency is on its body, and it waits.
   const export_ = gh.issues.find(i => i.title === 'Export')!.number
   expect(gh.issues.find(i => i.title === 'Import')!.body).toBe(`bob asked for it\n\nMigrated from p4.\n\nNeeds: #${export_}`)
@@ -817,7 +752,7 @@ test('a second apply after a failure skips the issues already created', async ($
   const second = text(await call($, { action: 'migrate-github', apply: true }))
   expect(second).toContain('p2 → #1')
   expect(second).toContain('p4 → #2')
-  expect(runs.slice(before).filter(r => r[1] === 'issue' && r[2] === 'create').map(r => r[4])).toEqual(['Import'])
+  expect(runs.slice(before).filter(isCreate).map(r => fieldOf(r, 'title'))).toEqual(['Import'])
   expect(gh.issues.map(i => i.title)).toEqual(['Export', 'Import'])
   expect(gh.issues[0]!.comments.length).toBe(1)
   expect(JSON.parse(files.get(CONFIG)!).queue).toBe('github')
@@ -877,7 +812,7 @@ test('migrate-github keeps a blocked item, an open question, a PR link, and give
   expect(text(await call($, { action: 'begin', item: '4' }))).toContain('4 · building · branch feat/p8')
   // begin took no label off the item it began. (This world's git says every branch is on main, so begin also closed
   // the review item, issue 3, whose PR it takes for merged: that is begin closing what was merged by hand.)
-  expect(runs.some(r => r[0] === 'gh' && r.includes('--remove-label') && r[3] !== '3')).toBe(false)
+  expect(runs.some(r => isCall(r, 'DELETE', /^issues\/\d+\/labels\//) && !isCall(r, 'DELETE', /^issues\/3\/labels\//))).toBe(false)
 })
 
 test('a second apply does not ask the open question twice', async ($, on) => {
@@ -907,7 +842,7 @@ test('0.4.5: update rewrites an issue body and title through the tool, and never
   // A new body that names no dependency keeps the one the issue had.
   expect(text(await call($, { action: 'update', id: '2', set: { body: '## What\n\nCSV export of the list.', title: 'CSV export' } }))).toBe('2 · inbox · waits for #1 · set title, body')
   expect(state.issues[1]).toMatchObject({ title: 'CSV export', body: '## What\n\nCSV export of the list.\n\nNeeds: #1' })
-  expect(has(runs, ['gh', 'issue', 'edit', '2', '--title', 'CSV export'])).toBe(true)
+  expect(has(runs, api('PATCH', 'issues/2', 'title=CSV export'))).toBe(true)
   expect((await json($, { action: 'get', id: '2' }))['item']).toMatchObject({ title: 'CSV export', needs: ['1'] })
   // needs sets the line; an empty list removes it.
   await call($, { action: 'add', item: { title: 'Auth' } })
@@ -918,9 +853,9 @@ test('0.4.5: update rewrites an issue body and title through the tool, and never
   // A body with its own Needs line is taken at its word; the same text again changes nothing.
   await call($, { action: 'update', id: '2', set: { body: 'Short.\n\nNeeds: #3' } })
   expect(state.issues[1]!.body).toBe('Short.\n\nNeeds: #3')
-  const edits = runs.filter(r => r[1] === 'issue' && r[2] === 'edit').length
+  const edits = runs.filter(isIssueEdit).length
   expect(text(await call($, { action: 'update', id: '2', set: { body: 'Short.\n\nNeeds: #3' } }))).toContain('nothing: the issue already reads so')
-  expect(runs.filter(r => r[1] === 'issue' && r[2] === 'edit').length).toBe(edits)
+  expect(runs.filter(isIssueEdit).length).toBe(edits)
   expect(text(await call($, { action: 'update', id: '2', set: { body: 7 } }))).toBe('refused: update: body is text')
 })
 
@@ -942,21 +877,22 @@ test('0.5.0: pr opens the pull request through gh with the spec as its body, rec
     [`${DIR}/specs/p1.md`]: SPEC,
   })
   const runs: string[][] = []
+  const github = restGithub({ me: 'me', issues: [] }, NOW)
   on('process.run', (_$, e) => {
     const argv = [...(e as { argv: readonly string[] }).argv]
     runs.push(argv)
     const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
-    if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'create') return ok('https://github.com/o/r/pull/31\n')
+    if (argv[0] === 'gh') return { value: { ...github(argv), isStdoutTruncated: false, isStderrTruncated: false } } as never
     return ok()
   })
   expect(text(await call($, { action: 'pr', item: 'p1' }))).toBe('p1 review · PR #31 · next: the user merges it; close runs on a later get')
-  const create = runs.find(r => r[0] === 'gh' && r[2] === 'create')!
-  expect(create.slice(0, 9)).toEqual(['gh', 'pr', 'create', '--base', 'main', '--head', 'feat/p1', '--title', 'p1: CSV export'])
-  expect(create[10]).toContain('CSV export of the list.')
-  expect(create[10]).toContain('## Acceptance\n\n- [ ] a csv downloads')
-  expect(create[10]).toContain('Co-Authored-By: X')
+  const create = runs.find(r => isCall(r, 'POST', 'pulls'))!
+  expect(create.slice(0, 11)).toEqual(['gh', 'api', '-X', 'POST', 'repos/{owner}/{repo}/pulls', '-f', 'title=p1: CSV export', '-f', 'head=feat/p1', '-f', 'base=main'])
+  expect(fieldOf(create, 'body')).toContain('CSV export of the list.')
+  expect(fieldOf(create, 'body')).toContain('## Acceptance\n\n- [ ] a csv downloads')
+  expect(fieldOf(create, 'body')).toContain('Co-Authored-By: X')
   expect(JSON.parse(files.get(BACKLOG)!).items[0]).toMatchObject({ status: 'review', pr: '#31' })
   // Asked again, it opens no second one.
   expect(text(await call($, { action: 'pr', item: 'p1' }))).toContain('PR #31 is already open')
-  expect(runs.filter(r => r[0] === 'gh' && r[2] === 'create').length).toBe(1)
+  expect(runs.filter(r => isCall(r, 'POST', 'pulls')).length).toBe(1)
 })

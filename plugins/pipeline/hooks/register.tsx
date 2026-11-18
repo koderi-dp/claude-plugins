@@ -61,7 +61,7 @@ const TOOL_DESCRIPTION =
   'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set } (under queue github, set { title?, body?, needs? } rewrites the issue\'s own text: a new body keeps the issue\'s Needs: line unless needs is given, and an empty needs list removes it; never edit an issue with gh yourself), `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
   'Run, in order: `begin` { item? } claims the item (the first ready one when none is named), makes its worktree and branch, records the base and answers the worktree and, under mode direct, the spec itself. Under mode direct (the default) the agent then builds the item its own way and calls `gate`; then one call ends it: `ship` { item, message?, attribution?, verdict?, next? } commits what is uncommitted with the message, runs the gate, opens the pull request and, under merge auto, waits for CI, merges and closes; it stops at a red gate, a review to dispatch or red CI and says what to do, and with next it begins the next ready item in the same answer. `gate`, `pr` { item, title?, body? }, `merge` and `close` are its steps, callable alone. `add` takes the spec as text and writes and links it. Under mode full: `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
   '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
-  '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. `merge` { item, pr? } ends an item whose PR is open: it waits for the PR\'s checks itself however long they take, merges with config.mergeMethod through gh (no auto-merge setting needed) and runs close; red checks answer their names, for a fix wave and another merge. ' +
+  '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. `merge` { item, pr? } ends an item whose PR is open: it polls the PR\'s checks over the REST API until they are through (an hour at most), merges with config.mergeMethod through gh api (no auto-merge setting needed) and runs close; red checks answer their names, for a fix wave and another merge. ' +
   '`close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is (also from inside the item\'s worktree): the main checkout on mainBranch and pulled, the item merged, what config.retain lets go removed, docs/pipeline committed on mainBranch and pushed unless config.pushMain is false, the worktree and local branch removed (a worktree this session is inside is left and removed by a later begin or close). ' +
   '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate? }, blockers?: [text], pr?, branch?, worktree?, base?, <any other key>?: value | null } } merges anything else into the ledger: text for resume is taken as its state, a wrong shape is refused and nothing is written, and null removes one of the other keys. ' +
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain says may go and deletes nothing. ' +
@@ -340,6 +340,7 @@ async function loadAll($: EngineInterface, found: string): Promise<{ config: Con
 // ---------- queue: github ----------
 
 const ISSUES_FILE = '.git/pipeline/issues.json'
+const WORKTREES_IGNORE = '.claude/worktrees/'
 const ITEMS_FILE = '.git/pipeline/items.json'
 const CACHE_MS = 60_000
 
@@ -362,6 +363,13 @@ async function ensureExclude($: EngineInterface, found: string): Promise<void> {
   const exclude = places(found, 'github').exclude
   const had = (await readText($, exclude)) ?? ''
   if (!had.split('\n').some(l => l.trim() === '.pipeline/')) await $.fs.write(exclude, `${had}${had && !had.endsWith('\n') ? '\n' : ''}.pipeline/\n`)
+}
+
+/** Makes sure the project's .gitignore ignores `.claude/worktrees/`, where the pipeline makes its worktrees; a missing file is created. */
+async function ensureIgnore($: EngineInterface, found: string): Promise<void> {
+  const file = `${found}/.gitignore`
+  const had = (await readText($, file)) ?? ''
+  if (!had.split('\n').some(l => l.trim() === WORKTREES_IGNORE)) await $.fs.write(file, `${had}${had && !had.endsWith('\n') ? '\n' : ''}${WORKTREES_IGNORE}\n`)
 }
 
 /** The tracker's `run`: the argv through `$.process.run` in the main checkout; a thrown error (no gh) answers null. */
@@ -706,6 +714,7 @@ async function initGithub($: EngineInterface, found: string, c: Config | null, e
   const labelled = await tracker.ensureLabels(run, names)
   if (!labelled.ok) throw new Refused(labelled.error)
   await ensureExclude($, found)
+  await ensureIgnore($, found)
   await update($, fileError, () => null)
   const head = hasConfig ? `exists: ${CONFIG_FILE}` : `wrote ${CONFIG_FILE}`
   return `${head} · labels ${names.join(', ')}${hasConfig ? '' : ` · commit ${CONFIG_FILE} on ${next.mainBranch}`}`
@@ -1065,7 +1074,10 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
   if (e.action === 'init') {
     const hasConfig = await $.fs.exists(p.config)
     const hasBacklog = await $.fs.exists(p.backlog)
-    if (hasConfig && hasBacklog) return `exists: ${CONFIG_FILE}`
+    if (hasConfig && hasBacklog) {
+      await ensureIgnore($, found)
+      return `exists: ${CONFIG_FILE}`
+    }
     const wrote: string[] = []
     if (!hasConfig) {
       await $.fs.write(p.config, serialize(DEFAULTS))
@@ -1079,6 +1091,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       await update($, backlog, () => empty)
       wrote.push(BACKLOG_FILE, BACKLOG_MD_FILE)
     }
+    await ensureIgnore($, found)
     await update($, fileError, () => null)
     return `wrote ${wrote.join(', ')}\n${commitLine(c?.mainBranch ?? DEFAULTS.mainBranch)}`
   }
@@ -1561,9 +1574,10 @@ async function runLong($: EngineInterface, argv: string[], cwd: string): Promise
 }
 
 /**
- * `merge`: the end of an item whose PR is open, in one call. The tool waits for the PR's checks itself (no time limit),
- * merges with the configured method through gh, then closes the item. Red checks answer their names and nothing is
- * merged. Not under the lock while it waits: CI may take longer than another session should wait for it.
+ * `merge`: the end of an item whose PR is open, in one call. The tool polls the PR's checks over the REST API until
+ * they are through (an hour at most), merges with the configured method through `gh api`, then closes the item. Red
+ * checks answer their names and nothing is merged. Not under the lock while it waits: CI may take longer than another
+ * session should wait for it.
  */
 async function mergeAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
   const cfg = normalizeConfig(c ?? DEFAULTS).config
@@ -1572,19 +1586,19 @@ async function mergeAction($: EngineInterface, found: string, c: Config | null, 
   const pr = e.pr?.trim() || item.pr || ledger?.pr || ''
   const n = Number(/(\d+)\/?$/.exec(pr)?.[1])
   if (!n) throw new Refused(`merge needs the pull request: pass "pr": "#31" (${id} carries none)`)
-  const yourself = `merge it yourself (gh pr merge ${n} --${cfg.mergeMethod}), then close`
-  const long: Run = async argv => {
+  const yourself = `merge pull request #${n} yourself, then close`
+  // A real wait between polls: `sleep` as a process, so it does not hang on a clock that only a test moves; the clock where there is no sleep.
+  const wait = async (ms: number): Promise<void> => {
     try {
-      const r = await runLong($, argv, found)
-      return { exitCode: r.code ?? 1, stdout: r.out, stderr: r.out }
+      const r = await $.process.run(['sleep', String(Math.ceil(ms / 1000))], { cwd: found, timeoutMs: ms + 10_000 })
+      if (r.exitCode === 0) return
     } catch {
-      return null
+      // no sleep on this machine
     }
+    await pause($, ms)
   }
-  const waited = await tracker.watchChecks(long, n)
-  if (!waited.ok) throw new Refused(`${waited.error} · or ${yourself}`)
   const run = ghRun($, found)
-  const state = await tracker.checks(run, n)
+  const state = await tracker.watchChecks(run, n, wait)
   if (!state.ok) throw new Refused(`${state.error} · or ${yourself}`)
   if (state.value.state === 'red') return `${id} · CI red · ${state.value.failing.join(', ')} · PR #${n} not merged · one fix wave, then merge again`
   if (state.value.state === 'pending') return `${id} · CI still running on PR #${n} · merge again`
@@ -1721,7 +1735,7 @@ async function prAction($: EngineInterface, found: string, c: Config | null, cur
   const body = typeof e.body === 'string' && e.body.trim() ? e.body.trim() : [what, acceptance ? `## Acceptance\n\n${acceptance}` : '', isGithub(c) ? `Closes #${id}` : '', attribution].filter(Boolean).join('\n\n')
   const title = typeof e.title === 'string' && e.title.trim() ? e.title.trim() : isGithub(c) ? item.title : `${id}: ${item.title}`
   const made = await tracker.createPr(ghRun($, found), { base: cfg.mainBranch, head: ledger.branch, title, body })
-  if (!made.ok) throw new Refused(`${made.error} · or open it yourself (gh pr create), then update with "pr"`)
+  if (!made.ok) throw new Refused(`${made.error} · or open the pull request yourself, then update with "pr"`)
   const pr = `#${made.value}`
   await runTool($, { action: 'ledger', item: id, set: { pr } })
   await runTool($, { action: 'update', id, set: { status: 'review', pr } })
@@ -2362,6 +2376,7 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
   if (!onDisk.value) await $.fs.write(p.config, serialize(given))
   await update($, config, () => normalizeConfig(nextConfig).config)
   if (!isRefresh || !(await $.fs.exists(p.rules))) await $.fs.write(p.rules, renderRulesMd(rules))
+  await ensureIgnore($, found)
 
   // The items: added in order with new ids; on a refresh matched by id or title and only their titles, sources and links
   // refreshed (the ledger link is the tool's own and stays).
