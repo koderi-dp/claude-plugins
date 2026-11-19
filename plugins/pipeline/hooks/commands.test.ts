@@ -19,7 +19,7 @@ function world(on: On, seed: Record<string, string> = {}) {
   clock = mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
-  const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  const key = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
   const under = (dir: string) => [...files.keys()].filter(k => k.startsWith(`${dir}/`)).map(k => k.slice(dir.length + 1))
   on('fs.exists', (_$, e) => {
     const p = key(e.path)
@@ -135,7 +135,7 @@ test('/pipeline config with a config that does not parse names the line and writ
 })
 
 test('the prompts: each submits a turn that names its skill and its first tool call', async ($, on) => {
-  const { submitted } = world(on, { [CONFIG]: VALID_CONFIG })
+  const { submitted } = world(on, { [CONFIG]: JSON.stringify({ ...JSON.parse(VALID_CONFIG), mode: 'direct' }) })
   const last = () => submitted[submitted.length - 1] ?? ''
   const add = await run($, 'add csv export of catalogs')
   expect(add.text).toContain('intake')

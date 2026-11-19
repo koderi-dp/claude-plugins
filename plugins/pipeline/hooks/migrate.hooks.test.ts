@@ -13,7 +13,7 @@ function world(on: On, seed: Record<string, string> = {}) {
   mock.clock(on, { now: NOW })
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
-  const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  const key = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
   const under = (dir: string) => [...files.keys()].filter(k => k.startsWith(`${dir}/`)).map(k => k.slice(dir.length + 1))
   on('fs.exists', (_$, e) => {
     const p = key(e.path)

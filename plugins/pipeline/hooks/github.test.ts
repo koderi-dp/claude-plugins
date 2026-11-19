@@ -20,6 +20,8 @@ const MIN = 60_000
 
 const VALID_CONFIG = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: {}, merge: 'pr' }, null, 2) + '\n'
 const CONFIG_GH = JSON.stringify({ ...JSON.parse(VALID_CONFIG), queue: 'github' }, null, 2) + '\n'
+/** The same with mode direct, for the tests of what direct mode answers. */
+const CONFIG_GH_DIRECT = JSON.stringify({ ...JSON.parse(CONFIG_GH), mode: 'direct' }, null, 2) + '\n'
 
 /** A main checkout at /p/main, this session in its worktree, files in memory; records the writes and the plugin's state. */
 function world(on: On, seed: Record<string, string> = {}, where = { cwd: WORKTREE }) {
@@ -27,7 +29,7 @@ function world(on: On, seed: Record<string, string> = {}, where = { cwd: WORKTRE
   const files = new Map<string, string>(Object.entries(seed))
   const writes: string[] = []
   const state = new Map<string, unknown>()
-  const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  const key = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
     const t = files.get(key(e.path))
@@ -281,7 +283,7 @@ test('init with queue github writes the config, creates the labels, ignores .pip
 })
 
 test('/pipeline run 12 and /pipeline run #12 reach the tool with id 12', async ($, on) => {
-  const { clock, submitted } = world(on, { [CONFIG]: CONFIG_GH })
+  const { clock, submitted } = world(on, { [CONFIG]: CONFIG_GH_DIRECT })
   ghWorld(on, { me: 'me', issues: [issueOf(12, 'Export')] })
   const run = async (args: string) => {
     const answer = (await $.command.run({ command: 'pipeline', args, origin: { kind: 'composer' } } as never)) as { text?: string }
@@ -375,7 +377,7 @@ function runWorld(on: On, gh: Partial<GhState> = {}) {
 const commits = (runs: string[][]) => runs.filter(r => r[0] === 'git' && r.includes('commit'))
 
 test('begin labels and assigns the issue, writes the spec cache in the worktree and ignores .pipeline/', async ($, on) => {
-  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const { files } = world(on, { [CONFIG]: CONFIG_GH_DIRECT })
   const { runs } = runWorld(on)
   const line = text(await call($, { action: 'begin', item: '2' }))
   expect(has(runs, api('POST', 'issues/2/labels', 'labels[]=pipeline:building'))).toBe(true)
@@ -398,7 +400,7 @@ test("begin refuses an issue another user's machine is building", async ($, on) 
 })
 
 test('begin takes an issue with no spec comment: its own title and body are the spec', async ($, on) => {
-  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const { files } = world(on, { [CONFIG]: CONFIG_GH_DIRECT })
   const { runs } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:blocked'] })] })
   const begun = text(await call($, { action: 'begin', item: '2' }))
   expect(begun).toContain('2 · building · branch feat/2')
@@ -424,7 +426,7 @@ test('begin that loses the race lets go: its worktree removed, its user unassign
 })
 
 test('begin that wins the race keeps the claim: the login that sorts first keeps it', async ($, on) => {
-  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const { files } = world(on, { [CONFIG]: CONFIG_GH_DIRECT })
   const { runs } = runWorld(on, { onEdit: racer('zoe') })
   expect(text(await call($, { action: 'begin', item: '2' }))).toContain('2 · building · branch feat/2')
   expect(runs.some(r => r.includes('DELETE') || r.includes('remove'))).toBe(false)
@@ -541,7 +543,7 @@ test('close after the PR merged: labels gone, issue closed, worktree removed, no
     [`${MAIN}/.claude/worktrees`]: '',
   })
   const { runs, gh } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] })] })
-  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
+  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '') === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
   expect(text(await call($, { action: 'close', item: '2' }))).toBe('2 merged · PR #5 · 2 tasks · issue closed · next: nothing ready')
   expect(has(runs, api('PATCH', 'issues/2', 'state=closed'))).toBe(true)
   expect(gh.issues[0]!.labels).not.toContain('pipeline:building')
@@ -555,7 +557,7 @@ test('close after the PR merged: labels gone, issue closed, worktree removed, no
 })
 
 /** The item 2 in review with PR #5, as the close test seeds it; the waits between polls (`sleep`) are recorded with the runs. */
-function mergeWorld(on: On, checks: GhState['checks'], hasWorkflows = false) {
+function mergeWorld(on: On, checks: GhState['checks'], hasWorkflows = false, workflowRuns?: number) {
   const { files } = world(on, {
     [CONFIG]: CONFIG_GH,
     [ITEMS]: JSON.stringify({ items: { '2': { status: 'review', branch: 'feat/2', pr: '#5', ledger: '.git/pipeline/2/ledger.json' } }, pending: [] }),
@@ -563,9 +565,9 @@ function mergeWorld(on: On, checks: GhState['checks'], hasWorkflows = false) {
     [`${MAIN}/.claude/worktrees`]: '',
     ...(hasWorkflows ? { [`${MAIN}/.github/workflows`]: '' } : {}),
   })
-  const { runs, gh } = runWorld(on, { checks, issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] })] })
+  const { runs, gh } = runWorld(on, { checks, ...(workflowRuns === undefined ? {} : { workflowRuns }), issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] })] })
   on('fs.list', (_$, e) => {
-    const at = (e as { path: string }).path
+    const at = (e as { path: string }).path.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
     return { value: at === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : hasWorkflows && at === `${MAIN}/.github/workflows` ? [{ name: 'ci.yml', kind: 'file' }] : [] } as never
   })
   return { files, runs, gh }
@@ -618,13 +620,13 @@ test('get full leaves out an afterMerge entry under docs/pipeline, which has not
 test('a worktree close had to leave is recorded, listed by clean, and swept by a later begin from outside it', async ($, on) => {
   const where = { cwd: `${WT2}` }
   const { files } = world(on, {
-    [CONFIG]: CONFIG_GH,
+    [CONFIG]: CONFIG_GH_DIRECT,
     [ITEMS]: JSON.stringify({ items: { '2': { status: 'review', branch: 'feat/2', pr: '#5', ledger: '.git/pipeline/2/ledger.json' } }, pending: [] }),
     [LEDGER2]: JSON.stringify({ item: '2', branch: 'feat/2', worktree: '.claude/worktrees/2', tasks: [{ n: 1, title: 'A', status: 'accepted', dispatches: [] }], rulings: [], blockers: [], tokens: 0 }),
     [`${MAIN}/.claude/worktrees`]: '',
   }, where)
   const { runs } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] }), issueOf(3, 'Import', { comments: [specComment('300')] })] })
-  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
+  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '') === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
   expect(text(await call($, { action: 'close', item: '2' }))).toBe('2 merged · PR #5 · 1 task · issue closed · worktree .claude/worktrees/2 left, this session is in it: the next begin or close removes it · next: 3')
   expect(runs.some(r => r.includes('worktree') && r.includes('remove'))).toBe(false)
   expect(JSON.parse(files.get(ITEMS)!).leftover).toEqual([{ id: '2', worktree: '.claude/worktrees/2', branch: 'feat/2' }])
@@ -670,7 +672,7 @@ const FILE_PROJECT = {
 /** fs.list over the in-memory files: the names directly under a folder. */
 const listFiles = (on: On, files: Map<string, string>) =>
   on('fs.list', (_$, e) => {
-    const dir = `${(e as { path: string }).path}/`
+    const dir = `${(e as { path: string }).path.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')}/`
     const names = new Set([...files.keys()].filter(k => k.startsWith(dir)).map(k => k.slice(dir.length).split('/')[0]!))
     return { value: [...names].map(name => ({ name, kind: [...files.keys()].some(k => k.startsWith(`${dir}${name}/`)) ? 'dir' : 'file' })) } as never
   })
@@ -909,6 +911,27 @@ test('0.5.2: a repository with workflows whose checks never report is not merged
   // The five minutes were waited for: sixty polls 5 s apart.
   expect(runs.filter(r => r[0] === 'sleep').length).toBe(60)
   expect(text(await call($, { action: 'merge', item: '2', force: true }))).toContain('2 merged · PR #5')
+})
+
+test('0.6.0: a pull request no workflow ran for (docs only, under paths-ignore) is merged after 90 s, not refused after five minutes', async ($, on) => {
+  const { runs, gh } = mergeWorld(on, null, true, 0)
+  expect(text(await call($, { action: 'merge', item: '2' }))).toBe('2 merged · PR #5 · 1 task · issue closed · next: nothing ready · CI none (no workflow ran for this commit)')
+  expect(runs.filter(r => r[0] === 'sleep').length).toBe(18)
+  expect(runs.some(r => r.includes('PUT'))).toBe(true)
+  expect(gh.issues[0]!.state).toBe('closed')
+})
+
+test('0.6.0: a gh call that times out is named as that, not as a missing gh', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH })
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    if (argv[0] === 'gh') return { deny: 'the process timed out after 30000 ms' } as never
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
+  const refused = text(await call($, { action: 'add', item: { title: 'CSV export' } }))
+  expect(refused).toContain('gh: the call did not finish (')
+  expect(refused).toContain('timed out')
+  expect(refused).not.toContain('not installed')
 })
 
 test('0.5.4: a ledger written for an issue not yet begun is the item\'s own on the next write, never a stale file', async ($, on) => {

@@ -9,7 +9,7 @@ const CONFIG = `${MAIN}/docs/pipeline/config.json`
 
 /** A main checkout at /p/main, this session in its worktree, files in memory; records the plugin's state writes. */
 function world(on: On, seed: Record<string, string> = {}, hasRepo = true) {
-  const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  const key = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
   const commands: string[] = []
   const state = new Map<string, unknown>()
   on('fs.exists', (_$, e) => ({ value: key(e.path) in seed }))

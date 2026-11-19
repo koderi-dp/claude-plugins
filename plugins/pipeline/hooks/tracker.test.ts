@@ -291,7 +291,7 @@ test('checks failures: no gh, not logged in, an error from any of the three call
 })
 
 /** A `run` whose checks follow the script, one entry per poll (the last one repeats), and the waits it was asked for. */
-const polled = (script: CheckRun[][]) => {
+const polled = (script: CheckRun[][], workflowRuns = 1) => {
   let poll = -1
   const waits: number[] = []
   const { run, calls } = fake({
@@ -301,6 +301,7 @@ const polled = (script: CheckRun[][]) => {
     },
     [`GET ${R}/commits/${SHA}/check-runs?per_page=100`]: () => json({ check_runs: script[Math.min(poll, script.length - 1)] }),
     [`GET ${R}/commits/${SHA}/status`]: json({ statuses: [] }),
+    [`GET ${R}/actions/runs?head_sha=${SHA}&per_page=1`]: json({ total_count: workflowRuns }),
   })
   const wait = async (ms: number) => void waits.push(ms)
   return { run, calls, waits, wait, polls: () => poll + 1 }
@@ -382,6 +383,33 @@ test('watchChecks with CI expected waits five minutes for a first check: one tha
   const never = polled([[]])
   expect(await watchChecks(never.run, 96, never.wait, true)).toEqual({ ok: true, value: { state: 'none', failing: [] } })
   expect(never.waits.length).toBe(60)
+})
+
+test('watchChecks with CI expected: no check and no workflow run for the commit after 90 s is none and quiet, with no longer wait', async () => {
+  // A docs-only pull request under the workflow's paths-ignore: Actions has no run for the head commit.
+  const quiet = polled([[]], 0)
+  expect(await watchChecks(quiet.run, 96, quiet.wait, true)).toEqual({ ok: true, value: { state: 'none', failing: [], quiet: true } })
+  expect(quiet.waits.length).toBe(18)
+  // A check that shows up before the 90 s is read as usual, and the runs are never asked for.
+  const late = polled([[], [], [done('test', 'success')]], 0)
+  expect(await watchChecks(late.run, 96, late.wait, true)).toEqual({ ok: true, value: { state: 'green', failing: [] } })
+  expect(late.calls.some(c => c.join(' ').includes('actions/runs'))).toBe(false)
+})
+
+test('watchChecks asks a failed call again, three times in a row at most', async () => {
+  let n = 0
+  const waits: number[] = []
+  const wait = async (ms: number) => void waits.push(ms)
+  const flaky = fake({
+    [`GET ${R}/pulls/96`]: () => (++n === 1 ? { exitCode: 1, stderr: 'the call did not finish (timed out)' } : json({ number: 96, head: { sha: SHA } })),
+    [`GET ${R}/commits/${SHA}/check-runs?per_page=100`]: json({ check_runs: [done('test', 'success')] }),
+    [`GET ${R}/commits/${SHA}/status`]: json({ statuses: [] }),
+  })
+  expect(await watchChecks(flaky.run, 96, wait)).toEqual({ ok: true, value: { state: 'green', failing: [] } })
+  expect(waits).toEqual([5000])
+  const down = fake({ [`GET ${R}/pulls/96`]: { exitCode: 1, stderr: 'boom' } })
+  expect(await watchChecks(down.run, 96, wait)).toEqual({ ok: false, error: 'gh: boom' })
+  expect(down.calls.length).toBe(4)
 })
 
 test('prInfo answers the head branch of a pull request and whether GitHub merged it', async () => {

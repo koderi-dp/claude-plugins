@@ -43,7 +43,7 @@ function world(on: On, seed: Record<string, string> = {}, options: { worktreeAdd
   const pushes: string[] = []
   const wakeups: Record<string, unknown>[] = []
   const spawned: Fake[] = []
-  const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  const key = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
   const under = (dir: string) => [...files.keys()].filter(k => k.startsWith(`${dir}/`))
   on('fs.exists', (_$, e) => {
     const p = key(e.path)
@@ -531,7 +531,7 @@ test('the commands: next and run under runner session hand the model a start pro
 })
 
 test('runner subagent: next and run keep the in-session prompt', async ($, on) => {
-  const { clock, submitted } = world(on, { [CONFIG]: config({ runner: 'subagent' }), [BACKLOG]: READY, ...SPECS })
+  const { clock, submitted } = world(on, { [CONFIG]: config({ runner: 'subagent', mode: 'direct' }), [BACKLOG]: READY, ...SPECS })
   await start($)
   await $.command.run({ command: 'pipeline', args: 'next', origin: { kind: 'composer' } } as never)
   await clock.advance(100)

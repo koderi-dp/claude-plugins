@@ -28,7 +28,7 @@ function world(on: On, seed: Record<string, string> = {}, options: { rename?: 'o
     renames.push(String(e.args ?? ''))
     return { text: 'renamed' } as never
   })
-  const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  const key = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
     const t = files.get(key(e.path))
@@ -763,7 +763,7 @@ const READY_SEED = { ...BUILD_SEED, [BACKLOG]: JSON.stringify({ version: 1, item
 delete (READY_SEED as Record<string, string>)[`${DIR}/ledgers/p1.json`]
 
 test('begin claims a ready item: the worktree on the item branch off origin/main, the base, planning, and the worktree to enter', async ($, on) => {
-  const { files } = world(on, READY_SEED)
+  const { files } = world(on, { ...READY_SEED, [CONFIG]: JSON.stringify({ ...JSON.parse(READY_SEED[CONFIG]), mode: 'direct' }) })
   const runs = choreWorld(on)
   const line = text(await call($, { action: 'begin', item: 'p1' }))
   expect(line).toBe(`p1 · building · branch feat/p1 · base ba5e000 · worktree ${WT} · next: build it your own way in ${WT}, commit, then gate\n\nThe spec (docs/pipeline/specs/p1.md):\n\n# p1\n\n## What\n\nx\n\n## Acceptance\n\n- [ ] A CSV downloads.\n\n## Open`)
@@ -925,7 +925,7 @@ test('close refuses a pull request that is not on main yet, unless forced; pushM
 test('close from inside the item worktree leaves that worktree and says so; a main checkout on another branch is switched', async ($, on) => {
   const { files } = world(on, { ...CLOSE_SEED, [`${MAIN}/.claude/worktrees`]: '', [`${MAIN}/.claude/worktrees/p1/README.md`]: 'x' }, { cwd: `${MAIN}/.claude/worktrees/p1` })
   const runs = closeWorld(on, { current: 'feat/other' })
-  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path === `${MAIN}/.claude/worktrees` ? [{ name: 'p1', kind: 'dir' }] : [] }) as never)
+  on('fs.list', (_$, e) => ({ value: (e as { path: string }).path.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '') === `${MAIN}/.claude/worktrees` ? [{ name: 'p1', kind: 'dir' }] : [] }) as never)
   const line = text(await call($, { action: 'close', item: 'p1' }))
   expect(line).toContain('p1 merged · PR #3')
   expect(line).toContain('worktree .claude/worktrees/p1 left, this session is in it: the next begin or close removes it')
@@ -1012,12 +1012,12 @@ test('a write waits while another session holds the lock, and goes on when it is
 // ---------- 0.5.0: direct mode ----------
 
 const DIRECT_SEED = {
-  [CONFIG]: JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: { gate: 'npm run gate' }, riskyPaths: ['db/**'], merge: 'pr' }),
+  [CONFIG]: JSON.stringify({ version: 1, mainBranch: 'main', branch: 'feat/<id>', checks: { gate: 'npm run gate' }, riskyPaths: ['db/**'], mode: 'direct', merge: 'pr' }),
   [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'CSV export', status: 'ready', spec: 'docs/pipeline/specs/p1.md' }] }),
   [`${DIR}/specs/p1.md`]: '# p1\n\n## What\n\nx\n\n## Acceptance\n\n- [ ] A CSV downloads.\n\n## Open\n',
 }
-/** A git for a direct run: `head` answers HEAD, `changed` the files of the branch, `dirty` the status. */
-function directWorld(on: On, opts: { head?: string; changed?: string[]; dirty?: string; gate?: number } = {}) {
+/** A git for a direct run: `head` answers HEAD, `changed` the files of the branch, `dirty` the status; `gitExecPath` is a machine with no `sh` on PATH and Git installed there. */
+function directWorld(on: On, opts: { head?: string; changed?: string[]; dirty?: string; gate?: number; gitExecPath?: string } = {}) {
   const runs: string[][] = []
   on('process.run', (_$, e) => {
     const argv = [...(e as { argv: readonly string[] }).argv]
@@ -1030,10 +1030,12 @@ function directWorld(on: On, opts: { head?: string; changed?: string[]; dirty?: 
     if (sub === 'merge-base') return { value: { ...ok, stdout: 'ba5e000111222\n' } } as never
     if (sub === 'status') return { value: { ...ok, stdout: opts.dirty ?? '' } } as never
     if (sub === 'diff') return { value: { ...ok, stdout: (opts.changed ?? ['src/route.ts']).join('\n') + '\n' } } as never
+    if (sub === '--exec-path' && opts.gitExecPath) return { value: { ...ok, stdout: `${opts.gitExecPath}\n` } } as never
     return { value: ok } as never
   })
   on('process.spawn', async function* (_$, e) {
     runs.push([...(e as unknown as { argv: readonly string[] }).argv])
+    if (opts.gitExecPath && (e as unknown as { argv: readonly string[] }).argv[0] === 'sh') throw new Error('spawn sh ENOENT')
     yield { stream: 'stdout', text: opts.gate ? 'not ok 1\n' : '# pass 4\n' } as never
     return { value: { code: opts.gate ?? 0, signal: null } } as never
   })
@@ -1041,7 +1043,7 @@ function directWorld(on: On, opts: { head?: string; changed?: string[]; dirty?: 
 }
 const ledgerP1 = (files: Map<string, string>) => JSON.parse(files.get(`${DIR}/ledgers/p1.json`)!) as Record<string, any>
 
-test('direct mode is the default: begin sets the item building, and gate checks the branch in with no plan, task or brief', async ($, on) => {
+test('mode direct: begin sets the item building, and gate checks the branch in with no plan, task or brief', async ($, on) => {
   const { files } = world(on, DIRECT_SEED)
   const runs = directWorld(on)
   expect(text(await call($, { action: 'begin', item: 'p1' }))).toContain('p1 · building · branch feat/p1 · base ba5e000 ·')
@@ -1055,6 +1057,15 @@ test('direct mode is the default: begin sets the item building, and gate checks 
   expect(runs).toContainEqual(['git', '-C', `${MAIN}/.claude/worktrees/p1`, 'push', '-q', '-u', 'origin', 'feat/p1'])
   // No brief and no plan were written.
   expect([...files.keys()].some(k => k.includes('-brief.md') || k.includes('/plans/'))).toBe(false)
+})
+
+test('0.6.0: where sh is not on PATH the gate runs through the sh.exe that ships with Git', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  const runs = directWorld(on, { gitExecPath: 'C:/Program Files/Git/mingw64/libexec/git-core' })
+  await call($, { action: 'begin', item: 'p1' })
+  expect(text(await call($, { action: 'gate', item: 'p1' }))).toBe('p1 · gate green · final no review asked · pushed · next: open the PR')
+  expect(runs).toContainEqual(['C:/Program Files/Git/bin/sh.exe', '-c', 'npm run gate'])
+  expect(ledgerP1(files).final).toMatchObject({ gate: 'green' })
 })
 
 test('direct gate refuses a branch with nothing built or with uncommitted changes, and says a red gate', async ($, on) => {
@@ -1083,7 +1094,7 @@ test('direct gate asks for a review first when the branch touches a risky path; 
 })
 
 test('mode full keeps the planning stage and the plan', async ($, on) => {
-  const { files } = world(on, { ...DIRECT_SEED, [CONFIG]: DIRECT_SEED[CONFIG].replace('"merge"', '"mode": "full", "merge"') })
+  const { files } = world(on, { ...DIRECT_SEED, [CONFIG]: DIRECT_SEED[CONFIG].replace('"mode":"direct",', '') })
   directWorld(on)
   expect(text(await call($, { action: 'begin', item: 'p1' }))).toContain('p1 · planning · ')
   expect(text(await call($, { action: 'begin', item: 'p1' }))).toContain('write docs/pipeline/plans/p1.md, then plan')

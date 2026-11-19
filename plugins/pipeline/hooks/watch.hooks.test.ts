@@ -27,7 +27,7 @@ function world(on: On, seed: Record<string, string> = {}, options: { hasRepo?: b
   const passed: string[] = []
   // `w.root` is what session.root answers (EnterWorktree moves it); `w.id` what session.id answers (a /clear changes it).
   const w = { root: WORKTREE, id: options.sessionId ?? 'self' }
-  const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  const key = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
     const t = files.get(key(e.path))

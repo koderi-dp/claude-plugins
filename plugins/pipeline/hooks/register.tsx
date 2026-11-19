@@ -59,7 +59,7 @@ const TOOL_DESCRIPTION =
   'The pipeline of this project: backlog, ledgers and the build loop. Main session only; a subagent\'s call is ignored. Every write answers one line. The pipeline-run and pipeline-rules skills say when to call what. Actions: ' +
   '`get` { id?, titles?, full? } → JSON: the active item of this session, its resume block, open watchdog signals (each delivered once), children, siblings, counts, the next three items, the config keys a run reads, and `mergedPending` (items whose PR was merged by hand; close them first). `signals` → the open signals only. `status` { id? } → the status block, or one item\'s ledger as text. ' +
   'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set } (under queue github, set { title?, body?, needs? } rewrites the issue\'s own text: a new body keeps the issue\'s Needs: line unless needs is given, and an empty needs list removes it; never edit an issue with gh yourself), `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
-  'Run, in order: `begin` { item? } claims the item (the first ready one when none is named), makes its worktree and branch, records the base and answers the worktree and, under mode direct, the spec itself. Under mode direct (the default) the agent then builds the item its own way and calls `gate`; then one call ends it: `ship` { item, message?, attribution?, verdict?, next? } commits what is uncommitted with the message, runs the gate, opens the pull request and, under merge auto, waits for CI, merges and closes; it stops at a red gate, a review to dispatch or red CI and says what to do, and with next it begins the next ready item in the same answer. `gate`, `pr` { item, title?, body? }, `merge` and `close` are its steps, callable alone. `add` takes the spec as text and writes and links it. Under mode full: `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
+  'Run, in order: `begin` { item? } claims the item (the first ready one when none is named), makes its worktree and branch, records the base and answers the worktree and, under mode direct, the spec itself. Under mode direct the agent then builds the item its own way and calls `gate`; then one call ends it: `ship` { item, message?, attribution?, verdict?, next? } commits what is uncommitted with the message, runs the gate, opens the pull request and, under merge auto, waits for CI, merges and closes; it stops at a red gate, a review to dispatch or red CI and says what to do, and with next it begins the next ready item in the same answer. `gate`, `pr` { item, title?, body? }, `merge` and `close` are its steps, callable alone. `add` takes the spec as text and writes and links it. Under mode full (the default): `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
   '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
   '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. `merge` { item, pr? } ends an item whose PR is open: it polls the PR\'s checks over the REST API until they are through (an hour at most), merges with config.mergeMethod through gh api (no auto-merge setting needed) and runs close; red checks answer their names, for a fix wave and another merge. ' +
   '`close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is (also from inside the item\'s worktree): the main checkout on mainBranch and pulled, the item merged, what config.retain lets go removed, docs/pipeline committed on mainBranch and pushed unless config.pushMain is false, the worktree and local branch removed (a worktree this session is inside is left and removed by a later begin or close). ' +
@@ -377,13 +377,22 @@ async function ensureIgnore($: EngineInterface, found: string): Promise<void> {
   if (!had.split('\n').some(l => l.trim() === WORKTREES_IGNORE)) await $.fs.write(file, `${had}${had && !had.endsWith('\n') ? '\n' : ''}${WORKTREES_IGNORE}\n`)
 }
 
-/** The tracker's `run`: the argv through `$.process.run` in the main checkout; a thrown error (no gh) answers null. */
+/** A thrown error that says the program is not there, as against one that ran and timed out or was refused. */
+const isMissingProgram = (message: string): boolean => /ENOENT|not found|not recognized|cannot find|no such file/i.test(message)
+
+/**
+ * The tracker's `run`: the argv through `$.process.run` in the main checkout. Null only when gh itself is not there;
+ * any other thrown error (a timeout, a refused call) is a failed call with the error as what gh said, so the answer
+ * names what happened and not a missing gh.
+ */
 const ghRun = ($: EngineInterface, found: string): Run => async argv => {
   try {
     const r = await $.process.run(argv, { cwd: found, timeoutMs: 30_000 })
     return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr }
-  } catch {
-    return null
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (isMissingProgram(message)) return null
+    return { exitCode: 1, stdout: '', stderr: `the call did not finish (${message.split('\n')[0]!.trim() || 'no reason given'})` }
   }
 }
 
@@ -1574,6 +1583,29 @@ async function acceptAction($: EngineInterface, found: string, c: Config | null,
  * A command run to its end with no time limit of the host's (a gate may take longer than the ten minutes one
  * `process.run` gets): the exit code and the last of its output. Null code when it was killed by a signal.
  */
+/**
+ * A shell command line run to its end through `runLong`. `sh` first; where there is no `sh` on PATH (Windows outside
+ * Git Bash) the `sh.exe` that ships with Git, found from `git --exec-path`. Throws the first error when neither starts.
+ */
+async function runShell($: EngineInterface, command: string, cwd: string): Promise<{ code: number | null; out: string }> {
+  try {
+    return await runLong($, ['sh', '-c', command], cwd)
+  } catch (err) {
+    // <Git>/mingw64/libexec/git-core → <Git>/bin/sh.exe, else <Git>/usr/bin/sh.exe
+    const exec = slashes((await gitOut($, cwd, ['--exec-path'])) ?? '')
+    const root = /^(.*)\/(?:mingw(?:32|64)|clangarm64|usr)\/(?:libexec|lib)\/git-core\/?$/.exec(exec)?.[1]
+    if (!root) throw err
+    for (const sh of [`${root}/bin/sh.exe`, `${root}/usr/bin/sh.exe`]) {
+      try {
+        return await runLong($, [sh, '-c', command], cwd)
+      } catch {
+        // try the next one
+      }
+    }
+    throw err
+  }
+}
+
 async function runLong($: EngineInterface, argv: string[], cwd: string): Promise<{ code: number | null; out: string }> {
   const stream = $.process.spawn({ argv, cwd })
   let out = ''
@@ -1622,14 +1654,14 @@ async function mergeAction($: EngineInterface, found: string, c: Config | null, 
   const expectsCi = flows.some(f => /\.ya?ml$/i.test(f))
   const state = await tracker.watchChecks(run, n, wait, expectsCi)
   if (!state.ok) throw new Refused(`${state.error} · or ${yourself}`)
-  if (state.value.state === 'none' && expectsCi && !e.force) return `${id} · CI has not reported on PR #${n} after five minutes although the repository has workflows · not merged · look at the Actions tab, then merge again, or merge with "force": true`
+  if (state.value.state === 'none' && expectsCi && !e.force && !state.value.quiet) return `${id} · CI has not reported on PR #${n} after five minutes although the repository has workflows · not merged · look at the Actions tab, then merge again, or merge with "force": true`
   if (state.value.state === 'red') return `${id} · CI red · ${state.value.failing.join(', ')} · PR #${n} not merged · one fix wave, then merge again`
   if (state.value.state === 'pending') return `${id} · CI still running on PR #${n} · merge again`
   const merged = await tracker.mergePr(run, n, cfg.mergeMethod)
   if (!merged.ok) throw new Refused(`PR #${n} could not be merged: ${merged.error}`)
   // A squash leaves the branch tip off mainBranch, so close is told the merge happened.
   const closed = await runTool($, { action: 'close', item: id, pr: pr.startsWith('#') || /^https?:/.test(pr) ? pr : `#${n}`, ...(cfg.mergeMethod === 'squash' || e.force ? { force: true } : {}) })
-  return `${closed} · CI ${state.value.state === 'none' ? 'none' : 'green'}`
+  return `${closed} · CI ${state.value.state !== 'none' ? 'green' : state.value.quiet ? 'none (no workflow ran for this commit)' : 'none'}`
 }
 
 /**
@@ -1669,7 +1701,7 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
   let output = ''
   if (command) {
     try {
-      const r = await runLong($, ['sh', '-c', command], wt)
+      const r = await runShell($, command, wt)
       gate = r.code === 0 ? 'green' : `red (exit ${r.code ?? 'signal'})`
       if (r.code !== 0) output = tail(r.out.trim(), 20)
     } catch (err) {

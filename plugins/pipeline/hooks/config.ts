@@ -36,7 +36,7 @@ export const DEFAULTS: Config = {
   renameSession: true,
   pushMain: true,
   taskReview: 'risky',
-  mode: 'direct',
+  mode: 'full',
   superpowers: 'off',
   queue: 'file',
   queueLabel: 'pipeline',

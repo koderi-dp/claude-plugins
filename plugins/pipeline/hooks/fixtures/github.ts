@@ -9,6 +9,8 @@ export type RestState = {
   issues: Issue[]
   /** The checks of every pull request's head commit, in the buckets `pass`, `fail`, `cancel`, `pending`; null or missing: none reported. */
   checks?: { name: string; bucket: string }[] | null
+  /** How many workflow runs Actions has for a commit; not given: the endpoint answers 404. */
+  workflowRuns?: number
   /** The labels the repository has, in the order they were created. */
   labels?: string[]
   /** Called after a call changed an issue's labels, assignees, title or body. */
@@ -179,6 +181,7 @@ export function restGithub(state: RestState, now: number): (argv: readonly strin
       return ok({ total_count: rows.length, check_runs: rows })
     }
     if (on('GET', /^commits\/[0-9a-f]+\/status$/)) return ok({ state: 'pending', statuses: [], total_count: 0 })
+    if (on('GET', /^actions\/runs$/) && typeof state.workflowRuns === 'number') return ok({ total_count: state.workflowRuns, workflow_runs: [] })
     return refuse(404, 'Not Found')
   }
 }

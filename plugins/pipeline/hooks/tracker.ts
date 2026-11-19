@@ -218,7 +218,8 @@ export async function close(run: Run, number: number): Promise<Result<true>> {
   return done(await api(run, 'PATCH', `${REPO}/issues/${number}`, [['state', 'closed']]))
 }
 
-export type Checks = { state: 'green' | 'red' | 'pending' | 'none'; failing: string[] }
+/** `quiet`: no check reported and GitHub has no workflow run for the head commit, so nothing was triggered for it. */
+export type Checks = { state: 'green' | 'red' | 'pending' | 'none'; failing: string[]; quiet?: true }
 
 const RUN_FAILED = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure'])
 const NONE_POLLS = 6
@@ -259,24 +260,61 @@ export async function checks(run: Run, pr: number): Promise<Result<Checks>> {
 
 /** How often a first check is waited for when the repository has workflows: five minutes of 5 s polls. */
 export const NONE_POLLS_EXPECTED = 60
+/** After this many polls with no check (90 s), GitHub is asked whether any workflow run exists for the head commit. */
+export const QUIET_POLLS = 18
+/** How often in a row a failed call (not a missing gh or login) is asked again before the wait gives up. */
+const RETRIES = 3
+
+/**
+ * How many workflow runs GitHub Actions has for the pull request's head commit. Zero means no workflow was triggered
+ * for it (a `paths-ignore` or `paths` filter left it out): a run exists from the moment it is queued.
+ */
+export async function workflowRuns(run: Run, pr: number): Promise<Result<number>> {
+  const pull = `${REPO}/pulls/${pr}`
+  const got = await api(run, 'GET', pull)
+  if (!got.ok) return fail(got)
+  const sha = str(obj(obj(parse(got.value))['head'])['sha'])
+  if (!sha) return unexpected('GET', pull)
+  const at = `${REPO}/actions/runs?head_sha=${sha}&per_page=1`
+  const r = await api(run, 'GET', at)
+  if (!r.ok) return fail(r)
+  const n = obj(parse(r.value))['total_count']
+  return typeof n === 'number' ? { ok: true, value: n } : unexpected('GET', at)
+}
 
 /**
  * Polls a pull request's checks until they are through and answers where they stand; `wait` is the caller's sleep.
  * No checks at first: asked again every 5 s, since CI needs a moment to register after a pull request opens (in a
  * live run the first check appeared 40 s after the pull request). Six more times when the repository is not known to
- * have CI, sixty (five minutes) when `expectsCi` says it has workflows; `none` only when there are still none. Running: asked again every 15 s, 240 polls at most (an
- * hour), then the last `pending` is the answer. Green or red answers at once.
+ * have CI, sixty (five minutes) when `expectsCi` says it has workflows; `none` only when there are still none. With
+ * `expectsCi`, from 90 s on GitHub is also asked for the workflow runs of the head commit: zero means no workflow was
+ * triggered for this commit (a docs-only change under `paths-ignore`), and the answer is `none` with `quiet` at once.
+ * Running: asked again every 15 s, 240 polls at most (an hour), then the last `pending` is the answer. Green or red
+ * answers at once. A call that fails (a timeout, the network) is asked again after 5 s, three times in a row at
+ * most; a missing gh or login answers at once.
  */
 export async function watchChecks(run: Run, pr: number, wait: (ms: number) => Promise<void>, expectsCi = false): Promise<Result<Checks>> {
-  let r = await checks(run, pr)
+  const ask = async (): Promise<Result<Checks>> => {
+    let r = await checks(run, pr)
+    for (let i = 0; !r.ok && r.error !== NO_GH && r.error !== NO_AUTH && i < RETRIES; i++) {
+      await wait(NONE_WAIT_MS)
+      r = await checks(run, pr)
+    }
+    return r
+  }
+  let r = await ask()
   const nonePolls = expectsCi ? NONE_POLLS_EXPECTED : NONE_POLLS
   for (let i = 0; r.ok && r.value.state === 'none' && i < nonePolls; i++) {
+    if (expectsCi && i >= QUIET_POLLS && (i - QUIET_POLLS) % 6 === 0) {
+      const ran = await workflowRuns(run, pr)
+      if (ran.ok && ran.value === 0) return { ok: true, value: { state: 'none', failing: [], quiet: true } }
+    }
     await wait(NONE_WAIT_MS)
-    r = await checks(run, pr)
+    r = await ask()
   }
   for (let polls = 1; r.ok && r.value.state === 'pending' && polls < PENDING_POLLS; polls++) {
     await wait(PENDING_WAIT_MS)
-    r = await checks(run, pr)
+    r = await ask()
   }
   return r
 }

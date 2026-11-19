@@ -42,7 +42,7 @@ function world(on: On, seed: Record<string, string> = {}) {
   const panes: string[] = []
   const opened: string[] = []
   const toasts: string[] = []
-  const key = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  const key = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
     const t = files.get(key(e.path))
