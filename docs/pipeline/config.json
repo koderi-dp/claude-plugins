@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "mainBranch": "main",
+  "branch": "feat/<id>",
+  "checks": {
+    "task": "cargo test --workspace",
+    "gate": "just build && just test"
+  },
+  "riskyPaths": [
+    "crates/ssh-remote/src/secret.rs",
+    "crates/ssh-remote/src/known_hosts.rs",
+    "crates/ssh-remote/src/session.rs",
+    "crates/ssh-remote/src/pool.rs"
+  ],
+  "protectedPaths": [
+    ".github/workflows/**",
+    "plugins/*/bin/**"
+  ],
+  "models": {
+    "implementer": {
+      "model": "sonnet",
+      "effort": "medium"
+    },
+    "reviewer": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "final": {
+      "model": "opus",
+      "effort": "xhigh"
+    },
+    "escalate": {
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  "limits": {
+    "fixRounds": 3,
+    "silentMinutes": 10,
+    "taskMinutes": 45,
+    "itemTokens": 4000000,
+    "parallel": 1
+  },
+  "runner": "subagent",
+  "merge": "pr",
+  "mergeMethod": "merge",
+  "retain": {
+    "plans": true,
+    "briefs": false,
+    "superpowers": false
+  },
+  "stop": [
+    "product decision the spec leaves open",
+    "security trade-off",
+    "CI that cannot be made green",
+    "credentials or external services",
+    "new cost",
+    "destructive data change"
+  ],
+  "afterMerge": [
+    "docs/pipeline/BACKLOG.md"
+  ],
+  "notify": "milestones",
+  "renameSession": true,
+  "pushMain": true,
+  "taskReview": "risky",
+  "mode": "direct",
+  "superpowers": "off",
+  "queue": "file",
+  "queueLabel": "pipeline"
+}
