@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "code-outline": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/code-outline.exe"
-    }
-  }
-}

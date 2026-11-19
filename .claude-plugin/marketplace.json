@@ -3,23 +3,8 @@
   "owner": {
     "name": "Danijel Peric"
   },
-  "description": "Claude Code plugins for faster, quieter sessions: file lookup, output trimming, code outlines, SSH, and speed profiles with a live panel for superpowers plan runs.",
+  "description": "Claude Code plugins: SSH with hidden credentials, speed profiles with a live panel for superpowers plan runs, and a pipeline that takes a request to a merged PR.",
   "plugins": [
-    {
-      "name": "everything-find",
-      "source": "./plugins/everything-find",
-      "description": "Instant file/folder lookup via voidtools Everything (Windows)."
-    },
-    {
-      "name": "output-trim",
-      "source": "./plugins/output-trim",
-      "description": "Trims noisy build/test/log output to errors, failures and summaries."
-    },
-    {
-      "name": "code-outline",
-      "source": "./plugins/code-outline",
-      "description": "Symbol outlines and single-symbol reads via tree-sitter (Rust, TS/JS, Python, C#)."
-    },
     {
       "name": "ssh-remote",
       "source": "./plugins/ssh-remote",
@@ -29,11 +14,6 @@
       "name": "superpowers-flow",
       "source": "./plugins/superpowers-flow",
       "description": "Speed profiles (thorough, balanced, fast) for superpowers plan runs, chosen at the plan's handoff with the models per role; parallel slices in git worktrees or headless sessions; a live progress bar and agents panel; tiered sp-* workers; and a handoff that builds an approved EGM design."
-    },
-    {
-      "name": "board",
-      "source": "./plugins/board",
-      "description": "A panel of this session's tasks, subagents (what each is doing, in words) and sibling sessions, plus a project board of milestones and tasks Claude keeps in docs/superpowers/board.json."
     },
     {
       "name": "pipeline",

@@ -17,9 +17,8 @@ build:
 test:
     cargo test --workspace
 
-# Tests against the ssh-remote test server (just ssh-test-server), then a running Everything instance
+# Tests against the ssh-remote test server (just ssh-test-server)
 test-live: test-live-ssh
-    cargo test -p everything-find --test live -- --ignored
 
 # ssh-remote's live tests alone, against the test server (just ssh-test-server)
 test-live-ssh:

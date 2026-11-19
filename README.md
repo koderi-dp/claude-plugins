@@ -1,15 +1,11 @@
 # claude-plugins
 
-Claude Code plugins for faster, quieter sessions. This repository is a plugin marketplace named `code101-plugins`.
+Claude Code plugins. This repository is a plugin marketplace named `code101-plugins`.
 
 | Plugin | What it does | Runs on |
 | --- | --- | --- |
-| [everything-find](plugins/everything-find) | Instant file and folder lookup through the voidtools Everything index, as a `find` tool | Windows, with [Everything](https://www.voidtools.com/) running |
-| [output-trim](plugins/output-trim) | Trims noisy build, test and log output to errors, failures and summaries | Windows |
-| [code-outline](plugins/code-outline) | Symbol outlines and single-symbol reads via tree-sitter for Rust, TypeScript, JavaScript, Python and C# | Windows |
 | [ssh-remote](plugins/ssh-remote) | Runs commands and downloads files over SSH, with credentials read from files Claude never sees | Windows |
 | [superpowers-flow](plugins/superpowers-flow) | Speed profiles (thorough, balanced, fast) and models per role for [superpowers](https://github.com/obra/superpowers) plan runs, chosen at the plan's handoff; parallel slices in git worktrees or their own headless sessions; a live progress bar and agents panel; and a handoff that builds an approved [EGM](https://github.com/google/elephant-goldfish-model) design | Any |
-| [board](plugins/board) | A panel of this session's tasks, subagents (what each is doing, in words) and sibling sessions, plus a project board of milestones and tasks Claude keeps in `docs/superpowers/board.json` | Any |
 | [pipeline](plugins/pipeline) | Owns a project's workflow: a backlog in `docs/pipeline` or in GitHub issues, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel | Any |
 
 ## Install
@@ -43,8 +39,8 @@ claude plugin update superpowers-flow@code101-plugins
 | Path | Holds |
 | --- | --- |
 | `.claude-plugin/marketplace.json` | The marketplace listing |
-| `plugins/<name>/` | Each plugin as Claude Code installs it. The Rust plugins ship a release exe in `bin/` |
-| `crates/<name>/` | Rust source for the plugins with an exe, one crate per plugin of the same name |
+| `plugins/<name>/` | Each plugin as Claude Code installs it. ssh-remote ships a release exe in `bin/` |
+| `crates/<name>/` | Rust source for a plugin with an exe, in a crate of the same name; today only ssh-remote |
 | `Cargo.toml`, `Cargo.lock` | The Rust workspace |
 | `justfile` | Build, test, release and publish recipes |
 
@@ -55,12 +51,12 @@ Needs Rust, [just](https://github.com/casey/just) and PowerShell 7. The live ssh
 ```bash
 just build                      # debug-build the workspace
 just test                       # unit and protocol tests
-just test-live                  # tests against the ssh-remote test server and a running Everything
-just release output-trim        # release-build one plugin into plugins/<name>/bin
-just publish output-trim 0.1.1  # bump, test, release, commit, tag, push, update the local install
+just test-live                  # tests against the ssh-remote test server (just ssh-test-server)
+just release ssh-remote         # release-build the plugin into plugins/<name>/bin
+just publish ssh-remote 0.1.1   # bump, test, release, commit, tag, push, update the local install
 ```
 
-superpowers-flow has no build step. Its tests run with `claude plugin test plugins/superpowers-flow`.
+superpowers-flow and pipeline have no build step. Their tests run with `claude plugin test plugins/<name>`.
 
 ## License
 
