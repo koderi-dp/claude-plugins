@@ -29,17 +29,17 @@ similar) that Claude did not pipe.
 
 ## Install
 
-At the prompt of a terminal session:
+From a shell, add the marketplace once, then install the plugin:
 
-```
-/plugin install output-trim --marketplace koderi-dp/claude-plugins
+```powershell
+claude plugin marketplace add koderi-dp/claude-plugins
 ```
 
-From a shell:
-
-```bash
-claude plugin install output-trim --marketplace koderi-dp/claude-plugins
+```powershell
+claude plugin install output-trim@code101-plugins
 ```
+
+The same two steps work at the prompt of a terminal session as `/plugin marketplace add koderi-dp/claude-plugins` and `/plugin install output-trim@code101-plugins`.
 
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then
 Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.

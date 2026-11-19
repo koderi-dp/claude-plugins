@@ -11,11 +11,15 @@ Faster, visible [superpowers](https://github.com/obra/superpowers) plan runs. Su
 
 Needs Claude Code v2.1.287 or later (`claude --version`; `claude update` updates it) and the superpowers plugin.
 
-```bash
-claude plugin install superpowers-flow --marketplace koderi-dp/claude-plugins
+```powershell
+claude plugin marketplace add koderi-dp/claude-plugins
 ```
 
-At a terminal session's prompt: `/plugin install superpowers-flow --marketplace koderi-dp/claude-plugins`. In the desktop app: + next to the prompt box, Plugins, Add marketplace `koderi-dp/claude-plugins`, then Add plugin.
+```powershell
+claude plugin install superpowers-flow@code101-plugins
+```
+
+At a terminal session's prompt: `/plugin marketplace add koderi-dp/claude-plugins`, then `/plugin install superpowers-flow@code101-plugins`. In the desktop app: + next to the prompt box, Plugins, Add marketplace `koderi-dp/claude-plugins`, then Add plugin.
 
 If savvy-progress or session-band is installed, disable it: this plugin draws what both do.
 

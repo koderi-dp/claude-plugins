@@ -14,26 +14,28 @@ Claude Code plugins for faster, quieter sessions. This repository is a plugin ma
 
 ## Install
 
-At the prompt of a terminal session, one plugin at a time:
+From a shell, add the marketplace once, then install one plugin at a time:
 
-```
-/plugin install superpowers-flow --marketplace koderi-dp/claude-plugins
-```
-
-From a shell:
-
-```bash
-claude plugin install superpowers-flow --marketplace koderi-dp/claude-plugins
+```powershell
+claude plugin marketplace add koderi-dp/claude-plugins
 ```
 
-Replace `superpowers-flow` with any plugin name from the table. The first install asks to add the marketplace; answer `y`.
+```powershell
+claude plugin install superpowers-flow@code101-plugins
+```
+
+Replace `superpowers-flow` with any plugin name from the table. The same two steps work at the prompt of a terminal session as `/plugin marketplace add koderi-dp/claude-plugins` and `/plugin install superpowers-flow@code101-plugins`.
 
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
 
 To pick up new releases later:
 
-```bash
+```powershell
 claude plugin marketplace update code101-plugins
+```
+
+```powershell
+claude plugin update superpowers-flow@code101-plugins
 ```
 
 ## Layout

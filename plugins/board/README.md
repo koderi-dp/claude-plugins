@@ -45,17 +45,17 @@ A board file that does not parse is never overwritten: the tool refuses with the
 
 Needs Claude Code v2.1.287 or later, for mods; `claude --version` shows yours and `claude update` updates it. Tested on v2.1.310. The hook API is early access: an engine release may rename an event, and this note names the version it was tested on.
 
-At the prompt of a terminal session:
+From a shell, add the marketplace once, then install the plugin:
 
-```
-/plugin install board --marketplace koderi-dp/claude-plugins
+```powershell
+claude plugin marketplace add koderi-dp/claude-plugins
 ```
 
-From a shell:
-
-```bash
-claude plugin install board --marketplace koderi-dp/claude-plugins
+```powershell
+claude plugin install board@code101-plugins
 ```
+
+The same two steps work at the prompt of a terminal session as `/plugin marketplace add koderi-dp/claude-plugins` and `/plugin install board@code101-plugins`.
 
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
 

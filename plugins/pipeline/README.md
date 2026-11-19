@@ -1,6 +1,84 @@
 # pipeline
 
-Owns a project's workflow: a backlog in `docs/pipeline` or in GitHub issues, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel. The project keeps a small config file and its code conventions; the plugin keeps the backlog, drives an item from request to merged PR with no approval gates, watches the workers, and shows where things stand. It is for the person who wants to say what to build and read a status line, not operate the process.
+You say what to build; the plugin keeps the backlog, builds each item on its own branch, opens the pull request and shows where things stand. The backlog lives in `docs/pipeline` or in GitHub issues.
+
+## Install
+
+Needs Claude Code v2.1.287 or later (`claude --version` shows yours, `claude update` updates it). Tested on v2.1.318.
+
+From a shell, add the marketplace once, then install the plugin:
+
+```powershell
+claude plugin marketplace add koderi-dp/claude-plugins
+```
+
+```powershell
+claude plugin install pipeline@code101-plugins
+```
+
+Then start a new session. The same two steps work at the prompt of a terminal session as `/plugin marketplace add koderi-dp/claude-plugins` and `/plugin install pipeline@code101-plugins`.
+
+In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
+
+## Update
+
+```powershell
+claude plugin marketplace update code101-plugins
+```
+
+```powershell
+claude plugin update pipeline@code101-plugins
+```
+
+Then start a new session (or run `/reload-plugins`). `claude plugin list` shows the installed version.
+
+## Uninstall
+
+```powershell
+claude plugin uninstall pipeline@code101-plugins
+```
+
+## Quick start
+
+In a session opened in your project:
+
+1. `/pipeline init` sets the project up: `docs/pipeline/config.json`, an empty backlog and a `rules.md`.
+2. `/pipeline add <what you want>` records a request as a backlog item with a spec. Plain wording works too ("we need a CSV export").
+3. `/pipeline next` builds the first ready item and opens its pull request. `/pipeline run all` keeps going until nothing is ready.
+4. `/pipeline status` shows where things stand; in the desktop app the panel shows the same, live.
+
+By default you merge the pull request yourself (`merge: pr`). With `merge: auto` the plugin merges once CI is green. `merge: auto` and the GitHub issue queue need the `gh` CLI logged in (`gh auth login`).
+
+## Commands
+
+| Command | Does |
+| --- | --- |
+| `/pipeline init` | Config and an empty backlog for a new project, or the config and the labels when you ask for GitHub issues as the queue; offers `migrate` when the project has a queue |
+| `/pipeline migrate` | Move an existing project onto the pipeline (below) |
+| `/pipeline migrate github` | Move a project that already has a file backlog onto GitHub issues (below) |
+| `/pipeline add <text>` | Intake: an item and its spec, in one line back; never starts the build |
+| `/pipeline discuss <text or id>` | The slow intake: asks you a few questions one at a time, shows the spec, saves it once you agree; for a new request or an existing item |
+| `/pipeline next` | Run the first ready item (under `runner: session`, start its child session) |
+| `/pipeline run <id>` / `run all` | Run one item, or until nothing is ready or a stop condition fires |
+| `/pipeline status [id]` | The status block, or one item's ledger as text; works on a phone over Remote Control |
+| `/pipeline move <id> top` / `after <id>` | Reorder |
+| `/pipeline park <id>` / `unpark <id>` | Take out of, back into, the queue |
+| `/pipeline stop [id]` | Finish the running task, leave the branch pushed and the ledger current, stop; with an id, kill that item's child session and block the item |
+| `/pipeline log <id>` | The last 60 lines of an item's child session log |
+| `/pipeline clean` | List and remove what `retain` says may go for every merged item, with its worktree and local branch |
+| `/pipeline panel` | Toggle the panel |
+| `/pipeline config [key=value]` | Show or change the project config |
+
+Everything below is reference detail.
+
+## Plugin options
+
+| Option | Default | Means |
+| --- | --- | --- |
+| `autoOpen` | `always` | `always` opens the panel when a session starts in a project with a pipeline and when a subagent starts; `never` leaves it to `/pipeline panel` |
+| `band` | `two-line` | The bar above the prompt: `two-line` or `compact` (one line) |
+| `idleStrip` | `show` | One idle status line above the prompt when nothing is active; `hide` removes it |
+| `tasks` | `expanded` | The panel's task list: `expanded` with details per task, or `compact` with titles and badges only |
 
 ## The files in a project
 
@@ -75,26 +153,6 @@ The tool makes no commit of its own: `plan` and `accept` commit nothing, and `cl
 The `pipeline:building` label is the claim across machines, and the local ledger says whose it is. `begin` refuses an issue that carries the label when this machine has no ledger for it, naming the other assignee, or saying "another machine of yours" when the only assignee is the `gh` user, since one user on two machines has one login; `begin` with `"force": true` takes the item over here, and `start` under `runner: session` checks the same. When `gh` fails, the tool does not ask it again for a minute and answers from the issue list it last read, saying how old it is; a label or comment change that could not be sent is kept as pending, retried at the start of the next writing action, and counted at the end of the answer's line.
 
 The limits of this mode: issues have no order of their own, so the oldest ready issue is picked first and `/pipeline run <n>` runs a named one; `move` does not exist; a dependency is a `Needs: #12` line in the issue's body, which `add` writes from `needs` and which you can also type on GitHub; `update` with `title`, `body` or `needs` rewrites the issue's own text through the tool and keeps the `Needs:` line when a new body names none; an item half built on one machine resumes only there, and on another machine a run starts a new plan against the pushed branch.
-
-## Commands
-
-| Command | Does |
-| --- | --- |
-| `/pipeline init` | Config and an empty backlog for a new project, or the config and the labels when you ask for GitHub issues as the queue; offers `migrate` when the project has a queue |
-| `/pipeline migrate` | Move an existing project onto the pipeline (below) |
-| `/pipeline migrate github` | Move a project that already has a file backlog onto GitHub issues (below) |
-| `/pipeline add <text>` | Intake: an item and its spec, in one line back; never starts the build |
-| `/pipeline discuss <text or id>` | The slow intake: asks you a few questions one at a time, shows the spec, saves it once you agree; for a new request or an existing item |
-| `/pipeline next` | Run the first ready item (under `runner: session`, start its child session) |
-| `/pipeline run <id>` / `run all` | Run one item, or until nothing is ready or a stop condition fires |
-| `/pipeline status [id]` | The status block, or one item's ledger as text; works on a phone over Remote Control |
-| `/pipeline move <id> top` / `after <id>` | Reorder |
-| `/pipeline park <id>` / `unpark <id>` | Take out of, back into, the queue |
-| `/pipeline stop [id]` | Finish the running task, leave the branch pushed and the ledger current, stop; with an id, kill that item's child session and block the item |
-| `/pipeline log <id>` | The last 60 lines of an item's child session log |
-| `/pipeline clean` | List and remove what `retain` says may go for every merged item, with its worktree and local branch |
-| `/pipeline panel` | Toggle the panel |
-| `/pipeline config [key=value]` | Show or change the project config |
 
 ## The config
 
@@ -193,35 +251,9 @@ Look. The panel and the bar above the prompt are drawn from one kit. `hooks/ui/t
 
 A project that already runs on a file backlog moves onto GitHub issues with `/pipeline migrate github`, or when you ask for issues as the queue in words: every issue gets the whole spec as its body (What, Why, Acceptance, Out of scope, and the item's note), so it reads as the request on its own; the tool drafts the move (the items that become issues, the ones in flight, the parked ones and the files to remove) and writes nothing until you have answered its one question. The apply creates a labelled issue per item that is not merged or parked and ends each issue's body with the id the item had (`Migrated from p78.`) and a `Needs:` line for the items it waited for, posts each spec as the issue's spec comment, with the PR of an item in review and the note of another item in flight in its status line. It labels and assigns the items being built, labels a blocked item `pipeline:blocked`, asks an inbox item's open question on its issue, copies the ledgers, plans and briefs of the items in flight under the issue's number (a fresh ledger with the branch where there was none), copies `facts.md`, and sets `queue: github` in the config. It deletes nothing: the lead removes `backlog.json`, `BACKLOG.md`, `facts.md`, `specs/`, `plans/` and `ledgers/` with `git rm` and commits that with the config.
 
-## Install
-
-Needs Claude Code v2.1.287 or later, for mods; `claude --version` shows yours and `claude update` updates it. Tested on v2.1.318. The mod API is early access: an engine release may rename an event, and this note names the version it was tested on. No other plugin is needed: the plan format, the briefs and the build loop are the plugin's own. `retain.superpowers` and the migration only concern files an earlier superpowers workflow left in a project.
-
-At the prompt of a terminal session:
-
-```
-/plugin install pipeline --marketplace koderi-dp/claude-plugins
-```
-
-From a shell:
-
-```bash
-claude plugin install pipeline --marketplace koderi-dp/claude-plugins
-```
-
-In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
-
-## Update
-
-```bash
-claude plugin marketplace update code101-plugins
-claude plugin update pipeline@code101-plugins
-```
-
-Then start a new session (or run `/reload-plugins`). `claude plugin list` shows the installed version.
-
 ## Limits
 
+- The mod API is early access: an engine release may rename an event, and the Install section names the version this was tested on. No other plugin is needed; `retain.superpowers` and the migration only concern files an earlier superpowers workflow left in a project.
 - The mod API cannot delete files: `clean` and `migrate` list what may go, and the lead removes it with `git rm` and commits. Every write is a plain file write; the API has no rename.
 - A blocked item is resumed with `/pipeline run <id>`: the lead reads the note and your answer, sets the status back and continues from the ledger.
 - The branch is pushed at every accepted task, so a lost worktree costs at most the running task.
@@ -234,6 +266,7 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 
 | Part | Name |
 | --- | --- |
+| Agents | `pipeline:implementer`, `pipeline:reviewer` |
 | Skills | `pipeline-init`, `pipeline-intake`, `pipeline-discuss`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
 | Templates | `templates/spec.md`; the four briefs (implementer, fix, review, final) are in `hooks/templates.ts` and rendered by the tool's `brief` action; a project file `docs/pipeline/templates/<kind>.md` replaces one |
 | Tool | `mcp__pipeline__pipeline` |
