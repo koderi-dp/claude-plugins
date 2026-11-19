@@ -66,6 +66,6 @@
   "taskReview": "risky",
   "mode": "direct",
   "superpowers": "off",
-  "queue": "file",
+  "queue": "github",
   "queueLabel": "pipeline"
 }
