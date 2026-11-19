@@ -4,3 +4,7 @@
 
 plugins/*/evals/results/
 plugins/pipeline/preview/out/
+
+# Written by Claude Code when a plugin is loaded from source (--plugin-dir)
+plugins/*/tsconfig.json
+plugins/*/.claude-plugin/types/

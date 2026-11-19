@@ -9,6 +9,8 @@ export type RestState = {
   issues: Issue[]
   /** The checks of every pull request's head commit, in the buckets `pass`, `fail`, `cancel`, `pending`; null or missing: none reported. */
   checks?: { name: string; bucket: string }[] | null
+  /** Pull requests by number, for the calls that read or edit one; a number not listed is an open one on `feat/<n>`. */
+  pulls?: Record<number, { title: string; body: string; head: string; state?: 'open' | 'closed'; merged?: boolean }>
   /** How many workflow runs Actions has for a commit; not given: the endpoint answers 404. */
   workflowRuns?: number
   /** The labels the repository has, in the order they were created. */
@@ -170,7 +172,17 @@ export function restGithub(state: RestState, now: number): (argv: readonly strin
       const number = state.pull ?? 31
       return ok({ number, html_url: `https://github.com/o/r/pull/${number}` })
     }
-    if ((m = on('GET', /^pulls\/(\d+)$/))) return ok({ number: Number(m[1]), state: 'open', head: { sha: HEAD_SHA, ref: `feat/${m[1]}` }, merged: false })
+    if ((m = on('GET', /^pulls\/(\d+)$/))) {
+      const p = state.pulls?.[Number(m[1])]
+      if (p) return ok({ number: Number(m[1]), title: p.title, body: p.body, state: p.state ?? 'open', head: { sha: HEAD_SHA, ref: p.head }, merged: p.merged === true })
+      return ok({ number: Number(m[1]), state: 'open', head: { sha: HEAD_SHA, ref: `feat/${m[1]}` }, merged: false })
+    }
+    if ((m = on('PATCH', /^pulls\/(\d+)$/))) {
+      const p = state.pulls?.[Number(m[1])]
+      if (!p) return refuse(404, 'Not Found')
+      p.body = one(c, 'body') ?? p.body
+      return ok({ number: Number(m[1]) })
+    }
     if (on('PUT', /^pulls\/\d+\/merge$/)) return ok({ merged: true, message: 'Pull Request successfully merged' })
     if (on('GET', /^commits\/[0-9a-f]+\/check-runs$/)) {
       const rows = (state.checks ?? []).map(k => ({

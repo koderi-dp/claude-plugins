@@ -210,7 +210,6 @@ test('move and remove are refused with the reason', async ($, on) => {
   world(on, { [CONFIG]: CONFIG_GH })
   ghWorld(on, { me: 'me', issues: [issueOf(1, 'Login'), issueOf(2, 'Export')] })
   expect(text(await call($, { action: 'move', id: '2', to: 'top' }))).toBe('refused: move does not apply with queue: github: the issues are the queue')
-  expect(text(await call($, { action: 'remove', id: '2' }))).toContain('does not apply with queue: github')
 })
 
 test('gh missing: get answers the error, add is refused, and no backlog.json is written', async ($, on) => {
@@ -919,6 +918,40 @@ test('0.6.0: a pull request no workflow ran for (docs only, under paths-ignore) 
   expect(runs.filter(r => r[0] === 'sleep').length).toBe(18)
   expect(runs.some(r => r.includes('PUT'))).toBe(true)
   expect(gh.issues[0]!.state).toBe('closed')
+})
+
+test('0.6.1: remove closes an issue as not planned with the reason on it; no reason and a closed issue are refused', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH })
+  const { runs, gh } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:needs-info'] }), issueOf(3, 'Import', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'] })] })
+  expect(text(await call($, { action: 'remove', id: '2' }))).toContain('needs "text": the reason')
+  expect(gh.issues[0]!.state).toBe('open')
+  expect(text(await call($, { action: 'remove', id: '2', text: 'it belongs to tools that ship their own engine' }))).toBe('2 closed as not planned · reason on the issue · 1 item left')
+  expect(gh.issues[0]!.state).toBe('closed')
+  expect(gh.issues[0]!.comments.at(-1)!.body).toBe('<!-- pipeline:declined -->\nClosed as not planned: it belongs to tools that ship their own engine')
+  expect(runs.some(r => r.join(' ').includes('issues/2') && r.includes('state_reason=not_planned'))).toBe(true)
+  expect(gh.issues[0]!.labels).toEqual(['pipeline'])
+  expect((await json($, { action: 'get', titles: true }))['titles']).not.toHaveProperty('2')
+  expect(text(await call($, { action: 'remove', id: '2', text: 'again' }))).toBe('refused: no item 2')
+})
+
+test('0.6.1: adopt makes an issue of a pull request opened without one, records branch and PR, sets review and links the two', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const pulls = { 14: { title: 'Fix the export header', body: 'The header row was missing.', head: 'fix/export-header' }, 15: { title: 'Old', body: '', head: 'old', merged: true } }
+  const { gh } = runWorld(on, { issues: [], pulls, next: 20 } as never)
+  const line = text(await call($, { action: 'adopt', pr: '#14' }))
+  const id = /as (\d+) /.exec(line)![1]!
+  expect(line).toBe(`adopted PR #14 as ${id} · review · branch fix/export-header · PR says Closes #${id} · next: the user merges it; close runs on a later get`)
+  const issue = gh.issues.find(i => String(i.number) === id)!
+  expect(issue.title).toBe('Fix the export header')
+  expect(issue.body).toBe('The header row was missing.\n\nAdopted from pull request #14.')
+  expect(issue.labels).toContain('pipeline')
+  expect(pulls[14].body).toBe(`The header row was missing.\n\nCloses #${id}`)
+  expect(JSON.parse(files.get(`${MAIN}/.git/pipeline/${id}/ledger.json`)!)).toMatchObject({ branch: 'fix/export-header', pr: '#14' })
+  expect((await json($, { action: 'get', id }))['item']).toMatchObject({ status: 'review', pr: '#14', branch: 'fix/export-header' })
+  // The same pull request is not adopted twice, and a merged one not at all.
+  expect(text(await call($, { action: 'adopt', pr: '#14' }))).toBe(`refused: PR #14 already belongs to ${id} (review)`)
+  expect(text(await call($, { action: 'adopt', pr: '#15' }))).toBe('refused: PR #15 is merged: only an open pull request is adopted')
+  expect(text(await call($, { action: 'adopt' }))).toContain('adopt needs "pr"')
 })
 
 test('0.6.0: a gh call that times out is named as that, not as a missing gh', async ($, on) => {

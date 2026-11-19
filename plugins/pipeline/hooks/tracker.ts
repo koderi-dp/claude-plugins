@@ -11,6 +11,7 @@ export type Issue = { number: number; title: string; body: string; author: strin
 
 export const SPEC_MARK = '<!-- pipeline:spec -->'
 export const QUESTION_MARK = '<!-- pipeline:question -->'
+export const DECLINED_MARK = '<!-- pipeline:declined -->'
 export const NO_GH = 'gh is not installed or not on PATH: install the GitHub CLI, then run gh auth login'
 export const NO_AUTH = 'gh is not logged in: run gh auth login'
 
@@ -213,9 +214,9 @@ export async function setBody(run: Run, number: number, body: string): Promise<R
   return done(await api(run, 'PATCH', `${REPO}/issues/${number}`, [['body', body]]))
 }
 
-/** Closes an issue. */
-export async function close(run: Run, number: number): Promise<Result<true>> {
-  return done(await api(run, 'PATCH', `${REPO}/issues/${number}`, [['state', 'closed']]))
+/** Closes an issue: as completed, or as not planned when `notPlanned` says so. */
+export async function close(run: Run, number: number, notPlanned = false): Promise<Result<true>> {
+  return done(await api(run, 'PATCH', `${REPO}/issues/${number}`, [['state', 'closed'], ...(notPlanned ? [['state_reason', 'not_planned'] as const] : [])]))
 }
 
 /** `quiet`: no check reported and GitHub has no workflow run for the head commit, so nothing was triggered for it. */
@@ -341,6 +342,22 @@ export async function prInfo(run: Run, pr: number): Promise<Result<{ head: strin
   const o = obj(parse(r.value))
   const ref = obj(o['head'])['ref']
   return { ok: true, value: { head: typeof ref === 'string' ? ref : '', merged: o['merged'] === true || typeof o['merged_at'] === 'string' } }
+}
+
+/** A pull request as `adopt` needs it: its title, text, head branch and whether it is open, closed or merged. */
+export async function prDetail(run: Run, pr: number): Promise<Result<{ title: string; body: string; head: string; state: 'open' | 'closed' | 'merged' }>> {
+  const endpoint = `${REPO}/pulls/${pr}`
+  const r = await api(run, 'GET', endpoint)
+  if (!r.ok) return fail(r)
+  const o = obj(parse(r.value))
+  if (typeof o['number'] !== 'number') return unexpected('GET', endpoint)
+  const merged = o['merged'] === true || typeof o['merged_at'] === 'string'
+  return { ok: true, value: { title: str(o['title']), body: str(o['body']), head: str(obj(o['head'])['ref']), state: merged ? 'merged' : str(o['state']) === 'closed' ? 'closed' : 'open' } }
+}
+
+/** Replaces a pull request's body: `adopt` adds the line that closes the issue on merge. */
+export async function setPrBody(run: Run, pr: number, body: string): Promise<Result<true>> {
+  return done(await api(run, 'PATCH', `${REPO}/pulls/${pr}`, [['body', body]]))
 }
 
 /** Merges a pull request now, with a merge commit or squashed. Never auto-merge: that needs a repository setting. */

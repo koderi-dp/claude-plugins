@@ -1059,9 +1059,23 @@ test('mode direct: begin sets the item building, and gate checks the branch in w
   expect([...files.keys()].some(k => k.includes('-brief.md') || k.includes('/plans/'))).toBe(false)
 })
 
+test('0.6.1: adopt with a file backlog makes an item of an open pull request, in review with its branch and PR', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: VALID_CONFIG })
+  const github = restGithub({ me: 'me', issues: [], pulls: { 14: { title: 'Fix the export header', body: 'The header row was missing.', head: 'fix/export-header' } } }, NOW)
+  on('process.run', (_$, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    if (argv[0] === 'gh') return { value: { ...github(argv), isStdoutTruncated: false, isStderrTruncated: false } } as never
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
+  expect(text(await call($, { action: 'adopt', pr: '#14' }))).toBe('adopted PR #14 as p1 · review · branch fix/export-header · next: the user merges it; close runs on a later get')
+  expect(items(files)[0]).toMatchObject({ id: 'p1', title: 'Fix the export header', status: 'review', pr: '#14', branch: 'fix/export-header', note: 'adopted from PR #14' })
+  expect(JSON.parse(files.get(`${DIR}/ledgers/p1.json`)!)).toMatchObject({ branch: 'fix/export-header', pr: '#14' })
+  expect(text(await call($, { action: 'adopt', pr: '#14' }))).toBe('refused: PR #14 already belongs to p1 (review)')
+})
+
 test('0.6.0: where sh is not on PATH the gate runs through the sh.exe that ships with Git', async ($, on) => {
   const { files } = world(on, DIRECT_SEED)
-  const runs = directWorld(on, { gitExecPath: 'C:/Program Files/Git/mingw64/libexec/git-core' })
+  const runs = directWorld(on, { gitExecPath: 'C:/Program Files/Git/ucrt64/libexec/git-core' })
   await call($, { action: 'begin', item: 'p1' })
   expect(text(await call($, { action: 'gate', item: 'p1' }))).toBe('p1 · gate green · final no review asked · pushed · next: open the PR')
   expect(runs).toContainEqual(['C:/Program Files/Git/bin/sh.exe', '-c', 'npm run gate'])

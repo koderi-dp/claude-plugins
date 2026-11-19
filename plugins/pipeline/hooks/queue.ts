@@ -5,7 +5,7 @@
 import type { Backlog, Item, ItemStatus } from '../types'
 import type { Readiness } from './backlog'
 import { section } from './plan'
-import { QUESTION_MARK, SPEC_MARK } from './tracker'
+import { DECLINED_MARK, QUESTION_MARK, SPEC_MARK } from './tracker'
 import type { Issue, IssueComment } from './tracker'
 
 export type Op =
@@ -23,7 +23,7 @@ const TRUSTED = ['OWNER', 'MEMBER', 'COLLABORATOR']
 const KEPT = ['branch', 'plan', 'pr', 'ledger', 'note', 'size'] as const
 const STATUS_HEAD = '**Pipeline** · '
 
-const marked = (body: string) => body.trimStart().startsWith(SPEC_MARK) || body.trimStart().startsWith(QUESTION_MARK)
+const marked = (body: string) => [SPEC_MARK, QUESTION_MARK, DECLINED_MARK].some(m => body.trimStart().startsWith(m))
 const idOf = (issue: Issue) => String(issue.number)
 
 /** The issue numbers a `Needs: #12, #14` line of an issue's body names: the issues this one waits for. */
@@ -140,7 +140,8 @@ export function toBacklog(issues: Issue[], extras: Extras, label: string, me: st
       status = 'blocked'
     } else if (has(L.building)) {
       const state = spec ? parseSpecComment(spec.body).state : ''
-      status = ACTIVE.includes(state) ? (state as ItemStatus) : 'building'
+      // No spec comment to read the state from (an adopted pull request, an issue built from its own text): what this machine recorded.
+      status = ACTIVE.includes(state) ? (state as ItemStatus) : ACTIVE.includes(extra?.status ?? '') ? extra!.status! : 'building'
     } else if (has(L.needsInfo) && !isAnswered(issue, me)) {
       status = 'inbox'
       readiness[id] = { ready: false, reason: 'open question on the issue' }

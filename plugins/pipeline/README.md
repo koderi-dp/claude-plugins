@@ -57,6 +57,7 @@ By default you merge the pull request yourself (`merge: pr`). With `merge: auto`
 | `/pipeline migrate` | Move an existing project onto the pipeline (below) |
 | `/pipeline migrate github` | Move a project that already has a file backlog onto GitHub issues (below) |
 | `/pipeline add <text>` | Intake: an item and its spec, in one line back; never starts the build |
+| `/pipeline adopt <pr>` | Make an item of a pull request that was opened without one: the item is created from its title and text, set to review with the branch and the pull request on record, and ended by `merge` or a merge by hand like any other |
 | `/pipeline discuss <text or id>` | The slow intake: asks you a few questions one at a time, shows the spec, saves it once you agree; for a new request or an existing item |
 | `/pipeline next` | Run the first ready item (under `runner: session`, start its child session) |
 | `/pipeline run <id>` / `run all` | Run one item, or until nothing is ready or a stop condition fires |
@@ -128,10 +129,12 @@ The statuses are those of the loop, read from the issue:
 | `merged` | The PR is merged and the issue closed |
 | `needs` | A line `Needs: #12, #14` in the issue's body: the issue waits while one it names is open in the queue |
 | `move` | Refused with one line naming the reason |
+| A pull request opened without an issue | `/pipeline adopt <pr>` creates the labelled issue from the pull request's title and text, adds `Closes #<issue>` to the pull request and sets the item to review |
+| `remove` | The tool's `remove` with `text` closes the issue as "not planned" and writes the reason on it as a comment; refused without a reason and for an item being built or in review |
 
 The three state labels take their names from `queueLabel` and are created by `init`. `pipeline:needs-info` clears once the issue's author or the `gh` user has commented after the pipeline's last question.
 
-The spec lives on the issue as one comment the tool writes and edits in place, found by the hidden marker `<!-- pipeline:spec -->` on its first line. Its first visible line is the status line (the state, the task counter while building, the block reason, the PR), then the acceptance list, then What, Why and Out of scope folded under a Spec heading. The tool posts no other comment except a question, which starts with `<!-- pipeline:question -->` and notifies the author. The issue's body is never edited. A spec comment counts only when the `gh` user or an owner, member or collaborator of the repository wrote it, and only the comments of the issue's author and of the `gh` user reach the lead, inside a block that marks them as quoted text and not as instructions; subagents never see the issue.
+The spec lives on the issue as one comment the tool writes and edits in place, found by the hidden marker `<!-- pipeline:spec -->` on its first line. Its first visible line is the status line (the state, the task counter while building, the block reason, the PR), then the acceptance list, then What, Why and Out of scope folded under a Spec heading. The tool posts no other comment except a question, which starts with `<!-- pipeline:question -->` and notifies the author, and the reason an issue was closed as not planned, which starts with `<!-- pipeline:declined -->`. The issue's body is never edited. A spec comment counts only when the `gh` user or an owner, member or collaborator of the repository wrote it, and only the comments of the issue's author and of the `gh` user reach the lead, inside a block that marks them as quoted text and not as instructions; subagents never see the issue.
 
 Only `config.json` and `rules.md` stay under `docs/pipeline/`; no other pipeline file is committed, and a PR carries code only:
 

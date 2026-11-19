@@ -10,7 +10,7 @@ import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, places, serialize } from './files'
 import type { Places } from './files'
 import * as tracker from './tracker'
-import { QUESTION_MARK } from './tracker'
+import { DECLINED_MARK, QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
 import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, needsOf, specFromIssue, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import type { Extras, Leftover, Op } from './queue'
@@ -55,23 +55,22 @@ const LOG_WRITE_MS = 1000
 const ACTIVE_STATUSES = ['planning', 'building', 'review'] as const
 const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', 'review', 'merged', 'blocked', 'parked']
 
-const TOOL_DESCRIPTION =
-  'The pipeline of this project: backlog, ledgers and the build loop. Main session only; a subagent\'s call is ignored. Every write answers one line. The pipeline-run and pipeline-rules skills say when to call what. Actions: ' +
-  '`get` { id?, titles?, full? } → JSON: the active item of this session, its resume block, open watchdog signals (each delivered once), children, siblings, counts, the next three items, the config keys a run reads, and `mergedPending` (items whose PR was merged by hand; close them first). `signals` → the open signals only. `status` { id? } → the status block, or one item\'s ledger as text. ' +
-  'Backlog: `add` { item: { title, size?, needs?, source?, note? } }, `update` { id, set } (under queue github, set { title?, body?, needs? } rewrites the issue\'s own text: a new body keeps the issue\'s Needs: line unless needs is given, and an empty needs list removes it; never edit an issue with gh yourself), `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
-  'Run, in order: `begin` { item? } claims the item (the first ready one when none is named), makes its worktree and branch, records the base and answers the worktree and, under mode direct, the spec itself. Under mode direct the agent then builds the item its own way and calls `gate`; then one call ends it: `ship` { item, message?, attribution?, verdict?, next? } commits what is uncommitted with the message, runs the gate, opens the pull request and, under merge auto, waits for CI, merges and closes; it stops at a red gate, a review to dispatch or red CI and says what to do, and with next it begins the next ready item in the same answer. `gate`, `pr` { item, title?, body? }, `merge` and `close` are its steps, callable alone. `add` takes the spec as text and writes and links it. Under mode full (the default): `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks, commits the plan (a missing or unsound plan answers the format or the problems). ' +
-  '`brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch (closing the one before with `close`) and answers the Agent call to make; a review the config does not ask for answers `no review`. ' +
-  '`accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } closes the dispatch, accepts the task, commits the records, pushes and answers the next Agent call (the next task, or the final review); `plan` answers the first one. `gate` { item, verdict?, tokens? } runs checks.gate itself, records it with the final verdict and pushes when green; red answers the output\'s tail. `merge` { item, pr? } ends an item whose PR is open: it polls the PR\'s checks over the REST API until they are through (an hour at most), merges with config.mergeMethod through gh api (no auto-merge setting needed) and runs close; red checks answer their names, for a fix wave and another merge. ' +
-  '`close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is (also from inside the item\'s worktree): the main checkout on mainBranch and pulled, the item merged, what config.retain lets go removed, docs/pipeline committed on mainBranch and pushed unless config.pushMain is false, the worktree and local branch removed (a worktree this session is inside is left and removed by a later begin or close). ' +
-  '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate? }, blockers?: [text], pr?, branch?, worktree?, base?, <any other key>?: value | null } } merges anything else into the ledger: text for resume is taken as its state, a wrong shape is refused and nothing is written, and null removes one of the other keys. ' +
-  'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain says may go and deletes nothing. ' +
-  'A file that does not parse is refused with its line and left alone. ' +
-  'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12): `add` opens an issue, `spec` { id, text } posts or replaces the issue\'s spec comment, `question` { id, text } asks on the issue and holds the item, `init` { queue: "github" } sets it up; `move` and `remove` are refused. `migrate-github` { apply? } drafts, and with apply makes, the move of a file backlog onto issues.'
+/** Under 4096 characters: the host gives the model no more of it until the tool is loaded through tool search. */
+export const TOOL_DESCRIPTION =
+  'The pipeline of this project: backlog, ledgers and the build loop. Main session only; a call from a subagent is ignored. Every write answers one line. The pipeline-run and pipeline-rules skills say when to call what. Actions: ' +
+  '`get` { id?, titles?, full? } → JSON: the active item of this session, its resume block, open watchdog signals (each delivered once), children, siblings, counts, the next three items, the config keys a run reads, and `mergedPending` (items whose PR was merged by hand; close them first). `signals` → the open signals only. `status` { id? } → the status block, or one ledger as text. ' +
+  'Backlog: `add` { item: { title, size?, needs?, source?, note? }, text? } (text is the spec, written and linked), `update` { id, set }, `move` { id, to: "top" | { after } }, `remove` { id }, `park` { id }, `unpark` { id }. ' +
+  'Run: `begin` { item? } claims the item (the first ready one when none is named), makes its worktree and branch and answers the worktree and, under mode direct, the spec. Mode direct: build it your own way, then `ship` { item, message?, attribution?, verdict?, next? } commits what is uncommitted, runs the gate, opens the pull request and, under merge auto, waits for CI, merges and closes; it stops at a red gate, a review to dispatch or red CI and says what to do; with next it begins the next ready item. Its steps, callable alone: `gate` { item, verdict?, tokens? } runs checks.gate itself and pushes when green, red answers the tail; `pr` { item, title?, body? }; `merge` { item, pr? } polls the checks of the PR (an hour at most), merges through gh api and closes, red checks answer their names; `close` { item, pr?, force? } closes an item whose pull request is on mainBranch, from wherever this session is, and removes the worktree and local branch. ' +
+  '`adopt` { pr } makes an item of a pull request opened without one: status review with its branch and PR on record, then `merge` or a merge by hand ends it. ' +
+  'Mode full (the default): `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks and commits the plan, or answers the format or the problems. `brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch and answers the Agent call to make; a review the config does not ask for answers `no review`. `accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } accepts the task, commits the records, pushes and answers the next Agent call. ' +
+  '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate? }, blockers?: [text], pr?, branch?, worktree?, base?, <other key>?: value | null } } merges into the ledger; a wrong shape is refused and nothing is written; null removes a key. ' +
+  'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain lets go and deletes nothing. A file that does not parse is refused with its line and left alone. ' +
+  'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12); never edit an issue with gh yourself. `add` opens an issue, `spec` { id, text } posts or replaces its spec comment, `question` { id, text } asks on the issue and holds the item, `update` with set { title?, body?, needs? } rewrites the text of the issue and keeps its Needs: line unless needs is given, `remove` { id, text } closes it as not planned with the reason on it, `adopt` creates the issue and adds Closes #<issue> to the PR, `init` { queue: "github" } sets it up, `move` is refused. `migrate-github` { apply? } drafts, and with apply makes, the move of a file backlog onto issues.'
 
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'pr', 'ship', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'pr', 'adopt', 'ship', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
@@ -95,7 +94,7 @@ const TOOL_SCHEMA = {
     close: { type: 'object', description: 'For brief: closes the dispatch before this one: { tokens, minutes, result }.' },
     tokens: { type: 'number', description: 'For accept and gate: the tokens of the Agent result.' },
     minutes: { type: 'number', description: 'For accept: the minutes of the Agent result.' },
-    pr: { type: 'string', description: 'For close: the pull request, as #31, when the item does not carry it yet.' },
+    pr: { type: 'string', description: 'For close: the pull request, as #31, when the item does not carry it yet. For adopt: the pull request to make an item of.' },
     force: { type: 'boolean', description: 'For close: close although the branch tip is not on origin/mainBranch (a squash merge). For begin and start with queue: github: take over here an issue another machine is building.' },
     fact: { type: 'string', description: 'For accept: one line a later implementer must know about working in this repository (a command\'s working spelling, a step that must come first); kept in docs/pipeline/facts.md and given to every brief.' },
     verdict: { type: 'string', description: 'For accept: how the task was approved. For gate: the final review\'s verdict.' },
@@ -107,7 +106,7 @@ const TOOL_SCHEMA = {
     attribution: { type: 'string', description: 'For plan or brief: the attribution lines this session was given; kept in the ledger, so once per item is enough.' },
     escalate: { type: 'boolean', description: 'For an implementer or fix brief: dispatch at config.models.escalate.' },
     rules: { type: 'array', description: 'For migrate-apply: the corrected rules, each { group, line, source }.', items: { type: 'object' } },
-    text: { type: 'string', description: 'For spec and for add: the spec, with the template\'s headings (add writes and links it). For question: the question to ask on the issue.' },
+    text: { type: 'string', description: 'For spec and for add: the spec, with the template\'s headings (add writes and links it). For question: the question to ask on the issue. For remove with queue: github: why the issue is not planned.' },
     message: { type: 'string', description: 'For ship: the commit message for what is not committed yet.' },
     next: { type: 'boolean', description: 'For ship: also begin the next ready item and answer it (run all).' },
     title: { type: 'string', description: 'For pr and ship: the pull request title; default the item\'s.' },
@@ -668,6 +667,32 @@ async function questionIssue($: EngineInterface, found: string, c: Config | null
   return `${id} · ${await issueState($, found, id, 'inbox · open question on the issue')}`
 }
 
+/**
+ * `remove` with queue: github: the issue is closed as not planned, with the reason written on it as a marked comment.
+ * Refused for an item being built or in review, and without a reason. The state labels go, the queue label stays as
+ * the record that it was asked for here.
+ */
+async function declineIssue($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const reason = typeof e.text === 'string' ? e.text.trim() : ''
+  if (!reason) throw new Refused('remove with queue: github closes the issue as not planned and needs "text": the reason, which is written on the issue')
+  if (!/^\d+$/.test(id)) throw new Refused(`no item ${id}`)
+  const there = current.items.find(i => i.id === id)
+  if (there && ['planning', 'building', 'review'].includes(there.status)) throw new Refused(`${id} is ${there.status}: stop it or finish it first`)
+  const issue = await readIssue($, found, id)
+  if (issue.state === 'closed') throw new Refused(`${id} is already closed`)
+  const run = ghRun($, found)
+  const said = await tracker.comment(run, Number(id), `${DECLINED_MARK}\nClosed as not planned: ${reason}`)
+  if (!said.ok) throw new Refused(said.error)
+  const closed = await tracker.close(run, Number(id), true)
+  if (!closed.ok) throw new Refused(`the reason is on the issue, but it could not be closed: ${closed.error}`)
+  const L = labelsOf(labelOf(c))
+  const stale = [L.building, L.blocked, L.needsInfo].filter(l => issue.labels.includes(l))
+  if (stale.length) await pushOps($, found, c, [{ kind: 'edit', id, add: [], remove: stale }])
+  await editCache($, found, issues => issues.filter(i => String(i.number) !== id))
+  const left = (await loadBacklog($, found)).value?.items.length ?? 0
+  return `${id} closed as not planned · reason on the issue · ${left} item${left === 1 ? '' : 's'} left`
+}
+
 /** `unpark`: the issue is not in the list; read it, refuse a closed one, put the queue label back. */
 async function unparkIssue($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string | undefined): Promise<string> {
   if (!id) throw new Refused('an id is needed')
@@ -1003,7 +1028,7 @@ async function markDelivered($: EngineInterface): Promise<void> {
 }
 
 /** The actions that change the backlog or a ledger: each runs alone across every session on the repository. */
-const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'pr', 'start', 'stop', 'init', 'migrate-apply', 'migrate-github', 'spec', 'question'])
+const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'pr', 'adopt', 'start', 'stop', 'init', 'migrate-apply', 'migrate-github', 'spec', 'question'])
 const LOCK_WAIT_MS = 250
 const LOCK_TRIES = 120
 
@@ -1313,8 +1338,10 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       return startChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e.force === true)
     case 'stop':
       return stopChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
+    case 'adopt':
+      return adoptAction($, found, c, current, e)
     case 'remove': {
-      if (isGithub(c)) throw new Refused(notWithIssues('remove'))
+      if (isGithub(c)) return declineIssue($, found, c, current, need(e.id), e)
       const id = need(e.id)
       const left = (await writeBacklog($, found, removeItem(current, id))).backlog.items.length
       return `removed ${id} · ${left} item${left === 1 ? '' : 's'} left`
@@ -1591,9 +1618,9 @@ async function runShell($: EngineInterface, command: string, cwd: string): Promi
   try {
     return await runLong($, ['sh', '-c', command], cwd)
   } catch (err) {
-    // <Git>/mingw64/libexec/git-core → <Git>/bin/sh.exe, else <Git>/usr/bin/sh.exe
+    // <Git>/mingw64/libexec/git-core (or ucrt64, clangarm64, usr) → <Git>/bin/sh.exe, else <Git>/usr/bin/sh.exe
     const exec = slashes((await gitOut($, cwd, ['--exec-path'])) ?? '')
-    const root = /^(.*)\/(?:mingw(?:32|64)|clangarm64|usr)\/(?:libexec|lib)\/git-core\/?$/.exec(exec)?.[1]
+    const root = /^(.*)\/[^/]+\/(?:libexec|lib)\/git-core\/?$/.exec(exec)?.[1]
     if (!root) throw err
     for (const sh of [`${root}/bin/sh.exe`, `${root}/usr/bin/sh.exe`]) {
       try {
@@ -1795,6 +1822,44 @@ async function prAction($: EngineInterface, found: string, c: Config | null, cur
   await runTool($, { action: 'ledger', item: id, set: { pr } })
   await runTool($, { action: 'update', id, set: { status: 'review', pr } })
   return `${id} review · PR ${pr} · next: ${cfg.merge === 'auto' ? `merge { item: "${id}" }` : 'the user merges it; close runs on a later get'}`
+}
+
+/** Whether a pull request's text already closes the issue on merge, in one of the words GitHub reads. */
+const closesIssue = (body: string, id: string): boolean => new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${id}\\b`, 'i').test(body)
+
+/**
+ * `adopt`: a pull request that was opened with no item becomes one. The item is made from the pull request's title
+ * and text (with queue: github a labelled issue), the branch and the pull request go on its record, and it is set
+ * to review, so `merge` or a merge by hand ends it like any other item. With queue: github the pull request's text
+ * gets `Closes #<issue>` when it does not say so yet. Refused for a pull request that is merged or closed, or that
+ * an item already carries.
+ */
+async function adoptAction($: EngineInterface, found: string, c: Config | null, current: Backlog, e: ToolInput): Promise<string> {
+  const cfg = normalizeConfig(c ?? DEFAULTS).config
+  const n = Number(/(\d+)\/?$/.exec(e.pr?.trim() ?? '')?.[1])
+  if (!n) throw new Refused('adopt needs "pr": the pull request, as #114')
+  const pr = `#${n}`
+  const run = ghRun($, found)
+  const got = await tracker.prDetail(run, n)
+  if (!got.ok) throw new Refused(got.error)
+  const { title, body, head, state } = got.value
+  if (state !== 'open') throw new Refused(`PR ${pr} is ${state}: only an open pull request is adopted`)
+  if (!head) throw new Refused(`PR ${pr} has no head branch to record`)
+  const has = current.items.find(i => i.status !== 'merged' && (new RegExp(`(?:^|[#/])${n}/?$`).test(i.pr ?? '') || i.branch === head))
+  if (has) throw new Refused(`PR ${pr} already belongs to ${has.id} (${has.status})`)
+  const note = `adopted from PR ${pr}`
+  const text = body.trim()
+  const added = await runTool($, { action: 'add', item: { title: title || `Pull request ${pr}`, note: isGithub(c) ? [text, `Adopted from pull request ${pr}.`].filter(Boolean).join('\n\n') : note } })
+  const id = /^added (\S+)/.exec(added)?.[1]
+  if (!id) throw new Refused(`the item for PR ${pr} could not be made: ${added}`)
+  await runTool($, { action: 'ledger', item: id, set: { branch: head, pr } })
+  await runTool($, { action: 'update', id, set: { status: 'review', pr, branch: head, note } })
+  let linked = ''
+  if (isGithub(c) && !closesIssue(body, id)) {
+    const set = await tracker.setPrBody(run, n, [text, `Closes #${id}`].filter(Boolean).join('\n\n'))
+    linked = set.ok ? ` · PR says Closes #${id}` : ` · add "Closes #${id}" to the PR yourself (${set.error})`
+  }
+  return `adopted PR ${pr} as ${id} · review · branch ${head}${linked} · next: ${cfg.merge === 'auto' ? `merge { item: "${id}" }` : 'the user merges it; close runs on a later get'}`
 }
 
 /** One git answer in the main checkout: the exit code and the first line of what it said. */
@@ -3369,6 +3434,9 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
     case 'add':
       if (!arg) return { text: 'pipeline: add needs the request, as /pipeline add <text>' }
       return prompt(`pipeline: intake of "${arg}"…`, INTAKE_PROMPT(arg))
+    case 'adopt':
+      if (!/^#?\d+$/.test(arg)) return { text: 'pipeline: adopt needs a pull request number, as /pipeline adopt 114' }
+      return { text: await runTool($, { action: 'adopt', pr: `#${arg.replace('#', '')}` }) }
     case 'discuss':
       if (!arg) return { text: 'pipeline: discuss needs a request or an item, as /pipeline discuss <text or id>' }
       return prompt(`pipeline: discussing "${arg}"…`, DISCUSS_PROMPT(arg))

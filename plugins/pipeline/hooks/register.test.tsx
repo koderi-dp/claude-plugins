@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { errorLine } from './register'
+import { TOOL_DESCRIPTION, errorLine } from './register'
 
 const MAIN = '/p/main'
 const WORKTREE = '/p/wt/task-7'
@@ -39,6 +39,11 @@ const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
   $.session.start({ cwd: WORKTREE, surface: 'terminal', isInteractive: true } as never)
 
 const VALID = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'pipeline/{id}', checks: {}, merge: 'pr' }, null, 2) + '\n'
+
+test('the tool description fits the 4096 characters the host gives the model before tool search', () => {
+  expect(TOOL_DESCRIPTION.length).toBeLessThanOrEqual(4096)
+  for (const action of ['get', 'add', 'begin', 'ship', 'gate', 'merge', 'close', 'adopt', 'plan', 'brief', 'accept', 'ledger', 'remove', 'spec', 'question']) expect(TOOL_DESCRIPTION).toContain('`' + action + '`')
+})
 
 test('a project without docs/pipeline registers the command and leaves config null', async ($, on) => {
   const { commands, state } = world(on)
