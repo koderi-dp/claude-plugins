@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { DEFAULTS } from './config'
 import { emptyLedger, mergeLedger } from './ledger'
-import { briefPaths, checkPlan, fill, parsePlan, renderBrief, riskyMatches, rulesGroup, section } from './plan'
+import { briefPaths, checkPlan, commitArgs, fill, parsePlan, renderBrief, riskyMatches, rulesGroup, section, splitAttribution } from './plan'
 import { PLAN_FORMAT, TEMPLATES } from './templates'
 
 const PLAN = `# p12: CSV export
@@ -186,4 +186,47 @@ test('briefPaths takes the folder; a brief rendered with places names those path
   expect(out.brief).toBe('.pipeline/12/task-1-brief.md')
   expect(out.text).toContain('.pipeline/12/plan.md')
   expect(out.text).not.toContain('docs/pipeline')
+})
+
+// ---------- attribution: trailers to commits, the rest to the pull request ----------
+
+const GIVEN = 'Co-Authored-By: Claude X <noreply@anthropic.com>\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+
+test('attribution lines are split: git trailers for commits, every other line for the pull request', () => {
+  expect(splitAttribution(GIVEN)).toEqual({ trailers: ['Co-Authored-By: Claude X <noreply@anthropic.com>'], rest: ['🤖 Generated with [Claude Code](https://claude.com/claude-code)'] })
+  expect(splitAttribution('')).toEqual({ trailers: [], rest: [] })
+})
+
+test('a commit message ends with the trailers once, and the pull request line stays out of it', () => {
+  expect(commitArgs('Add shout', GIVEN)).toEqual(['-m', 'Add shout', '-m', 'Co-Authored-By: Claude X <noreply@anthropic.com>'])
+  // The lead already ended its message with the lines it was given: nothing is written twice.
+  expect(commitArgs(`Add shout\n\n${GIVEN}`, GIVEN)).toEqual(['-m', 'Add shout\n\nCo-Authored-By: Claude X <noreply@anthropic.com>'])
+  expect(commitArgs('Add shout\n\nco-authored-by: Claude X <noreply@anthropic.com>', GIVEN)).toEqual(['-m', 'Add shout\n\nco-authored-by: Claude X <noreply@anthropic.com>'])
+  expect(commitArgs('Add shout', '')).toEqual(['-m', 'Add shout'])
+})
+
+test('a brief that commits names only the trailers', () => {
+  const b = renderBrief({ ...base(), kind: 'implementer', task: 1, attribution: GIVEN })
+  expect(b.text).toContain('Co-Authored-By: Claude X <noreply@anthropic.com>')
+  expect(b.text).not.toContain('Generated with')
+})
+
+test('a review brief names the worktree and does not tell a read-only reviewer to edit files', () => {
+  const root = '/p/main/.claude/worktrees/p12'
+  for (const b of [renderBrief({ ...base(), kind: 'review', task: 1, commits: 'a1..b2', root }), renderBrief({ ...base(), kind: 'final', task: 2, head: 'f00d', root })]) {
+    expect(b.text).toContain(`The item's worktree is \`${root}\``)
+    expect(b.text).toContain('Read-only')
+    expect(b.text).not.toContain('edit files by their path')
+  }
+  expect(renderBrief({ ...base(), kind: 'implementer', task: 1, root }).text).toContain('edit files by their path under it')
+})
+
+test('attribution given as a sentence about the lines never reaches a commit as it stands', () => {
+  // What a lead sent in an end-to-end run: one line of prose that quotes both lines.
+  const PROSE = 'Commits: end with "Co-Authored-By: Claude X <noreply@anthropic.com>". Pull requests: end with "🤖 Generated with [Claude Code](https://claude.com/claude-code)".'
+  expect(splitAttribution(PROSE)).toEqual({ trailers: ['Co-Authored-By: Claude X <noreply@anthropic.com>'], rest: [] })
+  expect(commitArgs('Add shout', PROSE)).toEqual(['-m', 'Add shout', '-m', 'Co-Authored-By: Claude X <noreply@anthropic.com>'])
+  // A label with a colon is not a git trailer: a trailer's key has a hyphen (Co-Authored-By, Signed-off-by).
+  expect(splitAttribution('Note: built by hand').trailers).toEqual([])
+  expect(splitAttribution('Signed-off-by: A B <a@b.c>').trailers).toEqual(['Signed-off-by: A B <a@b.c>'])
 })

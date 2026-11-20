@@ -383,7 +383,7 @@ test('begin labels and assigns the issue, writes the spec cache in the worktree 
   expect(has(runs, api('POST', 'issues/2/assignees', 'assignees[]=me'))).toBe(true)
   expect(files.get(`${WT2}/.pipeline/2/spec.md`)).toContain('## Acceptance')
   expect(files.get(EXCLUDE)).toContain('.pipeline/')
-  expect(line).toContain('next: build it your own way in /p/main/.claude/worktrees/2, commit, then gate\n\nThe spec (.pipeline/2/spec.md):\n\n## What\n\nCSV export of the list.')
+  expect(line).toContain('next: build it your own way in /p/main/.claude/worktrees/2, then ship with "message"\n\nThe spec (.pipeline/2/spec.md):\n\n## What\n\nCSV export of the list.')
   expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ branch: 'feat/2', worktree: '.claude/worktrees/2' })
   expect(JSON.parse(files.get(ITEMS)!).items['2']).toMatchObject({ status: 'building', ledger: '.git/pipeline/2/ledger.json' })
   // The fresh read before the worktree and the one after labelling.
@@ -509,13 +509,14 @@ test('a brief is written under .pipeline/<id>/ and names no docs/pipeline path e
   files.set(`${WT2}/.pipeline/2/plan.md`, PLAN2)
   await call($, { action: 'plan', item: '2' })
   const line = text(await call($, { action: 'brief', item: '2', kind: 'implementer', task: 2 }))
-  expect(line).toContain('prompt: Read .pipeline/2/task-2-brief.md and follow it.')
+  // By its full path: a subagent starts in the lead's folder, which need not be the worktree.
+  expect(line).toContain(`prompt: Read ${WT2}/.pipeline/2/task-2-brief.md and follow it.`)
   const brief = files.get(`${WT2}/.pipeline/2/task-2-brief.md`)!
   expect(brief).toContain('No raw SQL.')
   expect(brief).toContain(`${WT2}/.pipeline/2/task-2-report.md`)
   expect(brief.split('\n').filter(l => l.includes('docs/pipeline') && !l.includes('rules'))).toEqual([])
   const final = text(await call($, { action: 'brief', item: '2', kind: 'final' }))
-  expect(final).toContain('Read .pipeline/2/final-brief.md')
+  expect(final).toContain(`Read ${WT2}/.pipeline/2/final-brief.md`)
   expect(files.get(`${WT2}/.pipeline/2/final-brief.md`)).toContain('a csv downloads')
 })
 
@@ -604,7 +605,7 @@ test('across begin, plan, brief, accept, gate and close no write lands under doc
   expect(text(await call($, { action: 'accept', item: '2', task: 1 }))).toContain('task 1 accepted')
   head.sha = 'ccc3333'
   expect(text(await call($, { action: 'accept', item: '2', task: 2 }))).toContain('task 2 accepted')
-  expect(text(await call($, { action: 'gate', item: '2', verdict: 'approved' }))).toBe('2 · gate none configured · final approved · pushed · next: open the PR')
+  expect(text(await call($, { action: 'gate', item: '2', verdict: 'approved' }))).toBe('2 · gate none configured · final approved · pushed · next: ship { item: "2" }')
   expect(text(await call($, { action: 'close', item: '2', pr: '#5' }))).toBe('2 merged · PR #5 · 2 tasks · issue closed · next: nothing ready')
   expect(writes.filter(w => w.includes('/docs/pipeline/'))).toEqual([])
   expect(commits(runs)).toEqual([])
@@ -626,7 +627,7 @@ test('a worktree close had to leave is recorded, listed by clean, and swept by a
   }, where)
   const { runs } = runWorld(on, { issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], assignees: ['me'], comments: [specComment('200', 'review · PR #5')] }), issueOf(3, 'Import', { comments: [specComment('300')] })] })
   on('fs.list', (_$, e) => ({ value: (e as { path: string }).path.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '') === `${MAIN}/.claude/worktrees` ? [{ name: '2', kind: 'dir' }] : [] }) as never)
-  expect(text(await call($, { action: 'close', item: '2' }))).toBe('2 merged · PR #5 · 1 task · issue closed · worktree .claude/worktrees/2 left, this session is in it: the next begin or close removes it · next: 3')
+  expect(text(await call($, { action: 'close', item: '2' }))).toBe('2 merged · PR #5 · 1 task · issue closed · worktree .claude/worktrees/2 left because this session\'s shell is in it: nothing to do, the next begin or /pipeline clean removes it · next: 3')
   expect(runs.some(r => r.includes('worktree') && r.includes('remove'))).toBe(false)
   expect(JSON.parse(files.get(ITEMS)!).leftover).toEqual([{ id: '2', worktree: '.claude/worktrees/2', branch: 'feat/2' }])
   expect(text(await call($, { action: 'clean' }))).toBe('.claude/worktrees/2\nbranch:feat/2')
@@ -686,6 +687,16 @@ test('migrate-github without apply answers the draft and writes nothing', async 
   expect(draft['remove']).toContain('docs/pipeline/backlog.json')
   expect(writes).toEqual([])
   expect(runs.some(r => r[0] === 'gh')).toBe(false)
+})
+
+test('add writes who asked on the issue: the source ends the body, before the Needs line', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH })
+  const runs = ghWorld(on, { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('50')] })] })
+  const source = 'user, 2026-11-05: "we need csv export of catalogs"'
+  await call($, { action: 'add', item: { title: 'CSV export', source } })
+  expect(fieldOf(runs.filter(isCreate)[0]!, 'body')).toBe(`Source: ${source}`)
+  await call($, { action: 'add', item: { title: 'Import', note: 'for the catalog team', source, needs: ['2'] } })
+  expect(fieldOf(runs.filter(isCreate)[1]!, 'body')).toBe(`for the catalog team\n\nSource: ${source}\n\nNeeds: #2`)
 })
 
 test('add with needs writes the Needs line, and the new issue waits for the open one', async ($, on) => {
@@ -878,7 +889,7 @@ test('0.5.0: pr opens the pull request through gh with the spec as its body, rec
   const { files } = world(on, {
     [CONFIG]: VALID_CONFIG,
     [BACKLOG]: JSON.stringify({ version: 1, items: [{ id: 'p1', title: 'CSV export', status: 'building', spec: 'docs/pipeline/specs/p1.md', ledger: 'docs/pipeline/ledgers/p1.json' }] }),
-    [`${DIR}/ledgers/p1.json`]: JSON.stringify({ item: 'p1', branch: 'feat/p1', worktree: '.claude/worktrees/p1', attribution: 'Co-Authored-By: X', tasks: [], rulings: [], blockers: [], tokens: 0 }),
+    [`${DIR}/ledgers/p1.json`]: JSON.stringify({ item: 'p1', branch: 'feat/p1', worktree: '.claude/worktrees/p1', attribution: 'Co-Authored-By: X' + String.fromCharCode(10) + 'Generated with [Claude Code](https://claude.com/claude-code)', tasks: [], rulings: [], blockers: [], tokens: 0 }),
     [`${DIR}/specs/p1.md`]: SPEC,
   })
   const runs: string[][] = []
@@ -895,7 +906,9 @@ test('0.5.0: pr opens the pull request through gh with the spec as its body, rec
   expect(create.slice(0, 11)).toEqual(['gh', 'api', '-X', 'POST', 'repos/{owner}/{repo}/pulls', '-f', 'title=p1: CSV export', '-f', 'head=feat/p1', '-f', 'base=main'])
   expect(fieldOf(create, 'body')).toContain('CSV export of the list.')
   expect(fieldOf(create, 'body')).toContain('## Acceptance\n\n- [ ] a csv downloads')
-  expect(fieldOf(create, 'body')).toContain('Co-Authored-By: X')
+  // Of the attribution lines, the pull request gets the one that is not a git trailer.
+  expect(fieldOf(create, 'body')).toContain('Generated with [Claude Code](https://claude.com/claude-code)')
+  expect(fieldOf(create, 'body')).not.toContain('Co-Authored-By: X')
   expect(JSON.parse(files.get(BACKLOG)!).items[0]).toMatchObject({ status: 'review', pr: '#31' })
   // Asked again, it opens no second one.
   expect(text(await call($, { action: 'pr', item: 'p1' }))).toContain('PR #31 is already open')
@@ -952,6 +965,22 @@ test('0.6.1: adopt makes an issue of a pull request opened without one, records 
   expect(text(await call($, { action: 'adopt', pr: '#14' }))).toBe(`refused: PR #14 already belongs to ${id} (review)`)
   expect(text(await call($, { action: 'adopt', pr: '#15' }))).toBe('refused: PR #15 is merged: only an open pull request is adopted')
   expect(text(await call($, { action: 'adopt' }))).toContain('adopt needs "pr"')
+})
+
+test('0.6.2: close on an issue that is already closed is answered, not refused; an unknown id still is', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH, [ITEMS]: JSON.stringify({ items: {}, pending: [], leftover: [{ id: '41', worktree: '.claude/worktrees/41', branch: 'feat/41' }] }) })
+  runWorld(on, { issues: [issueOf(2, 'Export')] })
+  expect(text(await call($, { action: 'close', item: '41' }))).toBe('41 is already closed · its worktree .claude/worktrees/41 is removed by the next begin or /pipeline clean · nothing to do')
+  expect(text(await call($, { action: 'close', item: '40' }))).toBe('40 is already closed · nothing to do')
+  expect(text(await call($, { action: 'close', item: 'p9' }))).toBe('refused: no item p9')
+})
+
+test('0.6.2: an issue another machine is building, with no record here, is not this session\'s active item', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH })
+  runWorld(on, { issues: [issueOf(6, 'Capitalize helper', { labels: ['pipeline', 'pipeline:building'] }), issueOf(7, 'Export')] })
+  const got = await json($, { action: 'get' })
+  expect(got['active']).toBeNull()
+  expect(got['counts']).toMatchObject({ building: 1, ready: 1 })
 })
 
 test('0.6.0: a gh call that times out is named as that, not as a missing gh', async ($, on) => {

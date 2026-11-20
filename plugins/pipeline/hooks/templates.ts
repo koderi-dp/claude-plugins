@@ -4,10 +4,17 @@
 export type BriefKind = 'implementer' | 'fix' | 'review' | 'final'
 
 const END = `No model identifier goes into commits, PR text or comments.`
+/** For the briefs that commit: the attribution lines are the one place a model's name is written. */
+const END_COMMIT = `No model identifier goes into commits, PR text or comments, apart from the attribution lines below. End the commit message with these lines exactly:`
+/** Where the subagent must be: said with the path, so it does not depend on where the lead's shell happens to be. */
+const AT = `The item's worktree is \`{{worktree}}\`: run every command there (if \`pwd\` shows another folder, \`cd\` to it first, as a command of its own)`
+const WHERE = `${AT} and edit files by their path under it.`
+/** The same for a reviewer, who edits nothing: telling it how to edit beside "Read-only" reads as a contradiction. */
+const WHERE_READ = `${AT}.`
 
 const implementer = `# {{item}} · task {{n}} of {{total}}: {{title}}
 
-You are the implementer, in the item's worktree on its branch. Never switch branches, never push, never touch \`{{records}}/\` except your report. {{process}}
+You are the implementer, on the item's branch. ${WHERE} Never switch branches, never push, never touch \`{{records}}/\` except your report. {{process}}
 
 ## Task
 
@@ -25,7 +32,7 @@ You are the implementer, in the item's worktree on its branch. Never switch bran
 
 1. Read only what the task needs: the files you own and what they import. The plan and spec are at \`{{plan}}\` and \`{{spec}}\` when the task leaves a question.
 2. Write the failing test first, see it fail, then implement until it passes. No test, no behaviour.
-3. \`{{checkFast}}\` while you work; \`{{checkTask}}\` once before you hand back, and read its output: a claim without a run is not evidence. One simple command per shell call (no \`&&\`, \`;\` or \`cd\`): a compound command is refused in a worktree.
+3. \`{{checkFast}}\` while you work; \`{{checkTask}}\` once before you hand back, and read its output: a claim without a run is not evidence. One simple command per shell call (no \`&&\` or \`;\`).
 4. Commit as soon as it is green, one commit, message \`{{commit}}\`, staging only your files by path (never \`git add -A\`). An uncommitted tree is lost on a restart.
 5. Something adjacent that is wrong goes into the report, not the diff. A question only the lead can answer: stop and report it, do not guess.
 
@@ -41,14 +48,14 @@ Known about working in this repository:
 Write the report at exactly this path, copied as it stands, \`{{report}}\`, at most 25 lines: **Commit** (hash), **Changed** (files), **Deviations** (and why), **Evidence** (each command and its last summary line), **Gaps** (seen, not fixed), **Look here** (file:line a reviewer should read).
 Then answer in one line and nothing else: \`DONE <hash> · <passed>/<total> tests\` or \`BLOCKED <the question>\`. If a command or a setup step of this repository cost you a failed attempt that the list above would have saved, add \` · fact: <the one line a next implementer needs>\`.
 
-${END} End the commit message with these lines exactly:
+${END_COMMIT}
 
 {{attribution}}
 `
 
 const fix = `# {{item}} · task {{n}}: {{title}} · fix round {{round}} of {{max}}
 
-Same worktree and branch; the task's commits are in place. Fix what is listed, nothing else. Never push, never amend or rewrite a commit, never touch \`{{records}}/\` except your report. {{process}}
+Same worktree and branch; the task's commits are in place. ${WHERE} Fix what is listed, nothing else. Never push, never amend or rewrite a commit, never touch \`{{records}}/\` except your report. {{process}}
 
 ## Findings
 
@@ -67,14 +74,14 @@ Same worktree and branch; the task's commits are in place. Fix what is listed, n
 Write the report at exactly this path, copied as it stands, \`{{report}}\`, at most 20 lines: **Commit**, **Fixed** (finding → change → test), **Disputed** (with evidence), **Evidence** (commands and their last summary line), **Look here** (file:line).
 Then answer in one line and nothing else: \`DONE <hash> · <fixed>/<findings> fixed\` or \`BLOCKED <the question>\`.
 
-${END} End the commit message with these lines exactly:
+${END_COMMIT}
 
 {{attribution}}
 `
 
 const review = `# {{item}} · review of task {{n}}: {{title}}
 
-You are the independent reviewer. Read-only: no edit and no commit in the worktree, nothing under \`{{records}}/\` except your report. Probes run in a scratch copy (\`git worktree add --detach <tmp>/probe HEAD\`) that you remove when done. {{process}}
+You are the independent reviewer. ${WHERE_READ} Read-only: no edit and no commit in the worktree, nothing under \`{{records}}/\` except your report. Probes run in a scratch copy (\`git worktree add --detach <tmp>/probe HEAD\`) that you remove when done. {{process}}
 
 ## Read
 
@@ -111,7 +118,7 @@ ${END}
 
 const final = `# {{item}} · final review: {{title}}
 
-You are the final reviewer. Read-only: no edit and no commit, nothing under \`{{records}}/\` except your report. Probes run in a scratch copy you remove when done. {{process}}
+You are the final reviewer. ${WHERE_READ} Read-only: no edit and no commit, nothing under \`{{records}}/\` except your report. Probes run in a scratch copy you remove when done. {{process}}
 
 ## Read
 

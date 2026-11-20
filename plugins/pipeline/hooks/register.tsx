@@ -15,7 +15,7 @@ import type { Issue, Run } from './tracker'
 import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, needsOf, specFromIssue, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import type { Extras, Leftover, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
-import { briefPaths, checkPlan, parsePlan, renderBrief, riskyMatches, section } from './plan'
+import { briefPaths, checkPlan, commitArgs, parsePlan, renderBrief, riskyMatches, section, splitAttribution } from './plan'
 import { PLAN_FORMAT } from './templates'
 import type { BriefKind } from './templates'
 import type { LedgerSet } from './ledger'
@@ -103,7 +103,7 @@ const TOOL_SCHEMA = {
     findings: { type: 'string', description: 'For brief: the findings, verbatim (required for fix; for a re-review or a second final review, its scope).' },
     carried: { type: 'string', description: 'For an implementer brief: minor findings carried from the previous task.' },
     commits: { type: 'string', description: 'For a review brief: the commit range, as <sha>..<sha>.' },
-    attribution: { type: 'string', description: 'For plan or brief: the attribution lines this session was given; kept in the ledger, so once per item is enough.' },
+    attribution: { type: 'string', description: 'For plan, brief or ship: the attribution lines this session was given, copied as they are and one per line (the commit trailer and the pull request line), not a sentence about them. The tool ends commits with the git trailers and the pull request with the rest. Kept in the ledger, so once per item is enough.' },
     escalate: { type: 'boolean', description: 'For an implementer or fix brief: dispatch at config.models.escalate.' },
     rules: { type: 'array', description: 'For migrate-apply: the corrected rules, each { group, line, source }.', items: { type: 'object' } },
     text: { type: 'string', description: 'For spec and for add: the spec, with the template\'s headings (add writes and links it). For question: the question to ask on the issue. For remove with queue: github: why the issue is not planned.' },
@@ -204,7 +204,7 @@ const RUN_PROMPT = (target: string) =>
 const DIRECT_PROMPT = (answer: string, id: string, isAll: boolean) =>
   `Pipeline item ${id} is claimed for this session and its worktree is ready. The tool answered:\n\n${answer}\n\n` +
   `Build it your own way, as you would with no plugin, working in that worktree: cd to it in your shell commands and use its path for file edits; do not call EnterWorktree. The spec's Acceptance list is what done means. If docs/pipeline/rules.md lists rules, they are the project's own. ` +
-  `When it is built and its tests pass, make one call: ${TOOL} {"action":"ship","item":"${id}","message":"<commit message>","attribution":"<the attribution lines this session was given>"${isAll ? ',"next":true' : ''}}. ` +
+  `When it is built and its tests pass, make one call: ${TOOL} {"action":"ship","item":"${id}","message":"<commit message>","attribution":"<the attribution lines this session was given, copied as they are, one per line: the commit trailer and the pull request line>"${isAll ? ',"next":true' : ''}}. ` +
   `It commits what is uncommitted, runs the gate, opens the pull request and, where the config says so, waits for CI, merges and closes. Its answer says what is next: a red gate or red CI means fix and ship again; "review first" means make the Agent call it names, then ship with "verdict"${isAll ? '; a next item in the answer is built the same way' : ''}. ` +
   `Never edit the backlog or ledger files yourself. End with one line saying where the item stands.`
 
@@ -577,7 +577,10 @@ async function addIssue($: EngineInterface, found: string, c: Config | null, e: 
   if (!title) throw new Refused('add needs item.title')
   // The issues this one waits for go on a `Needs:` line of the body, where the tool reads them back.
   const needs = typeof e.item === 'string' || !Array.isArray(e.item?.needs) ? [] : e.item.needs.map(n => String(n).replace(/^#/, '')).filter(n => /^\d+$/.test(n))
-  const body = withNeeds(typeof e.item === 'string' ? '' : (e.item?.note ?? ''), needs)
+  // Who asked and when goes on the issue too: it is the only record the item has.
+  const note = typeof e.item === 'string' ? '' : (e.item?.note ?? '').trim()
+  const source = typeof e.item === 'string' ? '' : (e.item?.source ?? '').trim()
+  const body = withNeeds([note, source ? `Source: ${source}` : ''].filter(Boolean).join('\n\n'), needs)
   const r = await tracker.create(ghRun($, found), { title, body, labels: [labelOf(c)] })
   if (!r.ok) throw new Refused(r.error)
   const n = r.value
@@ -1273,8 +1276,15 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       return prAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'accept':
       return acceptAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
-    case 'close':
-      return closeAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+    case 'close': {
+      const id = typeof e.item === 'string' ? e.item : e.item?.id ?? e.id
+      // With the issues as the queue a closed item is no longer listed: a second close is answered, not refused.
+      if (id && isGithub(c) && /^\d+$/.test(id) && !current.items.some(i => i.id === id)) {
+        const left = (await extrasOrRefuse($, found)).leftover?.find(l => l.id === id)
+        return `${id} is already closed${left ? ` · its worktree ${left.worktree} is removed by the next begin or /pipeline clean` : ''} · nothing to do`
+      }
+      return closeAction($, found, c, current, need(id), e)
+    }
     case 'gate':
       return gateAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'merge':
@@ -1451,7 +1461,7 @@ async function addFact($: EngineInterface, found: string, fact: string): Promise
 /** Stages the paths and commits them in the worktree with the attribution lines; false when there was nothing to commit or git failed. */
 async function commitPaths($: EngineInterface, wt: string, rels: string[], message: string, attribution: string): Promise<boolean> {
   if ((await gitOut($, wt, ['add', '--', ...rels])) === null) return false
-  return (await gitOut($, wt, ['commit', '-q', '-m', message, ...(attribution.trim() ? ['-m', attribution.trim()] : []), '--', ...rels])) !== null
+  return (await gitOut($, wt, ['commit', '-q', ...commitArgs(message, attribution), '--', ...rels])) !== null
 }
 
 /** The lead's model use since the last record, added to the ledger's `lead` and reset. */
@@ -1549,8 +1559,8 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
   // Direct mode hands the spec over with the answer, so the lead spends no turn reading it.
   const specBody = isDirect ? ((await readItemFile($, found, wt, spec)) ?? '').trim() : ''
   const specText = specBody ? `\n\nThe spec (${spec}):\n\n${specBody.length > 6000 ? `${specBody.slice(0, 6000)}\n… (cut: read the file for the rest)` : specBody}` : ` (the spec: ${spec})`
-  const next = hasTasks && r ? `resume: task ${r.task}/${ledger!.tasks.length} · ${r.state}${r.lastVerified ? ` · verified ${r.lastVerified}` : ''}` : isDirect ? `next: build it your own way in ${isChild ? 'this directory' : wt}, commit, then gate${specText}` : `next: read ${spec}, write ${P.planRel(id)}, then plan`
-  return `${id} · ${status} · branch ${branch} · base ${(base ?? '?').slice(0, 7)} · ${isChild ? 'this directory is the worktree' : isDirect ? `worktree ${wt}` : `EnterWorktree { "path": "${wt}" }`} · ${next}`
+  const next = hasTasks && r ? `resume: task ${r.task}/${ledger!.tasks.length} · ${r.state}${r.lastVerified ? ` · verified ${r.lastVerified}` : ''}` : isDirect ? `next: build it your own way in ${isChild ? 'this directory' : wt}, then ship with "message"${specText}` : `next: in that worktree read ${spec}, write the plan at ${P.planRel(id)}, then plan`
+  return `${id} · ${status} · branch ${branch} · base ${(base ?? '?').slice(0, 7)} · ${isChild ? 'this directory is the worktree' : `worktree ${wt}`} · ${next}`
 }
 
 /**
@@ -1742,33 +1752,39 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
   const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
   if (!isGithub(c)) await commitPaths($, wt, [placesOf(found, c).briefDir(id)], `${id}: final review record`, attribution)
   const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
-  return `${id} · gate ${gate} · final ${verdict} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${isDirect || /approved/i.test(verdict) ? 'open the PR' : 'the final review'}`
+  return `${id} · gate ${gate} · final ${verdict} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${isDirect || /approved/i.test(verdict) ? `ship { item: "${id}" }` : 'the final review'}`
 }
 
 /**
  * `ship`: everything after the building, in one call. What is uncommitted is committed with the message, the gate
  * is run, the pull request opened and, under `merge: auto`, CI waited for, the PR merged and the item closed. It
- * stops at the first thing the lead must act on (a red gate, a review to dispatch, red CI) and says what.
+ * stops at the first thing the lead must act on (a red gate, a review to dispatch, red CI) and says what. On the
+ * full loop it is the same end once every task is accepted: the gate with the final verdict, then the rest.
  */
 async function shipAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
   const cfg = normalizeConfig(c ?? DEFAULTS).config
   const ledger = await loadLedger($, found, id)
   if (!ledger?.branch) throw new Refused(`${id} has no branch on record: begin it first`)
-  if (ledger.tasks.length) throw new Refused(`${id} runs on the full loop (its ledger has tasks): accept its tasks, then gate, pr and merge`)
+  // The full loop: the tasks are the implementers' commits, so nothing is committed here; ship is the gate with
+  // the final verdict (unless it already ran green), the pull request and the merge.
+  const isFull = ledger.tasks.length > 0
+  const open = ledger.tasks.find(t => t.status !== 'accepted')
+  if (open) throw new Refused(`${id} runs on the full loop and task ${open.n} is not accepted: accept its tasks, then ship with the final verdict`)
+  const isGated = isFull && ledger.final?.gate === 'green' && /approved/i.test(ledger.final?.verdict ?? '') && !e.verdict
   const wt = worktreePath(found, ledger)
   if (typeof e.attribution === 'string') await runTool($, { action: 'ledger', item: id, set: { attribution: e.attribution } })
   const attribution = typeof e.attribution === 'string' ? e.attribution : typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
   const SCOPE = ['--', '.', ':(exclude)docs/pipeline', ':(exclude).pipeline']
-  const dirty = await gitOut($, wt, ['status', '--porcelain', ...SCOPE])
+  const dirty = isFull ? '' : await gitOut($, wt, ['status', '--porcelain', ...SCOPE])
   if (dirty) {
     if (!e.message?.trim()) throw new Refused('uncommitted changes in the worktree: pass "message" and ship commits them')
     await gitOut($, wt, ['add', '-A', ...SCOPE])
-    const done = await gitOut($, wt, ['commit', '-q', '-m', e.message.trim(), ...(attribution.trim() ? ['-m', attribution.trim()] : [])])
+    const done = await gitOut($, wt, ['commit', '-q', ...commitArgs(e.message, attribution)])
     if (done === null) throw new Refused('git commit failed in the worktree: commit it yourself, then ship')
   }
   // The gate, with the review a risky branch needs answered as the call to make.
-  let gated: string
-  try {
+  let gated = `${id} · gate green`
+  if (!isGated) try {
     gated = await runTool($, { action: 'gate', item: id, ...(e.verdict ? { verdict: e.verdict } : {}), ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}) })
   } catch (err) {
     const said = err instanceof Error ? err.message : String(err)
@@ -1778,6 +1794,8 @@ async function shipAction($: EngineInterface, found: string, c: Config | null, c
     return `${id} · ${said.split(' · ')[0]} · ${withoutId(id, brief)} Then ship again with "verdict".`
   }
   if (/· gate red/.test(gated.split('\n')[0] ?? '')) return gated
+  // A full-loop gate without an approved final review stops here: the review comes first.
+  if (isFull && / · next: the final review$/.test(gated.split('\n')[0] ?? '')) return gated
   // The pull request; without gh the branch is pushed and the rest is the lead's.
   let opened: string
   try {
@@ -1813,7 +1831,8 @@ async function prAction($: EngineInterface, found: string, c: Config | null, cur
   const spec = (await readItemFile($, found, wt, isGithub(c) ? P.specRel(id) : item.spec ?? P.specRel(id))) ?? ''
   const acceptance = section(spec, 'Acceptance')
   const what = section(spec, 'What')
-  const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string).trim() : ''
+  // Of the attribution lines, the git trailers belong to commits; the rest ends the pull request's text.
+  const attribution = splitAttribution(typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : '').rest.join('\n')
   const body = typeof e.body === 'string' && e.body.trim() ? e.body.trim() : [what, acceptance ? `## Acceptance\n\n${acceptance}` : '', isGithub(c) ? `Closes #${id}` : '', attribution].filter(Boolean).join('\n\n')
   const title = typeof e.title === 'string' && e.title.trim() ? e.title.trim() : isGithub(c) ? item.title : `${id}: ${item.title}`
   const made = await tracker.createPr(ghRun($, found), { base: cfg.mainBranch, head: ledger.branch, title, body })
@@ -2016,19 +2035,19 @@ async function closeAction($: EngineInterface, found: string, c: Config | null, 
     if (self.item === id) self.item = ''
     const tasks = ledger?.tasks.length ?? 0
     const next = after.items.find(i => i.status === 'ready')
-    const left = kept.length ? ` · worktree ${kept[0]} left, this session is in it: the next begin or close removes it` : ''
+    const left = kept.length ? ` · worktree ${kept[0]} left because this session's shell is in it: nothing to do, the next begin or /pipeline clean removes it` : ''
     return `${id} merged${pr ? ` · PR ${pr}` : ''} · ${tasks} task${tasks === 1 ? '' : 's'} · issue closed${left} · next: ${next ? next.id : 'nothing ready'}`
   }
 
   // The record on mainBranch.
   const attribution = typeof ledger?.['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
   await gitMain($, found, ['add', '-A', '--', 'docs/pipeline'])
-  const commit = await gitMain($, found, ['commit', '-q', '-m', `${id}: close records`, ...(attribution.trim() ? ['-m', attribution.trim()] : []), '--', 'docs/pipeline', ...gone.filter(x => !x.startsWith('docs/pipeline/'))])
+  const commit = await gitMain($, found, ['commit', '-q', ...commitArgs(`${id}: close records`, attribution), '--', 'docs/pipeline', ...gone.filter(x => !x.startsWith('docs/pipeline/'))])
   const pushed = cfg.pushMain === false ? 'not pushed (pushMain is off)' : (await gitMain($, found, ['push', '-q', 'origin', main])).ok ? 'pushed' : 'not pushed (git push failed: push it yourself)'
   if (self.item === id) self.item = ''
   const tasks = ledger?.tasks.length ?? 0
   const next = after.items.find(i => i.status === 'ready')
-  const left = kept.length ? ` · worktree ${kept[0]} left, this session is in it: the next begin or close removes it` : ''
+  const left = kept.length ? ` · worktree ${kept[0]} left because this session's shell is in it: nothing to do, the next begin or /pipeline clean removes it` : ''
   return `${id} merged${pr ? ` · PR ${pr}` : ''} · ${tasks} task${tasks === 1 ? '' : 's'} · records ${commit.ok ? 'committed' : 'unchanged'} on ${main} · ${pushed}${left} · next: ${next ? next.id : 'nothing ready'}`
 }
 
@@ -2132,7 +2151,7 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
   if (typeof e.attribution === 'string') set['attribution'] = e.attribution
   await runTool($, { action: 'ledger', item: id, set })
   const what = kind === 'final' ? 'final review' : kind === 'fix' ? `task ${n}/${total} · fix round ${round} of ${cfg.limits.fixRounds}` : kind === 'review' ? `task ${n}/${total} · review${round > 1 ? ` ${round}` : ''}` : `task ${n}/${total}`
-  return `${id} · ${what} · Agent subagent_type pipeline:${kind === 'review' || kind === 'final' ? 'reviewer' : 'implementer'} model ${out.model} effort ${out.effort} · prompt: Read ${out.brief} and follow it.`
+  return `${id} · ${what} · Agent subagent_type pipeline:${kind === 'review' || kind === 'final' ? 'reviewer' : 'implementer'} model ${out.model} effort ${out.effort} · prompt: Read ${wt}/${out.brief} and follow it.`
 }
 
 /** Whether an update starts an item's run: to planning, or to building from another status. */
@@ -2809,8 +2828,8 @@ async function branchOf($: EngineInterface): Promise<string | undefined> {
 /**
  * The active item of this session, with several sessions on one repository each running their own: the item this
  * session last worked on through the tool; else the one whose worktree or branch this session is in; else one a
- * child of this session runs; else the first active item no other live session claims. Null when every active item
- * is another session's.
+ * child of this session runs; else the first active item no other live session claims and, with queue: github, this
+ * machine has a record of. Null when every active item is another session's or another machine's.
  */
 async function activeItem($: EngineInterface, b: Backlog | null): Promise<Item | null> {
   const actives = (b?.items ?? []).filter(i => (ACTIVE_STATUSES as readonly string[]).includes(i.status))
@@ -2829,7 +2848,10 @@ async function activeItem($: EngineInterface, b: Backlog | null): Promise<Item |
   const ofChild = actives.find(i => kids.has(i.id))
   if (ofChild) return ofChild
   const claimed = new Set((await read($, siblings)).filter(x => !x.isStale && x.item).map(x => x.item))
-  return actives.find(i => !claimed.has(i.id)) ?? null
+  // With the issues as the queue the building label travels and the record does not: an item in flight that has
+  // no branch and no ledger here was begun on another machine, and is not this session's to resume.
+  const isElsewhere = isGithub(await read($, config)) ? (i: Item) => !i.branch && !i.ledger : () => false
+  return actives.find(i => !claimed.has(i.id) && !isElsewhere(i)) ?? null
 }
 
 /** This session's live entry: the active item, the running agents and every signal of this session. */

@@ -24,6 +24,10 @@ test-live: test-live-ssh
 test-live-ssh:
     cargo test -p ssh-remote --test live -- --ignored --test-threads=1
 
+# End-to-end tests of the pipeline plugin from this source against the sandbox repository on GitHub: the tool scenarios, or `all`, or named ones (`just e2e list`)
+e2e *scenarios:
+    node plugins/pipeline/e2e/run.mjs {{scenarios}}
+
 # Start the OpenSSH test containers for ssh-remote's live tests: tester on 2222, other on 2223 (secrets in target/ssh-test)
 [script('pwsh', '-NoLogo', '-NoProfile')]
 ssh-test-server:

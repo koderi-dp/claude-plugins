@@ -147,6 +147,38 @@ export type BriefInput = {
   places?: { specRel: string; planRel: string; recordsDir: string; briefDir: string }
 }
 
+/**
+ * The attribution lines a session was given, by where each belongs: a git trailer (`Co-Authored-By: Name <mail>`,
+ * a key with a hyphen) ends a commit message, every other line (the "Generated with" link) ends a pull request's
+ * text. A lead that describes the lines in a sentence instead of passing them is read for the trailers it quotes,
+ * and the sentence itself goes nowhere.
+ */
+export function splitAttribution(text: string): { trailers: string[]; rest: string[] } {
+  const trailers: string[] = []
+  const rest: string[] = []
+  for (const line of text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)) {
+    if (/^[A-Za-z]+(?:-[A-Za-z]+)+: \S/.test(line)) trailers.push(line)
+    else {
+      const quoted = line.match(/[A-Za-z]+(?:-[A-Za-z]+)+: [^"<>]+<[^<>\s]+>/g)
+      if (quoted) trailers.push(...quoted)
+      else rest.push(line)
+    }
+  }
+  return { trailers: [...new Set(trailers)], rest }
+}
+
+/**
+ * The `-m` arguments of a commit: the message without the lines that belong to a pull request, then the trailers
+ * the message does not carry yet, so a lead that already ended its message with them writes none twice.
+ */
+export function commitArgs(message: string, attribution: string): string[] {
+  const { trailers, rest } = splitAttribution(attribution)
+  const kept = message.split(/\r?\n/).filter(l => !rest.includes(l.trim()))
+  const has = new Set(kept.map(l => l.trim().toLowerCase()))
+  const missing = trailers.filter(t => !has.has(t.toLowerCase()))
+  return ['-m', kept.join('\n').trim(), ...(missing.length ? ['-m', missing.join('\n')] : [])]
+}
+
 const or = (s: string | undefined, fallback: string) => (s && s.trim() ? s.trim() : fallback)
 
 /** One brief, filled: its text, its two paths, and the model and effort the config gives the role. Throws with what is missing. */
@@ -174,7 +206,8 @@ export function renderBrief(input: BriefInput): { text: string; brief: string; r
     spec: at.specRel,
     plan: at.planRel,
     records: at.recordsDir,
-    attribution: or(input.attribution ?? (typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''), '(no attribution lines)'),
+    worktree: input.root ? input.root.replace(/\/+$/, '') : 'the folder this brief is in the records of',
+    attribution: or(splitAttribution(input.attribution ?? (typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : '')).trailers.join('\n'), '(no attribution lines)'),
   }
   if (task) {
     Object.assign(values, {

@@ -218,9 +218,9 @@ Every tool answer stays in the lead's conversation and is read again on every la
 | `ledger` | One line: `ledger p12 · task 3/6 running · 2 rulings · 674k tokens` |
 | `begin` | One line: the status, the branch, the base and the worktree to enter; refused when another live session runs the item |
 | `plan` | One line: `p12 · building · 5 tasks · plan committed · next: brief task 1`, or the problems of the plan |
-| `brief` | One line with the Agent call: `p12 · task 2/5 · Agent subagent_type pipeline:implementer model sonnet effort medium · prompt: Read docs/pipeline/ledgers/p12/task-2-brief.md and follow it.` |
+| `brief` | One line with the Agent call: `p12 · task 2/5 · Agent subagent_type pipeline:implementer model sonnet effort medium · prompt: Read <worktree>/docs/pipeline/ledgers/p12/task-2-brief.md and follow it.` |
 | `accept` | One line: `p12 · task 2 accepted · 2/5 · a1b2c3d..c0de111 · pushed · next: brief task 3` |
-| `gate` | One line: `p12 · gate green · final approved · pushed · next: open the PR`, or the red gate's last lines |
+| `gate` | One line: `p12 · gate green · final approved · pushed · next: ship { item: "p12" }`, or the red gate's last lines |
 | `merge` | One line, after CI: the `close` line with `· CI green`, or `p12 · CI red · test, lint · PR #31 not merged · one fix wave, then merge again` |
 | `ship` | Everything after the building in one call: commit, gate, pull request and, under `merge: auto`, the CI wait, the merge and the close. It stops at a red gate, a review to dispatch or red CI and says which |
 | `pr` | One line: `p12 review · PR #31 · next: merge` |
@@ -253,6 +253,30 @@ Look. The panel and the bar above the prompt are drawn from one kit. `hooks/ui/t
 `/pipeline migrate` reads the project's `CLAUDE.md` files, `docs/backlog.md`, `docs/WORKFLOW.md`, `docs/SLICES.md`, the files `CLAUDE.md` links as a queue or ledger, the superpowers specs and plans, every `.superpowers/sdd/**/progress.md` and the top-level `progress-archive.md`, the project skills, the Makefile, the package scripts, the CI workflows and the branches, and drafts the config with the source of every key, the `rules.md` lines by group, one item per queue entry (`merged` when the queue proves it, `parked` for what it marks later, otherwise `inbox` marked unverified) and a `building` item per open `feat/*` branch with a ledger. It asks one question, for corrections, then writes the files, prepends a Historical line to the old queue and ledgers, and lists the bulk of merged increments under `.superpowers/sdd/` (briefs, reports, logs, screenshots) to remove with `git rm`; `retain.superpowers: true` keeps it. The lead then retires the workflow prose in `CLAUDE.md` to one paragraph and deletes skills that only restated dispatch rules. A second `migrate` refreshes titles, sources and links and changes no status.
 
 A project that already runs on a file backlog moves onto GitHub issues with `/pipeline migrate github`, or when you ask for issues as the queue in words: every issue gets the whole spec as its body (What, Why, Acceptance, Out of scope, and the item's note), so it reads as the request on its own; the tool drafts the move (the items that become issues, the ones in flight, the parked ones and the files to remove) and writes nothing until you have answered its one question. The apply creates a labelled issue per item that is not merged or parked and ends each issue's body with the id the item had (`Migrated from p78.`) and a `Needs:` line for the items it waited for, posts each spec as the issue's spec comment, with the PR of an item in review and the note of another item in flight in its status line. It labels and assigns the items being built, labels a blocked item `pipeline:blocked`, asks an inbox item's open question on its issue, copies the ledgers, plans and briefs of the items in flight under the issue's number (a fresh ledger with the branch where there was none), copies `facts.md`, and sets `queue: github` in the config. It deletes nothing: the lead removes `backlog.json`, `BACKLOG.md`, `facts.md`, `specs/`, `plans/` and `ledgers/` with `git rm` and commits that with the config.
+
+## Developing
+
+The installed plugin and the source can live on one machine. A session started with `--plugin-dir` loads the source in place of the installed copy, for that session only:
+
+```
+claude --plugin-dir <this repository>/plugins/pipeline
+```
+
+After an edit, `/reload-plugins` or a new session picks it up; every other session keeps the installed version until `claude plugin update`.
+
+Three kinds of test, from the repository root:
+
+| Test | Command | Runs against |
+| --- | --- | --- |
+| Unit | `claude plugin test plugins/pipeline` | Mocks only; about 20 seconds |
+| End to end, tool scenarios | `just e2e` | Real GitHub: the sandbox repository, real pull requests, CI and merges; a few minutes |
+| End to end, every scenario | `just e2e all` | The same, plus the scenarios where a model does the work (`intake`, `next` in mode direct, `next-full` in mode full with subagents) |
+
+`just e2e list` names the scenarios, and `just e2e adopt ship` runs the named ones. Each scenario is one file in `e2e/scenarios/`; `e2e/lib.mjs` holds the helpers. A run clones the sandbox into `target/e2e/` (ignored by git), loads this folder with `--plugin-dir` into headless `claude -p` sessions, calls the real tool and checks the result on GitHub with `gh`. Everything it opens is titled `[e2e]` and closed at the end of the run or at the start of the next one. It needs `claude` and `gh` logged in. `PIPELINE_E2E_REPO` names another sandbox (default `koderi-dp/pipeline-sandbox`); the sandbox needs `queue: github`, `merge: auto`, no `mode` in its config (so the plugin's default applies) and a CI workflow that ignores `docs/**`. A scenario that needs another setting, such as `mode: direct` or cheaper models, changes the config in its own checkout only.
+
+Every session of a run is kept under `target/e2e/logs/<run>/`: `summary.md` with the outcome, time, turns, tokens and cost per scenario and per session, and per session the raw stream (`.jsonl`) and the same as text (`.md`): the prompt, every turn, every tool call with its input and result, and the subagents' turns under the call that started them. Read `summary.md` first, then the `.md` of the session that failed or cost more than it should.
+
+A slash command that hands a prompt to the model (`/pipeline add`, `next`, `run`) does nothing in a headless `claude -p` session: the session ends before the prompt is sent. The agent scenarios therefore ask in words.
 
 ## Limits
 
