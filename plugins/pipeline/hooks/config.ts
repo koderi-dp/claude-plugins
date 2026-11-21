@@ -38,6 +38,7 @@ export const DEFAULTS: Config = {
   taskReview: 'risky',
   mode: 'full',
   superpowers: 'off',
+  intake: 'auto',
   queue: 'file',
   queueLabel: 'pipeline',
 }
@@ -130,7 +131,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
       }
   }
 
-  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'mode', 'superpowers', 'pushMain', 'queue', 'queueLabel'])
+  const known = new Set(['version', 'mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'stop', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'mode', 'superpowers', 'intake', 'pushMain', 'queue', 'queueLabel'])
   const extra = Object.fromEntries(Object.entries(raw).filter(([k]) => !known.has(k)))
   const config: Config = {
     ...extra,
@@ -154,6 +155,7 @@ export function normalizeConfig(raw: unknown): { config: Config; problems: strin
     taskReview: oneOf('taskReview', ['risky', 'always', 'off'] as const, DEFAULTS.taskReview),
     mode: oneOf('mode', ['direct', 'full'] as const, DEFAULTS.mode),
     superpowers: oneOf('superpowers', ['off', 'on'] as const, DEFAULTS.superpowers),
+    intake: oneOf('intake', ['auto', 'quick'] as const, DEFAULTS.intake),
     queue: queueOf(raw['queue'], problems),
     queueLabel: queueLabelOf(raw['queueLabel'], problems),
   }
@@ -249,7 +251,7 @@ export function draftConfig(found: Found): { config: Config; sources: Record<str
   const make = found.makeTargets
   const npm = (name: string) => `npm run ${name}`
 
-  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'limits.parallel', 'runner', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'mode', 'superpowers', 'pushMain']) sources[key] = 'default'
+  for (const key of ['mainBranch', 'branch', 'protectedPaths', 'models', 'limits.silentMinutes', 'limits.taskMinutes', 'limits.itemTokens', 'limits.parallel', 'runner', 'afterMerge', 'retain', 'notify', 'renameSession', 'taskReview', 'mode', 'superpowers', 'intake', 'pushMain']) sources[key] = 'default'
 
   const fast = ['check:fast', 'lint:fast'].find(n => n in scripts)
   if (fast) {

@@ -42,7 +42,7 @@ const VALID = JSON.stringify({ version: 1, mainBranch: 'main', branch: 'pipeline
 
 test('the tool description fits the 4096 characters the host gives the model before tool search', () => {
   expect(TOOL_DESCRIPTION.length).toBeLessThanOrEqual(4096)
-  for (const action of ['get', 'add', 'begin', 'ship', 'gate', 'merge', 'close', 'adopt', 'plan', 'brief', 'accept', 'ledger', 'remove', 'spec', 'question']) expect(TOOL_DESCRIPTION).toContain('`' + action + '`')
+  for (const action of ['get', 'add', 'begin', 'ship', 'gate', 'merge', 'close', 'adopt', 'plan', 'brief', 'accept', 'ledger', 'remove', 'spec', 'question', 'answer']) expect(TOOL_DESCRIPTION).toContain('`' + action + '`')
 })
 
 test('a project without docs/pipeline registers the command and leaves config null', async ($, on) => {

@@ -18,6 +18,9 @@ export default {
     expect(made.title === TASK.title, `issue ${added} has the title "${made.title}"`)
     expect(labelsOf(made).includes('pipeline'), `issue ${added} has no queue label`)
     expect(made.comments.some(c => c.body.includes('<!-- pipeline:spec -->') && /shout/i.test(c.body)), `issue ${added} has no spec comment about shout`)
+    // A clear request stays the quick path under intake: auto too: no question, and one line back.
+    expect(!results.some(r => r.input.action === 'question') && !labelsOf(made).includes('pipeline:needs-info'), `the intake asked about a clear request: ${final.slice(0, 300)}`)
+    expect(/open: none/.test(final), `the intake did not answer "open: none": ${final.slice(0, 300)}`)
     expect(!results.some(r => ['begin', 'ship', 'plan', 'start'].includes(r.input.action)), 'the intake started the build')
     expect(!git(['ls-remote', '--heads', 'origin', `feat/${added}`]), `a branch feat/${added} was pushed`)
 

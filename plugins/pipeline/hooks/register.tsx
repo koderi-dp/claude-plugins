@@ -12,7 +12,7 @@ import type { Places } from './files'
 import * as tracker from './tracker'
 import { DECLINED_MARK, QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
-import { EMPTY_EXTRAS, applyOps, extrasOf, isTrusted, issueBodyOf, labelsOf, needsOf, specFromIssue, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
+import { EMPTY_EXTRAS, applyOps, extrasOf, isAnswered, isTrusted, issueBodyOf, labelsOf, needsOf, specFromIssue, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
 import type { Extras, Leftover, Op } from './queue'
 import { ledgerText, mergeLedger, emptyLedger, repairResume, shapeSet } from './ledger'
 import { briefPaths, checkPlan, commitArgs, parsePlan, renderBrief, riskyMatches, section, splitAttribution } from './plan'
@@ -38,7 +38,7 @@ const PANE = 'pipeline'
 const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `discuss`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
 const USAGE =
   'pipeline: status [id] | panel | config [key=value] | init | add <text> | discuss <text or id> | next | run <id> | run all | migrate | migrate github | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
-const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'mode', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers', 'pushMain', 'queue', 'queueLabel']
+const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'mode', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers', 'intake', 'pushMain', 'queue', 'queueLabel']
 const CONFIG_FILE = 'docs/pipeline/config.json'
 const BACKLOG_FILE = 'docs/pipeline/backlog.json'
 const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
@@ -65,12 +65,12 @@ export const TOOL_DESCRIPTION =
   'Mode full (the default): `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks and commits the plan, or answers the format or the problems. `brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch and answers the Agent call to make; a review the config does not ask for answers `no review`. `accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } accepts the task, commits the records, pushes and answers the next Agent call. ' +
   '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate? }, blockers?: [text], pr?, branch?, worktree?, base?, <other key>?: value | null } } merges into the ledger; a wrong shape is refused and nothing is written; null removes a key. ' +
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain lets go and deletes nothing. A file that does not parse is refused with its line and left alone. ' +
-  'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12); never edit an issue with gh yourself. `add` opens an issue, `spec` { id, text } posts or replaces its spec comment, `question` { id, text } asks on the issue and holds the item, `update` with set { title?, body?, needs? } rewrites the text of the issue and keeps its Needs: line unless needs is given, `remove` { id, text } closes it as not planned with the reason on it, `adopt` creates the issue and adds Closes #<issue> to the PR, `init` { queue: "github" } sets it up, `move` is refused. `migrate-github` { apply? } drafts, and with apply makes, the move of a file backlog onto issues.'
+  'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12); never edit an issue with gh yourself. `add` opens an issue, `spec` { id, text } posts or replaces its spec comment, `question` { id, text } asks on the issue and holds the item, `answer` { id, text } writes what the user answered there and ends the hold, `update` with set { title?, body?, needs? } rewrites the text of the issue and keeps its Needs: line unless needs is given, `remove` { id, text } closes it as not planned with the reason on it, `adopt` creates the issue and adds Closes #<issue> to the PR, `init` { queue: "github" } sets it up, `move` is refused. `migrate-github` { apply? } drafts, and with apply makes, the move of a file backlog onto issues.'
 
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'pr', 'adopt', 'ship', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
+    action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'answer', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'pr', 'adopt', 'ship', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
     id: { type: 'string', description: 'The item id, as p12. For get: add that item in full.' },
     item: {
       type: ['object', 'string'],
@@ -106,7 +106,7 @@ const TOOL_SCHEMA = {
     attribution: { type: 'string', description: 'For plan, brief or ship: the attribution lines this session was given, copied as they are and one per line (the commit trailer and the pull request line), not a sentence about them. The tool ends commits with the git trailers and the pull request with the rest. Kept in the ledger, so once per item is enough.' },
     escalate: { type: 'boolean', description: 'For an implementer or fix brief: dispatch at config.models.escalate.' },
     rules: { type: 'array', description: 'For migrate-apply: the corrected rules, each { group, line, source }.', items: { type: 'object' } },
-    text: { type: 'string', description: 'For spec and for add: the spec, with the template\'s headings (add writes and links it). For question: the question to ask on the issue. For remove with queue: github: why the issue is not planned.' },
+    text: { type: 'string', description: 'For spec and for add: the spec, with the template\'s headings (add writes and links it). For question: the question to ask on the issue. For answer: what the user answered in the session, in their words. For remove with queue: github: why the issue is not planned.' },
     message: { type: 'string', description: 'For ship: the commit message for what is not committed yet.' },
     next: { type: 'boolean', description: 'For ship: also begin the next ready item and answer it (run all).' },
     title: { type: 'string', description: 'For pr and ship: the pull request title; default the item\'s.' },
@@ -192,7 +192,7 @@ const DISCUSS_PROMPT = (text: string) =>
   `Use the pipeline-discuss skill for this: "${text}". First tool call: ${call({ action: 'get', titles: true })} (is it an item already, or a new request). Then ask me about it one question at a time, show me the spec, and save it once I agree. Never start the build.`
 
 const INTAKE_PROMPT = (text: string) =>
-  `Use the pipeline-intake skill for this request: "${text}". First tool call: ${call({ action: 'get', titles: true })} (the duplicate check: every item as id, status and title). Then add the item and write its spec as the skill says, and answer in one line. Never start the build.`
+  `Use the pipeline-intake skill for this request: "${text}". First tool call: ${call({ action: 'get', titles: true })} (the duplicate check: every item as id, status and title). Then add the item and write its spec as the skill says, and answer in one line (a thin request: with its first question, as the skill says). Never start the build.`
 
 const RUN_PROMPT = (target: string) =>
   `Use the pipeline-run skill. First tool call: ${call({ action: 'get' })}. Then ${target === 'all' ? 'run ready items until none is left' : target ? `run item ${target}` : 'run the first ready item'} as the skill says, from pick to merge, one line per turn.`
@@ -671,6 +671,27 @@ async function questionIssue($: EngineInterface, found: string, c: Config | null
 }
 
 /**
+ * `answer`: what the user said in the session, written on the issue as a plain comment by the gh user. That is the
+ * same thing that ends the hold when the author answers on GitHub, so the question and its answer are both on the
+ * issue, the only record the item has.
+ */
+async function answerIssue($: EngineInterface, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
+  const answer = typeof e.text === 'string' ? e.text.trim() : ''
+  if (!answer) throw new Refused('answer needs text')
+  const issue = (await readCache($, found))?.issues.find(i => String(i.number) === id) ?? self.queue?.issues.find(i => String(i.number) === id)
+  if (!issue) throw new Refused(`no issue ${id} in the queue`)
+  const needsInfo = labelsOf(labelOf(c)).needsInfo
+  if (!issue.labels.includes(needsInfo) || isAnswered(issue, self.me)) throw new Refused(`${id} has no open question`)
+  const posted = `Answered in the session: ${answer}`
+  const r = await tracker.comment(ghRun($, found), Number(id), posted)
+  if (!r.ok) throw new Refused(r.error)
+  const at = await nowIso($)
+  await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: [...i.comments, { id: r.value, author: self.me, association: '', body: posted, at }] } : i)))
+  await pushOps($, found, c, [{ kind: 'edit', id, add: [], remove: [needsInfo] }])
+  return `${id} · ${await issueState($, found, id, 'ready')} · answer on the issue`
+}
+
+/**
  * `remove` with queue: github: the issue is closed as not planned, with the reason written on it as a marked comment.
  * Refused for an item being built or in review, and without a reason. The state labels go, the queue label stays as
  * the record that it was asked for here.
@@ -1031,7 +1052,7 @@ async function markDelivered($: EngineInterface): Promise<void> {
 }
 
 /** The actions that change the backlog or a ledger: each runs alone across every session on the repository. */
-const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'pr', 'adopt', 'start', 'stop', 'init', 'migrate-apply', 'migrate-github', 'spec', 'question'])
+const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'pr', 'adopt', 'start', 'stop', 'init', 'migrate-apply', 'migrate-github', 'spec', 'question', 'answer'])
 const LOCK_WAIT_MS = 250
 const LOCK_TRIES = 120
 
@@ -1366,10 +1387,11 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       return writeLine($, found, updateItem(current, id, { status: 'inbox' }, now), id, state => `${id} · ${state}`)
     }
     case 'spec':
-    case 'question': {
+    case 'question':
+    case 'answer': {
       if (!isGithub(c)) throw new Refused(`${e.action} is for queue: github; with queue: file the spec is a file and a question its Open section`)
       const id = need(e.id)
-      return e.action === 'spec' ? specIssue($, found, id, e) : questionIssue($, found, c, id, e)
+      return e.action === 'spec' ? specIssue($, found, id, e) : e.action === 'question' ? questionIssue($, found, c, id, e) : answerIssue($, found, c, id, e)
     }
     default:
       throw new Refused(`unknown action "${String(e.action)}"`)

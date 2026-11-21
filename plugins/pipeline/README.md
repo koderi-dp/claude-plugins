@@ -56,7 +56,7 @@ By default you merge the pull request yourself (`merge: pr`). With `merge: auto`
 | `/pipeline init` | Config and an empty backlog for a new project, or the config and the labels when you ask for GitHub issues as the queue; offers `migrate` when the project has a queue |
 | `/pipeline migrate` | Move an existing project onto the pipeline (below) |
 | `/pipeline migrate github` | Move a project that already has a file backlog onto GitHub issues (below) |
-| `/pipeline add <text>` | Intake: an item and its spec, in one line back; never starts the build |
+| `/pipeline add <text>` | Intake: an item and its spec, in one line back; never starts the build. A request that leaves two or more points open is recorded and then talked through, one question at a time (`intake: quick` in the config turns that off) |
 | `/pipeline adopt <pr>` | Make an item of a pull request that was opened without one: the item is created from its title and text, set to review with the branch and the pull request on record, and ended by `merge` or a merge by hand like any other |
 | `/pipeline discuss <text or id>` | The slow intake: asks you a few questions one at a time, shows the spec, saves it once you agree; for a new request or an existing item |
 | `/pipeline next` | Run the first ready item (under `runner: session`, start its child session) |
@@ -132,7 +132,7 @@ The statuses are those of the loop, read from the issue:
 | A pull request opened without an issue | `/pipeline adopt <pr>` creates the labelled issue from the pull request's title and text, adds `Closes #<issue>` to the pull request and sets the item to review |
 | `remove` | The tool's `remove` with `text` closes the issue as "not planned" and writes the reason on it as a comment; refused without a reason and for an item being built or in review |
 
-The three state labels take their names from `queueLabel` and are created by `init`. `pipeline:needs-info` clears once the issue's author or the `gh` user has commented after the pipeline's last question.
+The three state labels take their names from `queueLabel` and are created by `init`. `pipeline:needs-info` clears once the issue's author or the `gh` user has commented after the pipeline's last question. An answer you give in the session is written there by the tool's `answer` action, as a comment that starts with `Answered in the session:`, so the question and its answer are both on the issue.
 
 The spec lives on the issue as one comment the tool writes and edits in place, found by the hidden marker `<!-- pipeline:spec -->` on its first line. Its first visible line is the status line (the state, the task counter while building, the block reason, the PR), then the acceptance list, then What, Why and Out of scope folded under a Spec heading. The tool posts no other comment except a question, which starts with `<!-- pipeline:question -->` and notifies the author, and the reason an issue was closed as not planned, which starts with `<!-- pipeline:declined -->`. The issue's body is never edited. A spec comment counts only when the `gh` user or an owner, member or collaborator of the repository wrote it, and only the comments of the issue's author and of the `gh` user reach the lead, inside a block that marks them as quoted text and not as instructions; subagents never see the issue.
 
@@ -179,6 +179,7 @@ The limits of this mode: issues have no order of their own, so the oldest ready 
 | `afterMerge` | `["docs/pipeline/BACKLOG.md"]` | Paths to regenerate, commands to run or skills to invoke after a merge |
 | `pushMain` | `true` | Whether `close` pushes the commit of `docs/pipeline/` to `mainBranch`; `false` leaves it local for you to push |
 | `superpowers` | `off` | `off`: the lead and every brief use the pipeline's own process and invoke no superpowers skill, even when the plugin is installed; `on`: testing and debugging skills may be used inside a step |
+| `intake` | `auto` | What the intake does with a thin request, one that leaves two or more points open: `auto` records the item with its open points, asks the first question at once and talks the rest through one question per turn, saving the spec after your yes; the item waits until then, so it is not built on a guess. `quick` asks one question at most and decides the rest itself. A clear request is one line back under both. `/pipeline config intake=quick` |
 | `retain` | `plans` true, `briefs` false, `superpowers` false | What stays after an item merges; the spec and the ledger always stay |
 | `notify` | `milestones` | `off`, `milestones` (started, PR open, merged, blocked, a watchdog signal) or `all` |
 | `queue` | `file` | `file` keeps the backlog in `docs/pipeline`; `github` makes the labelled open issues the backlog (above) |
@@ -235,7 +236,7 @@ The run skill calls `get` once per item and after a restart, `signals` for watch
 
 ## The skills
 
-- `pipeline-intake`: a request in any wording becomes an item and a spec; at most one question, never a build.
+- `pipeline-intake`: a request in any wording becomes an item and a spec; one question at most for a clear request, a thin one is talked through under `intake: auto`; never a build.
 - `pipeline-discuss`: the interview before a spec; loads only on `/pipeline discuss` or when you ask to talk an item through.
 - `pipeline-run`: one item from pick to merge, with the plan format, briefs rendered by the tool, the ledger and one line per turn; resumes from the ledger's `resume` block after a restart.
 - `pipeline-init`: sets a new project up: config fitted to its scripts and layout, an empty backlog, a rules.md; hands over to migrate when a queue exists. Also reachable as the `/pipeline-init` skill when the `/pipeline` command is not listed.
@@ -270,7 +271,7 @@ Three kinds of test, from the repository root:
 | --- | --- | --- |
 | Unit | `claude plugin test plugins/pipeline` | Mocks only; about 20 seconds |
 | End to end, tool scenarios | `just e2e` | Real GitHub: the sandbox repository, real pull requests, CI and merges; a few minutes |
-| End to end, every scenario | `just e2e all` | The same, plus the scenarios where a model does the work (`intake`, `next` in mode direct, `next-full` in mode full with subagents) |
+| End to end, every scenario | `just e2e all` | The same, plus the scenarios where a model does the work (`intake`, `intake-thin`, `next` in mode direct, `next-full` in mode full with subagents) |
 
 `just e2e list` names the scenarios, and `just e2e adopt ship` runs the named ones. Each scenario is one file in `e2e/scenarios/`; `e2e/lib.mjs` holds the helpers. A run clones the sandbox into `target/e2e/` (ignored by git), loads this folder with `--plugin-dir` into headless `claude -p` sessions, calls the real tool and checks the result on GitHub with `gh`. Everything it opens is titled `[e2e]` and closed at the end of the run or at the start of the next one. It needs `claude` and `gh` logged in. `PIPELINE_E2E_REPO` names another sandbox (default `koderi-dp/pipeline-sandbox`); the sandbox needs `queue: github`, `merge: auto`, no `mode` in its config (so the plugin's default applies) and a CI workflow that ignores `docs/**`. A scenario that needs another setting, such as `mode: direct` or cheaper models, changes the config in its own checkout only.
 

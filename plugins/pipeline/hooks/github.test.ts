@@ -177,6 +177,30 @@ test('question posts the marked comment and labels the issue; an answer by the a
   expect(gh.issues[0]!.labels).toEqual(['pipeline'])
 })
 
+test('answer writes what the user said in the session on the issue, and the item is no longer held', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH })
+  const gh: GhState = { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('200')] })] }
+  const runs = ghWorld(on, gh)
+  await call($, { action: 'question', id: '2', text: 'Which columns?' })
+  expect(text(await call($, { action: 'answer', id: '2', text: 'All of them, in the order of the list.' }))).toBe('2 · ready · answer on the issue')
+  // A plain comment by the gh user: the same thing that lifts the hold when the author answers on GitHub.
+  expect(has(runs, api('POST', 'issues/2/comments', 'body=Answered in the session: All of them, in the order of the list.'))).toBe(true)
+  expect(has(runs, api('DELETE', 'issues/2/labels/pipeline%3Aneeds-info'))).toBe(true)
+  expect(gh.issues[0]!.labels).toEqual(['pipeline'])
+  expect((await json($, { action: 'get', id: '2' }))['item']).toMatchObject({ status: 'ready' })
+})
+
+test('answer is refused without text, on an issue with no open question, and with the file queue', async ($, on) => {
+  const { files } = world(on, { [CONFIG]: CONFIG_GH })
+  const runs = ghWorld(on, { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('200')] })] })
+  expect(text(await call($, { action: 'answer', id: '2', text: 'All of them.' }))).toBe('refused: 2 has no open question')
+  await call($, { action: 'question', id: '2', text: 'Which columns?' })
+  expect(text(await call($, { action: 'answer', id: '2', text: ' ' }))).toBe('refused: answer needs text')
+  expect(runs.filter(isComment).length).toBe(1)
+  files.set(CONFIG, VALID_CONFIG)
+  expect(text(await call($, { action: 'answer', id: 'p2', text: 'All of them.' }))).toMatch(/^refused: answer is for queue: github/)
+})
+
 test('update to blocked adds the label and rewrites the status line with the note', async ($, on) => {
   const { files } = world(on, { [CONFIG]: CONFIG_GH })
   const runs = ghWorld(on, { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('200')] })] })

@@ -19,8 +19,8 @@ export type SlimInput = {
 /** How many queue items `next` names. */
 export const NEXT = 3
 
-/** The keys of the config the run skill reads; the rest (stop, afterMerge, retain, notify…) is read from the file when needed. */
-const CONFIG_KEYS = ['runner', 'merge', 'mergeMethod', 'checks', 'limits', 'riskyPaths', 'protectedPaths', 'models', 'taskReview', 'mode', 'superpowers'] as const
+/** The keys of the config the run and intake skills read; the rest (stop, afterMerge, retain, notify…) is read from the file when needed. */
+const CONFIG_KEYS = ['runner', 'merge', 'mergeMethod', 'checks', 'limits', 'riskyPaths', 'protectedPaths', 'models', 'taskReview', 'mode', 'superpowers', 'intake'] as const
 
 /**
  * The default `get` answer: the active item with its branch and worktree, its resume block, the open signals, the

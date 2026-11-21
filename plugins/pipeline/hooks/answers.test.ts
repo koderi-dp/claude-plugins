@@ -7,6 +7,11 @@ import { DEFAULTS } from './config'
 
 const input = (queue: 'file' | 'github') => ({ config: { ...DEFAULTS, queue, queueLabel: 'factory' }, backlog: null, readiness: {}, active: null, ledger: null, signals: [], children: [], siblings: [] })
 
+test('get carries the intake setting, which the intake skill reads from its first call', () => {
+  expect(slimGet(input('file')).config).toMatchObject({ intake: 'auto' })
+  expect(slimGet({ ...input('file'), config: { ...DEFAULTS, intake: 'quick' } }).config).toMatchObject({ intake: 'quick' })
+})
+
 test('get carries queue and queueLabel in github mode only', () => {
   expect(slimGet(input('github')).config).toMatchObject({ queue: 'github', queueLabel: 'factory' })
   const file = slimGet(input('file')).config as Record<string, unknown>

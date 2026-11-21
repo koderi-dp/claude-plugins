@@ -260,6 +260,18 @@ test('taskReview: risky by default, always and off kept, anything else named wit
   expect(draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: [], prose: [] }).config.taskReview).toBe('risky')
 })
 
+test('intake: auto by default, quick kept, anything else named with the allowed values', () => {
+  expect(DEFAULTS.intake).toBe('auto')
+  expect(normalizeConfig({}).config.intake).toBe('auto')
+  expect(normalizeConfig({ intake: 'quick' })).toMatchObject({ config: { intake: 'quick' }, problems: [] })
+  const wrong = normalizeConfig({ intake: 'always' })
+  expect(wrong.problems).toEqual(['intake: expected "auto" or "quick", got "always"'])
+  expect(wrong.config.intake).toBe('auto')
+  const draft = draftConfig({ scripts: {}, makeTargets: [], ci: '', dirs: [], prose: [] })
+  expect(draft.config.intake).toBe('auto')
+  expect(draft.sources['intake']).toBe('default')
+})
+
 test('queue and queueLabel: defaults, a wrong value named and the default used', () => {
   expect(normalizeConfig({}).config.queue).toBe('file')
   expect(normalizeConfig({}).config.queueLabel).toBe('pipeline')

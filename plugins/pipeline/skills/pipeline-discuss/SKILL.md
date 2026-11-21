@@ -5,7 +5,7 @@ description: Use on /pipeline discuss <text or id>, or when the user asks to tal
 
 # pipeline-discuss
 
-The slow intake: the user is here and wants the spec right before anything is built. `pipeline-intake` is the quick one (no questions); this one asks. The result is the same: an item with a spec of five headings (`templates/spec.md` in this plugin: What, Why, Acceptance, Out of scope, Open).
+The slow intake: the user is here and wants the spec right before anything is built. `pipeline-intake` is the quick one (one question at most, and under `intake: auto` it hands a thin request over to the steps here, from step 3); this one asks. The result is the same: an item with a spec of five headings (`templates/spec.md` in this plugin: What, Why, Acceptance, Out of scope, Open).
 
 ## Steps
 
@@ -16,7 +16,7 @@ The slow intake: the user is here and wants the spec right before anything is bu
 5. **Show the spec and wait.** The five headings, short: Acceptance as lines that can be checked against the merged code, Out of scope naming what the user might expect and will not get, Open empty. The user approves it or corrects it; apply corrections and show only what changed.
 6. **Save after the yes.**
    - New item: `{ "action": "add", "item": { "title", "size", "needs", "source", "note" }, "text": "<the spec>" }`. `source` quotes the user with the date.
-   - Existing item under `"queue": "github"`: `{ "action": "spec", "id": "<id>", "text": "<the spec>" }`, and `update` with `set: { "title" }` when the title changed.
+   - Existing item under `"queue": "github"`: `{ "action": "spec", "id": "<id>", "text": "<the spec>" }`, and `update` with `set: { "title" }` when the title changed. When a question on the issue was holding the item and the user has answered it here, end the hold after the `spec`: `{ "action": "answer", "id": "<id>", "text": "<what the user decided, in a sentence or two>" }`.
    - Existing item with a file backlog: Write the spec to its `spec` path (`docs/pipeline/specs/<id>.md` when it has none, then `{ "action": "update", "id": "<id>", "set": { "spec": "docs/pipeline/specs/<id>.md" } }`).
 7. **Answer in one line:** `p12 added · M · needs none · open: none`, or `p12 spec updated · open: none`.
 

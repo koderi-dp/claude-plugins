@@ -464,7 +464,7 @@ test('0.2.2: get answers a slim compact JSON under 8,000 characters for a 71-ite
     { id: 'p6', title: expect.stringContaining('p6-slug'), size: 'L', spec: 'docs/pipeline/specs/p6.md', reason: 'ready' },
     { id: 'p7', title: expect.stringContaining('p7-slug'), size: 'S', spec: 'docs/pipeline/specs/p7.md', reason: 'ready' },
   ])
-  expect(Object.keys(got.config).sort()).toEqual(['checks', 'limits', 'merge', 'mergeMethod', 'mode', 'models', 'protectedPaths', 'riskyPaths', 'runner', 'superpowers', 'taskReview'])
+  expect(Object.keys(got.config).sort()).toEqual(['checks', 'intake', 'limits', 'merge', 'mergeMethod', 'mode', 'models', 'protectedPaths', 'riskyPaths', 'runner', 'superpowers', 'taskReview'])
   expect(got.config).toMatchObject({ runner: 'subagent', taskReview: 'risky', merge: 'pr', mergeMethod: 'merge', limits: { fixRounds: expect.any(Number), silentMinutes: expect.any(Number) }, models: { implementer: expect.any(Object), final: expect.any(Object) } })
   // The full answer is today's shape, pretty-printed.
   const all = JSON.parse(full)
