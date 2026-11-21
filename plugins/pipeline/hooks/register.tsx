@@ -208,6 +208,18 @@ const DIRECT_PROMPT = (answer: string, id: string, isAll: boolean) =>
   `It commits what is uncommitted, runs the gate, opens the pull request and, where the config says so, waits for CI, merges and closes. Its answer says what is next: a red gate or red CI means fix and ship again; "review first" means make the Agent call it names, then ship with "verdict"${isAll ? '; a next item in the answer is built the same way' : ''}. ` +
   `Never edit the backlog or ledger files yourself. End with one line saying where the item stands.`
 
+/**
+ * What the model is told when the command itself began the item under mode full: the item is claimed and named
+ * before the model's first word, and the skill drives from the plan on.
+ */
+const BEGUN_PROMPT = (answer: string, id: string, isAll: boolean) =>
+  `Use the pipeline-run skill. Pipeline item ${id} is already claimed for this session and its worktree is ready; do not call begin for it. The tool answered:
+
+${answer}
+
+` +
+  `First tool call: ${call({ action: 'get' })} (the config and the open signals). Then run item ${id} as the skill says, from the plan to the merge${isAll ? ', and after it the ready items until none is left' : ''}, one line per turn.`
+
 /** With runner session the lead only starts children: the mod's `start` does the worktree and the child does the rest. */
 const SESSION_RUN_PROMPT = (target: string) => {
   const what =
@@ -3432,6 +3444,9 @@ const NEEDS_TOOL = ['add', 'discuss', 'next', 'run', 'init', 'migrate']
 
 type CommandAnswer = { text?: string; context?: readonly string[] }
 
+/** What the command says at once when it began an item: the id and its title, before the model's first word. */
+const begunText = (b: { id: string; title: string }) => `pipeline: ${b.id}${b.title ? ` · ${b.title}` : ''} begun…`
+
 const ID = /^(?:[a-z][a-z0-9-]*|#?\d+)$/i
 /** An id as the tool takes it: `#12` is issue 12. */
 const idArg = (id: string) => id.replace(/^#(?=\d+$)/, '')
@@ -3486,13 +3501,13 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
       return prompt(`pipeline: discussing "${arg}"…`, DISCUSS_PROMPT(arg))
     case 'next': {
       const begun = await beginInCode($, '')
-      if (begun) return 'refused' in begun ? { text: `pipeline: ${begun.refused}` } : prompt(`pipeline: ${begun.id} begun…`, DIRECT_PROMPT(begun.answer, begun.id, false))
+      if (begun) return 'refused' in begun ? { text: `pipeline: ${begun.refused}` } : prompt(begunText(begun), (begun.isDirect ? DIRECT_PROMPT : BEGUN_PROMPT)(begun.answer, begun.id, false))
       return prompt('pipeline: running the first ready item…', (await isSessionRunner($)) ? SESSION_RUN_PROMPT('') : RUN_PROMPT(''))
     }
     case 'run': {
       if (!arg || (arg !== 'all' && !ID.test(arg))) return { text: 'pipeline: run needs an id or all, as /pipeline run p12' }
       const begun = await beginInCode($, arg === 'all' ? '' : arg)
-      if (begun) return 'refused' in begun ? { text: `pipeline: ${begun.refused}` } : prompt(`pipeline: ${begun.id} begun…`, DIRECT_PROMPT(begun.answer, begun.id, arg === 'all'))
+      if (begun) return 'refused' in begun ? { text: `pipeline: ${begun.refused}` } : prompt(begunText(begun), (begun.isDirect ? DIRECT_PROMPT : BEGUN_PROMPT)(begun.answer, begun.id, arg === 'all'))
       return prompt(arg === 'all' ? 'pipeline: running until nothing is ready…' : `pipeline: running ${arg}…`, (await isSessionRunner($)) ? SESSION_RUN_PROMPT(arg) : RUN_PROMPT(arg))
     }
     case 'stop':
@@ -3531,21 +3546,24 @@ async function isIssueQueue($: EngineInterface): Promise<boolean> {
 
 /** Whether the config on disk says `runner: session`, so the commands hand the model the start prompt. */
 /**
- * Mode direct with the in-session runner: the command claims the item itself, before the model runs, so the model
- * starts with the spec in hand. Answers null when the skill should drive instead (mode full, the session runner,
- * an item whose ledger already has tasks), and the refusal when nothing can be begun.
+ * With the in-session runner the command claims the item itself, before the model runs: the user sees which item
+ * was picked and the session carries its name at once, and under mode direct the model starts with the spec in hand.
+ * Answers null when the skill should drive from its own `get` (the session runner, an item whose ledger already
+ * has tasks), and the refusal when nothing can be begun.
  */
-async function beginInCode($: EngineInterface, target: string): Promise<{ id: string; answer: string } | { refused: string } | null> {
+async function beginInCode($: EngineInterface, target: string): Promise<{ id: string; title: string; answer: string; isDirect: boolean } | { refused: string } | null> {
   try {
     const found = (await read($, root)) || (await resolveRoot($))
     const { config: c, backlog: b } = await loadAll($, found)
     const cfg = normalizeConfig(c ?? DEFAULTS).config
-    if (!c || cfg.mode !== 'direct' || cfg.runner === 'session') return null
+    if (!c || cfg.runner === 'session') return null
     // An item this session already runs is resumed, not passed over for the next ready one.
     const id = target || (await activeItem($, b))?.id || ''
     if (id && ((await loadLedger($, found, id))?.tasks.length ?? 0) > 0) return null
     const answer = await runTool($, { action: 'begin', ...(id ? { item: id } : {}) })
-    return { id: answer.split(' · ')[0] ?? id, answer }
+    const begun = answer.split(' · ')[0] ?? id
+    const title = (await loadAll($, found)).backlog?.items.find(i => i.id === begun)?.title ?? ''
+    return { id: begun, title, answer, isDirect: cfg.mode === 'direct' }
   } catch (err) {
     const said = err instanceof Error ? err.message : String(err)
     // Nothing to begin, or the item is someone else's: said at once. Anything else (an item that still needs its

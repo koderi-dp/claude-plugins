@@ -314,8 +314,8 @@ test('/pipeline run 12 and /pipeline run #12 reach the tool with id 12', async (
     for (let i = 0; i < 5; i++) await Promise.resolve()
     return answer
   }
-  expect((await run('run 12')).text).toBe('pipeline: 12 begun…')
-  expect((await run('run #12')).text).toBe('pipeline: 12 begun…')
+  expect((await run('run 12')).text).toBe('pipeline: 12 · Export begun…')
+  expect((await run('run #12')).text).toBe('pipeline: 12 · Export begun…')
   expect(submitted.length).toBe(2)
   for (const s of submitted) {
     expect(s).toContain('Pipeline item 12 is claimed for this session')

@@ -542,3 +542,16 @@ test('runner subagent: next and run keep the in-session prompt', async ($, on) =
   expect(submitted[0]).not.toContain('pipeline-run skill')
   expect(submitted[0]).not.toContain('"start"')
 })
+
+test('0.6.4: mode full: next begins the item itself, so the picked item is said before the model runs', async ($, on) => {
+  const { clock, submitted } = world(on, { [CONFIG]: config({ runner: 'subagent', mode: 'full' }), [BACKLOG]: READY, ...SPECS })
+  await start($)
+  const answer = (await $.command.run({ command: 'pipeline', args: 'next', origin: { kind: 'composer' } } as never)) as { text?: string }
+  await clock.advance(100)
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  expect(answer.text).toMatch(/^pipeline: p12 · .+ begun…$/)
+  expect(submitted[0]).toContain('Use the pipeline-run skill. Pipeline item p12 is already claimed for this session')
+  expect(submitted[0]).toContain('p12 · planning')
+  expect(submitted[0]).toContain('do not call begin')
+  expect(submitted[0]).not.toContain('"action":"ship"')
+})
