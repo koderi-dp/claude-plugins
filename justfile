@@ -3,7 +3,7 @@
 
 set windows-shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]
 
-marketplace := "code101-plugins"
+marketplace := "koderi-plugins"
 
 # List recipes
 default:

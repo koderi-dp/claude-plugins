@@ -13,21 +13,21 @@ claude plugin marketplace add koderi-dp/claude-plugins
 ```
 
 ```powershell
-claude plugin install pipeline@code101-plugins
+claude plugin install pipeline@koderi-plugins
 ```
 
-Then start a new session. The same two steps work at the prompt of a terminal session as `/plugin marketplace add koderi-dp/claude-plugins` and `/plugin install pipeline@code101-plugins`.
+Then start a new session. The same two steps work at the prompt of a terminal session as `/plugin marketplace add koderi-dp/claude-plugins` and `/plugin install pipeline@koderi-plugins`.
 
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
 
 ## Update
 
 ```powershell
-claude plugin marketplace update code101-plugins
+claude plugin marketplace update koderi-plugins
 ```
 
 ```powershell
-claude plugin update pipeline@code101-plugins
+claude plugin update pipeline@koderi-plugins
 ```
 
 Then start a new session (or run `/reload-plugins`). `claude plugin list` shows the installed version.
@@ -35,7 +35,7 @@ Then start a new session (or run `/reload-plugins`). `claude plugin list` shows 
 ## Uninstall
 
 ```powershell
-claude plugin uninstall pipeline@code101-plugins
+claude plugin uninstall pipeline@koderi-plugins
 ```
 
 ## Quick start

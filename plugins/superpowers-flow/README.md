@@ -16,18 +16,18 @@ claude plugin marketplace add koderi-dp/claude-plugins
 ```
 
 ```powershell
-claude plugin install superpowers-flow@code101-plugins
+claude plugin install superpowers-flow@koderi-plugins
 ```
 
-At a terminal session's prompt: `/plugin marketplace add koderi-dp/claude-plugins`, then `/plugin install superpowers-flow@code101-plugins`. In the desktop app: + next to the prompt box, Plugins, Add marketplace `koderi-dp/claude-plugins`, then Add plugin.
+At a terminal session's prompt: `/plugin marketplace add koderi-dp/claude-plugins`, then `/plugin install superpowers-flow@koderi-plugins`. In the desktop app: + next to the prompt box, Plugins, Add marketplace `koderi-dp/claude-plugins`, then Add plugin.
 
 If savvy-progress or session-band is installed, disable it: this plugin draws what both do.
 
 ## Update
 
 ```bash
-claude plugin marketplace update code101-plugins
-claude plugin update superpowers-flow@code101-plugins
+claude plugin marketplace update koderi-plugins
+claude plugin update superpowers-flow@koderi-plugins
 ```
 
 Then start a new session (or run `/reload-plugins`). `claude plugin list` shows the installed version. In the desktop app, update from the Plugins menu.
@@ -146,7 +146,7 @@ On a machine without the desktop app, put settings in `~/.claude/settings.json`:
 ```json
 {
   "pluginConfigs": {
-    "superpowers-flow@code101-plugins": {
+    "superpowers-flow@koderi-plugins": {
       "options": { "profile": "balanced", "mediumModel": "sonnet", "notify": "milestones" }
     }
   }

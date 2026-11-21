@@ -1,6 +1,6 @@
 # claude-plugins
 
-Claude Code plugins. This repository is a plugin marketplace named `code101-plugins`.
+Claude Code plugins. This repository is a plugin marketplace named `koderi-plugins`.
 
 | Plugin | What it does | Runs on |
 | --- | --- | --- |
@@ -17,21 +17,21 @@ claude plugin marketplace add koderi-dp/claude-plugins
 ```
 
 ```powershell
-claude plugin install superpowers-flow@code101-plugins
+claude plugin install superpowers-flow@koderi-plugins
 ```
 
-Replace `superpowers-flow` with any plugin name from the table. The same two steps work at the prompt of a terminal session as `/plugin marketplace add koderi-dp/claude-plugins` and `/plugin install superpowers-flow@code101-plugins`.
+Replace `superpowers-flow` with any plugin name from the table. The same two steps work at the prompt of a terminal session as `/plugin marketplace add koderi-dp/claude-plugins` and `/plugin install superpowers-flow@koderi-plugins`.
 
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `koderi-dp/claude-plugins`, then Add plugin.
 
 To pick up new releases later:
 
 ```powershell
-claude plugin marketplace update code101-plugins
+claude plugin marketplace update koderi-plugins
 ```
 
 ```powershell
-claude plugin update superpowers-flow@code101-plugins
+claude plugin update superpowers-flow@koderi-plugins
 ```
 
 ## Layout
