@@ -2,8 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { BLOCKED, DONE, OVERVIEW_ROWS, ROWS_SHOWN, RUNNING } from './pane'
-import { CAPTION_H, TAB_UNDERLINE_H, bandSvg, bandText, tabWidth } from './draw'
-import { BAND_COLORS, SEGMENT_COLORS, bandOf } from './status'
+import { CAPTION_H, TAB_UNDERLINE_H, bandSvg, bandText, tabWidth } from '../../core/draw'
+import { BAND_COLORS, SEGMENT_COLORS, bandOf } from '../../core/status'
 
 const MAIN = '/p/main'
 const DIR = `${MAIN}/docs/pipeline`

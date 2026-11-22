@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { isCall, restGithub } from './fixtures/github'
+import { isCall, restGithub } from '../../core/fixtures/github'
 
 const TOOL = 'mcp__pipeline__pipeline'
 const MAIN = '/p/main'

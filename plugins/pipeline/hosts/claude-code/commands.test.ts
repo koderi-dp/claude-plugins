@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { parseValue, setPath } from './register'
+import { parseValue, setPath } from '../../core/engine'
 
 const TOOL = 'mcp__pipeline__pipeline'
 const MAIN = '/p/main'

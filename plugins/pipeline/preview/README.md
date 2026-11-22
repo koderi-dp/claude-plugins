@@ -3,7 +3,7 @@
 Renders the panel's states (idle, running, fixRound, queue, history, runningOpen with Recent activity open, runningCompact under `tasks: compact`) with dummy data through the same
 `renderPanel`, `draw.ts` and `status.ts` the plugin runs, to HTML and PNG, so the panel can be reviewed from
 screenshots outside the desktop app. The plugin does not load this folder: `hooks/hooks.json` names only
-`register.tsx`, and the engine loads only what that module imports.
+`hosts/claude-code/register.tsx`, and the engine loads only what that module imports.
 
 From the repository root, with the global `tsc` and `playwright` this machine has (no npm install):
 
@@ -17,7 +17,7 @@ The pages and screenshots land in `plugins/pipeline/preview/out/` (ignored by gi
 panel, the idle strip.
 
 - `fixtures.ts`: the `PanelInput` states.
-- `sheet.ts`: the `kit` page: every primitive of `hooks/ui/kit.ts` and every drawing of `hooks/draw.ts`, each tone and
+- `sheet.ts`: the `kit` page: every primitive of `core/ui/kit.ts` and every drawing of `core/draw.ts`, each tone and
   state, on one sheet. It is the reference for the look: check a new section against it.
 - `html.ts`: the element table (Box, Text, Button, Svg, Input, Link) as HTML, and the `h` factory the compiled JSX calls.
 - `render.ts`: the script; `env.d.ts` and `tsconfig.json` let `tsc` compile the pure modules outside the engine.

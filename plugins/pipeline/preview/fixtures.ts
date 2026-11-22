@@ -2,9 +2,9 @@
 // drawPane in register.tsx gathers it. Pure data; nothing here is loaded by the plugin.
 
 import type { AgentRun, Config, Item, Ledger, Panel, Sibling } from '../types'
-import { DEFAULTS } from '../hooks/config'
-import type { PanelInput } from '../hooks/pane'
-import type { Readiness } from '../hooks/backlog'
+import { DEFAULTS } from '../core/config'
+import type { PanelInput } from '../hosts/claude-code/pane'
+import type { Readiness } from '../core/backlog'
 
 export const NOW = Date.parse('2026-11-09T10:00:00Z')
 const MIN = 60_000

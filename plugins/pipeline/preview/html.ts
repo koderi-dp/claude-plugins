@@ -5,7 +5,7 @@
 type Props = Record<string, unknown>
 type Node = unknown
 
-import { cssOf } from '../hooks/ui/tokens'
+import { cssOf } from '../core/ui/tokens'
 
 const CELL = 8
 export const DIM = 'var(--dim)'

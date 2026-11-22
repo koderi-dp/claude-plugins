@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { TOOL_DESCRIPTION, errorLine } from './register'
+import { TOOL_DESCRIPTION, errorLine } from '../../core/engine'
 
 const MAIN = '/p/main'
 const WORKTREE = '/p/wt/task-7'

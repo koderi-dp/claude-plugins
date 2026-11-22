@@ -1,14 +1,14 @@
-// The kit sheet: every primitive of hooks/ui/kit.ts and every drawing of hooks/draw.ts on one page, each tone and
+// The kit sheet: every primitive of core/ui/kit.ts and every drawing of core/draw.ts on one page, each tone and
 // state, so the look is checked in one place and a new section is compared against it. Shot in both colour schemes.
 
-import { TAB_UNDERLINE_H, separatorSvg, tabUnderlineSvg, tabWidth } from '../hooks/draw'
+import { TAB_UNDERLINE_H, separatorSvg, tabUnderlineSvg, tabWidth } from '../core/draw'
 import { Box, Button, Svg, htmlOf } from './html'
-import { AGENT_CARD_H, BAND_COMPACT_H, BAND_H, CAPTION_H, MERGED_ROW_H, METRICS_H, ROW_H, SESSION_ROW_H, TASK_BAR_H, agentCardSvg, bandSvg, captionSvg, heroSvg, idleStripSvg, itemRowSvg, mergedRowSvg, metricsSvg, sessionRowSvg, taskBarSvg, taskRowSvg } from '../hooks/draw'
-import type { Band, TagKind, TaskRow } from '../hooks/status'
-import { BAND_COLORS } from '../hooks/status'
-import { BADGE_H, ICON_NAMES, badge, check, disc, divider, dot, frame, icon, progress, segments, separator, soft, surface, text } from '../hooks/ui/kit'
-import type { Role } from '../hooks/ui/tokens'
-import { DONE, RADIUS, SIZE, TONES, WEIGHT } from '../hooks/ui/tokens'
+import { AGENT_CARD_H, BAND_COMPACT_H, BAND_H, CAPTION_H, MERGED_ROW_H, METRICS_H, ROW_H, SESSION_ROW_H, TASK_BAR_H, agentCardSvg, bandSvg, captionSvg, heroSvg, idleStripSvg, itemRowSvg, mergedRowSvg, metricsSvg, sessionRowSvg, taskBarSvg, taskRowSvg } from '../core/draw'
+import type { Band, TagKind, TaskRow } from '../core/status'
+import { BAND_COLORS } from '../core/status'
+import { BADGE_H, ICON_NAMES, badge, check, disc, divider, dot, frame, icon, progress, segments, separator, soft, surface, text } from '../core/ui/kit'
+import type { Role } from '../core/ui/tokens'
+import { DONE, RADIUS, SIZE, TONES, WEIGHT } from '../core/ui/tokens'
 
 const label = (s: string): string => `<p class="label">${s}</p>`
 const block = (W: number, H: number, source: string): string => `<div class="svg" style="width:${W}px;height:${H}px">${source}</div>`

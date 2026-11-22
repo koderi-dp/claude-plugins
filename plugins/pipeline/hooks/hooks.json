@@ -1,1 +1,1 @@
-{ "modules": ["./register.tsx"] }
+{ "modules": ["../hosts/claude-code/register.tsx"] }

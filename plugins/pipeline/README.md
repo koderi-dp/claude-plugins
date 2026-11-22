@@ -270,7 +270,39 @@ The run skill calls `get` once per item and after a restart, `signals` for watch
 
 In the desktop app a panel shows the status block live: the active item with its task counter, the running agents with what each is doing in words and its minutes, open signals, the queue, blocked and inbox items, and what merged. Idle, it says so in one line (`idle · 28 inbox · next: p1 Grid row and column sizes`) and keeps the queue short: five rows each of Ready, Inbox and Merged this week with `and N more · /pipeline status` for the rest and a Show more button, the readiness reason on the first inbox item only, `Parked: 10` as a count, and a merged item's PR as its number, linked. A title migrated from a project's old queue (`grid-track-sizes — Grid row and column sizes`) is shown without its slug; the file and `/pipeline status <id>` keep it whole. The text block shows eight rows a section, every reason and the parked ids. It opens the first time a session starts in a project with a pipeline and when a subagent starts (`autoOpen` setting; `never` leaves it to `/pipeline panel`). While an item is building, a bar above the prompt counts accepted tasks over the total, with the running agent and its minutes. In a terminal the bar is text and `/pipeline status` is the panel; nothing is only in the panel.
 
-Look. The panel and the bar above the prompt are drawn from one kit. `hooks/ui/tokens.ts` holds every colour, radius, spacing step and type size, each colour with a light and a dark value: neutral surfaces, borders and greys, purple for what runs, green, amber and red for states. No drawing paints a background: every surface, border and bar track is a faint overlay (white on dark, black on light), so the drawings sit on whatever grey the app gives the panel. `hooks/ui/kit.ts` holds the drawn parts: text, surface, badge, dot, separator, progress bar, segmented bar and a few icons. Every drawing in `hooks/draw.ts` is composed from those parts and names no colour of its own, so a card, a badge or a row looks the same wherever it appears. `preview/` renders a sheet of every part and every drawing in each tone and state, in both colour schemes; a new section is checked against that sheet.
+Look. The panel and the bar above the prompt are drawn from one kit. `core/ui/tokens.ts` holds every colour, radius, spacing step and type size, each colour with a light and a dark value: neutral surfaces, borders and greys, purple for what runs, green, amber and red for states. No drawing paints a background: every surface, border and bar track is a faint overlay (white on dark, black on light), so the drawings sit on whatever grey the app gives the panel. `core/ui/kit.ts` holds the drawn parts: text, surface, badge, dot, separator, progress bar, segmented bar and a few icons. Every drawing in `core/draw.ts` is composed from those parts and names no colour of its own, so a card, a badge or a row looks the same wherever it appears. `preview/` renders a sheet of every part and every drawing in each tone and state, in both colour schemes; a new section is checked against that sheet.
+
+## opencode and pi
+
+The pipeline itself (the tool, the backlog, the ledgers, the gate and the merge) is in `core/` and knows no program. Each program has a thin folder under `hosts/` that gives the core what it needs (`core/host.ts`) and wires that program's events to it.
+
+| | Claude Code | opencode (version 2) | pi |
+| --- | --- | --- | --- |
+| Folder | `hosts/claude-code` | `hosts/opencode` | `hosts/pi` |
+| The `pipeline` tool | yes | yes | yes |
+| The skills | yes | yes, with a note on what their Claude Code words mean | yes, with the same note |
+| `/pipeline` commands | yes | no: ask in words | `status`, `config`, `init`, `add`, `discuss`, `next`, `run` |
+| Display | panel and band | the `status` action | one line in the footer |
+| Session named after the item | yes | yes | yes |
+| Subagents (mode `full`) | implementer and reviewer agents | the `general` subagent, from the tool's briefs | none: use `mode: "direct"` |
+| Edits to the tool's files refused | yes | no | yes |
+| Watchdog over subagents, background commands, session runner, saved transcripts | yes | no | no |
+
+opencode: add the folder to `plugins` in `opencode.jsonc` (the project's `.opencode/opencode.jsonc` or `~/.config/opencode/opencode.jsonc`):
+
+```
+{ "plugins": ["<this repository>/plugins/pipeline/hosts/opencode"] }
+```
+
+pi: install the plugin folder as a package:
+
+```
+pi install <this repository>/plugins/pipeline
+```
+
+Both run the TypeScript as it is; there is nothing to build. A project's `docs/pipeline/` is the same under every program, so one backlog can be worked from all three.
+
+What was checked: in opencode 2.3.2 the plugin loads and the model calls the tool against a real repository. The pi extension was run only against a stand-in for pi's API, written from pi's documentation, not in pi itself.
 
 ## Migration
 
@@ -320,9 +352,10 @@ A slash command that hands a prompt to the model (`/pipeline add`, `next`, `run`
 | --- | --- |
 | Agents | `pipeline:implementer`, `pipeline:reviewer` |
 | Skills | `pipeline-init`, `pipeline-intake`, `pipeline-discuss`, `pipeline-run`, `pipeline-rules`, `pipeline-migrate` |
-| Templates | `templates/spec.md`; the four briefs (implementer, fix, review, final) are in `hooks/templates.ts` and rendered by the tool's `brief` action; a project file `docs/pipeline/templates/<kind>.md` replaces one |
+| Templates | `templates/spec.md`; the four briefs (implementer, fix, review, final) are in `core/templates.ts` and rendered by the tool's `brief` action; a project file `docs/pipeline/templates/<kind>.md` replaces one |
 | Tool | `mcp__pipeline__pipeline` |
-| Mod | `hooks/register.tsx`: the tool, the commands, the watchdog, the session runner, the panel, the band, the live file; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `merged.ts`, `live.ts`, `files.ts`, `pane.tsx`, `draw.ts`; under `queue: github`, `tracker.ts` (the only module that runs `gh`) and `queue.ts` (issues to items and back) |
-| Tests | `claude plugin test plugins/pipeline` |
+| Core | `core/engine.ts`: the tool, the watchdog, the session runner, the live file, written against `core/host.ts` and no program; with `answers.ts`, `backlog.ts`, `config.ts`, `ledger.ts`, `status.ts`, `watch.ts`, `runner.ts`, `migrate.ts`, `clean.ts`, `merged.ts`, `live.ts`, `files.ts`, `draw.ts`; under `queue: github`, `tracker.ts` (the only module that runs `gh`) and `queue.ts` (issues to items and back) |
+| Hosts | `hosts/claude-code/register.tsx` (the mod `hooks/hooks.json` names: the commands, the panel in `pane.tsx`, the band, and Claude Code's `$` as the core's host), `hosts/opencode/index.ts`, `hosts/pi/index.ts`, and `hosts/node/host.ts`, the host the last two share |
+| Tests | `claude plugin test plugins/pipeline`; `bun plugins/pipeline/hosts/node/smoke.ts` runs the tool outside Claude Code |
 
 License: MIT.

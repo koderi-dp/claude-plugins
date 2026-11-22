@@ -1,10 +1,10 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { NO_GH, QUESTION_MARK, SPEC_MARK } from './tracker'
-import type { Issue } from './tracker'
-import { api, fieldOf, isCall, restGithub } from './fixtures/github'
-import type { RestState } from './fixtures/github'
+import { NO_GH, QUESTION_MARK, SPEC_MARK } from '../../core/tracker'
+import type { Issue } from '../../core/tracker'
+import { api, fieldOf, isCall, restGithub } from '../../core/fixtures/github'
+import type { RestState } from '../../core/fixtures/github'
 
 const TOOL = 'mcp__pipeline__pipeline'
 const MAIN = '/p/main'

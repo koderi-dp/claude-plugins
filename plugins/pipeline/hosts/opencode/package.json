@@ -1,0 +1,6 @@
+{
+  "name": "pipeline-opencode",
+  "private": true,
+  "type": "module",
+  "main": "index.ts"
+}

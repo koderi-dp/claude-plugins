@@ -1,7 +1,8 @@
-import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderElement } from 'claude-code'
-
-import type { AgentRun, Backlog, ChildSession, Config, Item, Ledger, Live, LiveEntry, Panel, QueueFilter, Sibling, Signal, View } from '../types'
+// The pipeline itself: the tool's actions, the watchdog, the session runner and the live file. It reaches the
+// outside only through `h`, the Host of ./host, so the same code runs under every host in ../hosts.
+import { atom, read, update } from './state'
+import type { Host } from './host'
+import type { AgentRun, Backlog, ChildSession, Config, Item, Ledger, Live, LiveEntry, Panel, Sibling, Signal } from '../types'
 import { addItem, emptyBacklog, moveItem, readiness, removeItem, renderBacklogMd, updateItem } from './backlog'
 import type { Readiness } from './backlog'
 import { compactSignal, itemState, ledgerLine, slimGet } from './answers'
@@ -10,7 +11,7 @@ import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, places, serialize } from './files'
 import type { Places } from './files'
 import * as tracker from './tracker'
-import { NEEDS_DESCRIPTION, bgEnd, bgReconcile, bgStart, checkPrompt, isDescribed, isLive, notificationOf } from './background'
+import { bgEnd, bgReconcile, bgStart, checkPrompt } from './background'
 import type { BgSummary, BgTask } from './background'
 import { digest, indexMd, sessionFolder } from './transcripts'
 import type { SessionRecord } from './transcripts'
@@ -24,40 +25,41 @@ import { PLAN_FORMAT } from './templates'
 import type { BriefKind } from './templates'
 import type { LedgerSet } from './ledger'
 import { parseLive, siblingsOf, withEntry, withoutEntry } from './live'
-import { candidates as mergeCandidates, fetchArgv, findMerged, isFetchDue, mergedLine } from './merged'
+import { candidates as mergeCandidates, fetchArgv, findMerged, isFetchDue } from './merged'
 import type { Git, MergedPending } from './merged'
-import { activeFromBranches, bulkToRemove, decisionsFromBacklogMd, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, rulesFromProse, specStub } from './migrate'
+import { decisionsFromBacklogMd, rulesFromProse, activeFromBranches, bulkToRemove, findSources, historicalLine, incrementsOf, itemsFromBacklogMd, itemsFromMvpQueue, renderRulesMd, repoWebUrl, specStub } from './migrate'
 import type { ActiveItem, Increment, MigrateRule } from './migrate'
-import { BAND_COMPACT_H, BAND_H, bandSvg, bandText, idleStripSvg, idleStripText } from './draw'
-import { BLOCKED, renderPanel } from './pane'
-import { SEGMENT_COLORS, bandOf, idLabel, idleLine, sessionName, specWhat, statusText, taskCounter } from './status'
+import { bandOf, idleLine, sessionName, specWhat, statusText } from './status'
 import type { Band } from './status'
 import type { StatusInput } from './status'
 import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
-import { STALE_MS, deadAgents, isProtected, mergeSignals, normalizeCommand, toolFileNote, toolFileOf, toolFileWrittenBy, onCall, onComplete, onResult, onSpawn, onStep, onTouch, pathOf, signals as raiseSignals } from './watch'
+import { STALE_MS, deadAgents, mergeSignals, signals as raiseSignals } from './watch'
 import type { Call } from './watch'
 
-const TOOL = 'mcp__pipeline__pipeline'
-const PANE = 'pipeline'
-const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `discuss`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
-const USAGE =
-  'pipeline: status [id] | panel | config [key=value] | init | add <text> | discuss <text or id> | next | run <id> | run all | migrate | migrate github | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
-const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'mode', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers', 'intake', 'pushMain', 'queue', 'queueLabel']
-const CONFIG_FILE = 'docs/pipeline/config.json'
-const BACKLOG_FILE = 'docs/pipeline/backlog.json'
-const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
-const TICK_MS = 30_000
-const HEARTBEAT_MS = 2000
-/** The last line of init and migrate-apply: the tool's files are versioned, never gitignored, and the record is not on main until this commit. */
-const commitLine = (mainBranch: string) => `commit docs/pipeline/ on ${mainBranch} now: git add docs/pipeline && git commit`
+/** The plugin options as the host received them: the panel, the band, the idle strip, the task list, the transcripts. */
+export const opts = { isAutoOpen: true, isCompactBand: false, isIdleStrip: true, isCompactTasks: false, isTranscripts: false }
 
-const WAKE_PROMPT = `pipeline: check the watchdog signals with the pipeline tool: ${TOOL} {"action":"signals"}`
+export const TOOL = 'mcp__pipeline__pipeline'
+export const PANE = 'pipeline'
+export const DESCRIPTION = 'The pipeline: `status`, `panel`, `config`, `init`, `add`, `discuss`, `next`, `run`, `migrate`, `stop`, `log`, `move`, `park`, `unpark`, `clean`'
+export const USAGE =
+  'pipeline: status [id] | panel | config [key=value] | init | add <text> | discuss <text or id> | next | run <id> | run all | migrate | migrate github | stop [id] | log <id> | move <id> top | move <id> after <id> | park <id> | unpark <id> | clean'
+export const CONFIG_KEYS = ['mainBranch', 'branch', 'checks', 'riskyPaths', 'protectedPaths', 'models', 'limits', 'runner', 'merge', 'mergeMethod', 'taskReview', 'mode', 'stop', 'afterMerge', 'retain', 'notify', 'superpowers', 'intake', 'pushMain', 'queue', 'queueLabel']
+export const CONFIG_FILE = 'docs/pipeline/config.json'
+export const BACKLOG_FILE = 'docs/pipeline/backlog.json'
+export const BACKLOG_MD_FILE = 'docs/pipeline/BACKLOG.md'
+export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+export const TICK_MS = 30_000
+export const HEARTBEAT_MS = 2000
+/** The last line of init and migrate-apply: the tool's files are versioned, never gitignored, and the record is not on main until this commit. */
+export const commitLine = (mainBranch: string) => `commit docs/pipeline/ on ${mainBranch} now: git add docs/pipeline && git commit`
+
+export const WAKE_PROMPT = `pipeline: check the watchdog signals with the pipeline tool: ${TOOL} {"action":"signals"}`
 /** The log file of a child, under the main checkout's .git (shared by every worktree, never committed). */
-const childLog = (found: string, id: string) => `${found}/.git/pipeline/${id}.log`
-const LOG_WRITE_MS = 1000
-const ACTIVE_STATUSES = ['planning', 'building', 'review'] as const
-const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', 'review', 'merged', 'blocked', 'parked']
+export const childLog = (found: string, id: string) => `${found}/.git/pipeline/${id}.log`
+export const LOG_WRITE_MS = 1000
+export const ACTIVE_STATUSES = ['planning', 'building', 'review'] as const
+export const STATUSES: readonly string[] = ['inbox', 'ready', 'planning', 'building', 'review', 'merged', 'blocked', 'parked']
 
 /** Under 4096 characters: the host gives the model no more of it until the tool is loaded through tool search. */
 export const TOOL_DESCRIPTION =
@@ -71,7 +73,7 @@ export const TOOL_DESCRIPTION =
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain lets go and deletes nothing. A file that does not parse is refused with its line and left alone. ' +
   'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12); never edit an issue with gh yourself. `add` opens an issue, `spec` { id, text } posts or replaces its spec comment, `question` { id, text } asks on the issue and holds the item, `answer` { id, text } writes what the user answered there and ends the hold, `update` with set { title?, body?, needs?, milestone? } rewrites the text of the issue and keeps its Needs: line unless needs is given (milestone: a title, null: none), `remove` { id, text } closes it as not planned with the reason on it, `adopt` creates the issue and adds Closes #<issue> to the PR, `init` { queue: "github" } sets it up, `move` is refused. `migrate-github` { apply? } drafts, and with apply makes, the move of a file backlog onto issues.'
 
-const TOOL_SCHEMA = {
+export const TOOL_SCHEMA = {
   type: 'object',
   properties: {
     action: { type: 'string', enum: ['get', 'signals', 'status', 'add', 'update', 'move', 'remove', 'park', 'unpark', 'spec', 'question', 'answer', 'ledger', 'begin', 'plan', 'brief', 'accept', 'gate', 'pr', 'adopt', 'ship', 'merge', 'close', 'init', 'clean', 'migrate', 'migrate-apply', 'migrate-github', 'start', 'stop', 'log'] },
@@ -122,95 +124,41 @@ const TOOL_SCHEMA = {
   required: ['action'],
 }
 
-const root = atom({ plugin: 'pipeline', key: 'root' } as const, '')
-const config = atom({ plugin: 'pipeline', key: 'config' } as const, null as Config | null)
-const backlog = atom({ plugin: 'pipeline', key: 'backlog' } as const, null as Backlog | null)
-const fileError = atom({ plugin: 'pipeline', key: 'fileError' } as const, null as string | null)
-const agents = atom({ plugin: 'pipeline', key: 'agents' } as const, [] as AgentRun[])
-const signals = atom({ plugin: 'pipeline', key: 'signals' } as const, [] as Signal[])
+export const root = atom({ plugin: 'pipeline', key: 'root' } as const, '')
+export const config = atom({ plugin: 'pipeline', key: 'config' } as const, null as Config | null)
+export const backlog = atom({ plugin: 'pipeline', key: 'backlog' } as const, null as Backlog | null)
+export const fileError = atom({ plugin: 'pipeline', key: 'fileError' } as const, null as string | null)
+export const agents = atom({ plugin: 'pipeline', key: 'agents' } as const, [] as AgentRun[])
+export const signals = atom({ plugin: 'pipeline', key: 'signals' } as const, [] as Signal[])
 // The background shell commands still running in this session, as the panel lists them.
-const background = atom({ plugin: 'pipeline', key: 'background' } as const, [] as BgTask[])
+export const background = atom({ plugin: 'pipeline', key: 'background' } as const, [] as BgTask[])
 // The session runner's children and the other sessions on this repository, as the panel draws them; the runner keeps them.
-const children = atom({ plugin: 'pipeline', key: 'children' } as const, [] as ChildSession[])
-const siblings = atom({ plugin: 'pipeline', key: 'siblings' } as const, [] as Sibling[])
-const panel = atom({ plugin: 'pipeline', key: 'panel' } as const, { view: 'overview', filter: 'inbox', search: '', expanded: null, isMoreShown: false, autoOpenedFor: '', isBandOpen: false, isActivityOpen: false } as Panel)
+export const children = atom({ plugin: 'pipeline', key: 'children' } as const, [] as ChildSession[])
+export const siblings = atom({ plugin: 'pipeline', key: 'siblings' } as const, [] as Sibling[])
+export const panel = atom({ plugin: 'pipeline', key: 'panel' } as const, { view: 'overview', filter: 'inbox', search: '', expanded: null, isMoreShown: false, autoOpenedFor: '', isBandOpen: false, isActivityOpen: false } as Panel)
 // The clock the panel draws against: the ticker moves it, so minutes and the merged week stay current.
-const now = atom({ plugin: 'pipeline', key: 'now' } as const, 0)
+export const now = atom({ plugin: 'pipeline', key: 'now' } as const, 0)
 
-const slashes = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
-
-// ---------- the panel ----------
-
-/** The `autoOpen`, `band`, `idleStrip` and `tasks` settings as this load of the module received them. */
-let isAutoOpen = true
-let isCompactBand = false
-let isIdleStrip = true
-let isCompactTasks = false
-// The `transcripts` setting: each session's transcript is copied into the plugin's data folder.
-let isTranscripts = false
-
-async function openPane($: EngineInterface, focus = false): Promise<void> {
-  const at = await $.clock.now()
-  await update($, now, () => at)
-  await $.ui.open({ id: PANE, title: 'Pipeline', ...(focus ? { focus: true } : {}) })
-}
-
-/** The band's Panel button: opens the pane, or brings it forward with the keys when it is open. */
-async function showPane($: EngineInterface): Promise<void> {
-  try {
-    await openPane($, await isPaneOpen($))
-  } catch {}
-}
-
-async function isPaneOpen($: EngineInterface): Promise<boolean> {
-  try {
-    return (await $.ui.panes()).some(p => p.id === PANE)
-  } catch {
-    return false
-  }
-}
-
-async function togglePane($: EngineInterface): Promise<boolean> {
-  if (await isPaneOpen($)) {
-    await $.ui.close({ id: PANE })
-    // The band's Panel button reads the pane's state when drawn: the atom write redraws it.
-    const at = await $.clock.now()
-    await update($, now, () => at)
-    return false
-  }
-  await openPane($)
-  return true
-}
-
-/** Opens the panel by itself, once per reason, unless the setting says never. */
-async function autoOpen($: EngineInterface, reason: string): Promise<void> {
-  if (!isAutoOpen) return
-  const p = await read($, panel)
-  if (p.autoOpenedFor.split(',').includes(reason)) return
-  await update($, panel, prev => ({ ...prev, autoOpenedFor: [prev.autoOpenedFor, reason].filter(Boolean).join(',') }))
-  try {
-    await openPane($)
-  } catch {}
-}
+export const slashes = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
 // ---------- prompts the commands hand the model ----------
 
-const call = (input: Record<string, unknown>) => `${TOOL} ${JSON.stringify(input)}`
+export const call = (input: Record<string, unknown>) => `${TOOL} ${JSON.stringify(input)}`
 
-const DISCUSS_PROMPT = (text: string) =>
+export const DISCUSS_PROMPT = (text: string) =>
   `Use the pipeline-discuss skill for this: "${text}". First tool call: ${call({ action: 'get', titles: true })} (is it an item already, or a new request). Then ask me about it one question at a time, show me the spec, and save it once I agree. Never start the build.`
 
-const INTAKE_PROMPT = (text: string) =>
+export const INTAKE_PROMPT = (text: string) =>
   `Use the pipeline-intake skill for this request: "${text}". First tool call: ${call({ action: 'get', titles: true })} (the duplicate check: every item as id, status and title). Then add the item and write its spec as the skill says, and answer in one line (a thin request: with its first question, as the skill says). Never start the build.`
 
-const RUN_PROMPT = (target: string) =>
+export const RUN_PROMPT = (target: string) =>
   `Use the pipeline-run skill. First tool call: ${call({ action: 'get' })}. Then ${target === 'all' ? 'run ready items until none is left' : target ? `run item ${target}` : 'run the first ready item'} as the skill says, from pick to merge, one line per turn.`
 
 /**
  * What the model is told when the command itself began the item (mode direct): the tool's answer with the spec,
  * and the one call that ends the work. No skill is loaded and no `get` or `begin` is spent.
  */
-const DIRECT_PROMPT = (answer: string, id: string, isAll: boolean) =>
+export const DIRECT_PROMPT = (answer: string, id: string, isAll: boolean) =>
   `Pipeline item ${id} is claimed for this session and its worktree is ready. The tool answered:\n\n${answer}\n\n` +
   `Build it your own way, as you would with no plugin, working in that worktree: cd to it in your shell commands and use its path for file edits; do not call EnterWorktree. The spec's Acceptance list is what done means. If docs/pipeline/rules.md lists rules, they are the project's own. ` +
   `When it is built and its tests pass, make one call: ${TOOL} {"action":"ship","item":"${id}","message":"<commit message>","attribution":"<the attribution lines this session was given, copied as they are, one per line: the commit trailer and the pull request line>"${isAll ? ',"next":true' : ''}}. ` +
@@ -221,7 +169,7 @@ const DIRECT_PROMPT = (answer: string, id: string, isAll: boolean) =>
  * What the model is told when the command itself began the item under mode full: the item is claimed and named
  * before the model's first word, and the skill drives from the plan on.
  */
-const BEGUN_PROMPT = (answer: string, id: string, isAll: boolean) =>
+export const BEGUN_PROMPT = (answer: string, id: string, isAll: boolean) =>
   `Use the pipeline-run skill. Pipeline item ${id} is already claimed for this session and its worktree is ready; do not call begin for it. The tool answered:
 
 ${answer}
@@ -230,7 +178,7 @@ ${answer}
   `First tool call: ${call({ action: 'get' })} (the config and the open signals). Then run item ${id} as the skill says, from the plan to the merge${isAll ? ', and after it the ready items until none is left' : ''}, one line per turn.`
 
 /** With runner session the lead only starts children: the mod's `start` does the worktree and the child does the rest. */
-const SESSION_RUN_PROMPT = (target: string) => {
+export const SESSION_RUN_PROMPT = (target: string) => {
   const what =
     target === 'all'
       ? 'each ready item in order up to limits.parallel children, and again for the next ready item each time a child finishes (the wake-up or the next get brings you back; a child that exited non-zero left its item blocked with the reason)'
@@ -240,26 +188,26 @@ const SESSION_RUN_PROMPT = (target: string) => {
   return `Use the pipeline-run skill with runner session. First tool call: ${call({ action: 'get' })}. Then call ${call({ action: 'start', item: '<id>' })} for ${what}; the child session does the planning, the build, the review and the PR in its worktree. Answer the tool's one line and stop; never run the item in this session.`
 }
 
-const MIGRATE_PROMPT = `Use the pipeline-migrate skill. First tool call: ${call({ action: 'migrate' })}, which reads the project's queue, workflow prose and ledgers and drafts the config, the rules and the items without writing. Then finish the mapping, ask once, and apply as the skill says.`
+export const MIGRATE_PROMPT = `Use the pipeline-migrate skill. First tool call: ${call({ action: 'migrate' })}, which reads the project's queue, workflow prose and ledgers and drafts the config, the rules and the items without writing. Then finish the mapping, ask once, and apply as the skill says.`
 
-const MIGRATE_GITHUB_PROMPT = `Use the pipeline-migrate skill, its section "From a file backlog to issues". First tool call: ${call({ action: 'migrate-github' })}, which drafts the move of docs/pipeline/backlog.json onto GitHub issues without writing. Show the draft, ask once, then apply as that section says.`
+export const MIGRATE_GITHUB_PROMPT = `Use the pipeline-migrate skill, its section "From a file backlog to issues". First tool call: ${call({ action: 'migrate-github' })}, which drafts the move of docs/pipeline/backlog.json onto GitHub issues without writing. Show the draft, ask once, then apply as that section says.`
 
-const INIT_PROMPT =
+export const INIT_PROMPT =
   `Set the pipeline up in this project with the pipeline-init skill: read it and follow its steps. If the project already has a queue, a workflow document or a ledger, it hands over to the pipeline-migrate skill, whose first tool call is ${call({ action: 'migrate' })}; otherwise its first tool call is ${call({ action: 'init' })}.`
 
-const STOP_PROMPT =
+export const STOP_PROMPT =
   `Pipeline stop, under the pipeline-run skill. First tool call: ${call({ action: 'get' })} for the active item and its resume block. Finish the task that is running: let a dispatched subagent finish or stop it at a safe point, start no other task. ` +
   `Leave the branch pushed and the ledger current: record where to resume with ${call({ action: 'ledger', item: '<id>', set: { resume: { task: '<n>', state: 'stopped by the user: <where>', lastVerified: '<sha>' } } })} as the last tool call. Then answer one line and stop.`
 
-const CLEAN_PROMPT =
+export const CLEAN_PROMPT =
   `Pipeline clean, under the pipeline-rules skill. First tool call: ${call({ action: 'clean' })}. It lists, one per line, the paths config.retain says may go for every merged item, the superpowers folders of merged plans, the worktrees of merged items and their local branches as branch:<name>, and deletes nothing. ` +
   'From the main checkout on mainBranch: remove each listed path with `git rm -r -q` (plain `rm -r` for an untracked one; `git worktree remove` for a worktree; `git branch -D <name>` for a `branch:` line), commit the removals on mainBranch with the attribution lines this session was given and no model identifier, and answer one line with the counts, as `cleaned: 3 folders, 1 plan, 1 worktree, 1 branch`. An answer of `nothing to clean` is the one line, and nothing is committed.'
 
-const QUEUE_PROMPT = (input: Record<string, unknown>) => `Under the pipeline-rules skill, make this one tool call: ${call(input)}. It answers one line; answer that line and nothing else.`
+export const QUEUE_PROMPT = (input: Record<string, unknown>) => `Under the pipeline-rules skill, make this one tool call: ${call(input)}. It answers one line; answer that line and nothing else.`
 
 // What this module instance knows between hooks: the live file's whereabouts,
 // this session's entry, the heartbeat throttle, the pending wake-up and the ticker.
-const self = {
+const newSelf = () => ({
   hasRepo: false,
   sessionRoot: '',
   /** Why the tool could not be given to the model in this session; empty when it was. */
@@ -299,26 +247,48 @@ const self = {
   ghDown: null as null | { at: number; error: string },
   ghPending: null as number | null,
   toolDepth: 0,
+})
+export type Self = ReturnType<typeof newSelf>
+
+let selfNow: () => Self = (() => {
+  const one = newSelf()
+  return () => one
+})()
+
+/**
+ * One program, several sessions (a host that serves them all from one process): the host says which session's
+ * values are meant at any moment, and is given the maker of a fresh set. Without this there is one set, the session's.
+ */
+export function scopeSelf(resolve: (make: () => Self) => Self): void {
+  selfNow = () => resolve(newSelf)
 }
 
+export const self: Self = new Proxy({} as Self, {
+  get: (_target, key) => selfNow()[key as keyof Self],
+  set: (_target, key, value) => {
+    ;(selfNow() as Record<string, unknown>)[key as string] = value
+    return true
+  },
+})
+
 /** The web URL of the repository's origin, for PR numbers the old queue names; nothing without a remote. */
-async function repoUrl($: EngineInterface): Promise<string | undefined> {
+export async function repoUrl(h: Host): Promise<string | undefined> {
   try {
-    return repoWebUrl((await $.session.repo())?.remote)
+    return repoWebUrl((await h.session.repo())?.remote)
   } catch {
     return undefined
   }
 }
 
 /** The main checkout's root, even from a worktree; the session's root without a repository. */
-async function resolveRoot($: EngineInterface): Promise<string> {
+export async function resolveRoot(h: Host): Promise<string> {
   let repoRoot: string | undefined
   try {
-    repoRoot = (await $.session.repo())?.root
+    repoRoot = (await h.session.repo())?.root
   } catch {}
   self.hasRepo = Boolean(repoRoot)
-  const found = slashes(repoRoot ?? (await $.session.root()))
-  await update($, root, () => found)
+  const found = slashes(repoRoot ?? (await h.session.root()))
+  await update(h, root, () => found)
   return found
 }
 
@@ -331,87 +301,87 @@ export function errorLine(text: string, message: string): number {
   return 1
 }
 
-type Loaded<T> = { value: T | null; error: string | null }
+export type Loaded<T> = { value: T | null; error: string | null }
 
 /** Reads a JSON file: missing gives null and no error, bad JSON gives the error with its line. */
-async function loadJson<T>($: EngineInterface, path: string, file: string): Promise<Loaded<T>> {
-  if (!(await $.fs.exists(path))) return { value: null, error: null }
-  const text = await $.fs.read(path)
+export async function loadJson<T>(h: Host, path: string, file: string): Promise<Loaded<T>> {
+  if (!(await h.fs.exists(path))) return { value: null, error: null }
+  const text = await h.fs.read(path)
   const parsed = parseJson<T>(typeof text === 'string' ? text : '', file)
   return parsed.ok ? { value: parsed.value, error: null } : { value: null, error: parsed.error }
 }
 
 /** Reads the config file into its atoms. */
-async function loadConfig($: EngineInterface, found: string): Promise<Loaded<Config>> {
-  const loaded = await loadJson<Config>($, paths(found).config, CONFIG_FILE)
-  await update($, config, () => loaded.value)
+export async function loadConfig(h: Host, found: string): Promise<Loaded<Config>> {
+  const loaded = await loadJson<Config>(h, paths(found).config, CONFIG_FILE)
+  await update(h, config, () => loaded.value)
   return loaded
 }
 
 /** Reads the backlog file into its atom; with queue: github, the issues through their cache. Never throws in that mode. */
-async function loadBacklog($: EngineInterface, found: string): Promise<Loaded<Backlog>> {
-  const c = await read($, config)
-  if (isGithub(c)) return loadIssueBacklog($, found, c)
-  const loaded = await loadJson<Backlog>($, paths(found).backlog, BACKLOG_FILE)
-  await update($, backlog, () => loaded.value)
+export async function loadBacklog(h: Host, found: string): Promise<Loaded<Backlog>> {
+  const c = await read(h, config)
+  if (isGithub(c)) return loadIssueBacklog(h, found, c)
+  const loaded = await loadJson<Backlog>(h, paths(found).backlog, BACKLOG_FILE)
+  await update(h, backlog, () => loaded.value)
   return loaded
 }
 
 /** Reads both files; `fileError` is the first error, the config's before the backlog's. */
-async function loadAll($: EngineInterface, found: string): Promise<{ config: Config | null; backlog: Backlog | null; error: string | null }> {
-  const c = await loadConfig($, found)
-  const b = await loadBacklog($, found)
+export async function loadAll(h: Host, found: string): Promise<{ config: Config | null; backlog: Backlog | null; error: string | null }> {
+  const c = await loadConfig(h, found)
+  const b = await loadBacklog(h, found)
   const error = c.error ?? b.error
-  await update($, fileError, () => error)
+  await update(h, fileError, () => error)
   return { config: c.value, backlog: b.value, error }
 }
 
 // ---------- queue: github ----------
 
-const ISSUES_FILE = '.git/pipeline/issues.json'
-const WORKTREES_IGNORE = '.claude/worktrees/'
-const ITEMS_FILE = '.git/pipeline/items.json'
-const CACHE_MS = 60_000
+export const ISSUES_FILE = '.git/pipeline/issues.json'
+export const WORKTREES_IGNORE = '.claude/worktrees/'
+export const ITEMS_FILE = '.git/pipeline/items.json'
+export const CACHE_MS = 60_000
 
 /** What the issues answered: the issues the backlog maps (labelled, or with an entry in items.json), the extras, the gh user, how old the cache is when gh failed, the tracker's error when nothing could be read, and the in-flight ids that lost the queue label. */
-type Queue = { issues: Issue[]; extras: Extras; me: string; stale: string | null; error: string | null; lost: string[] }
-type IssueCache = { at: number; me: string; issues: Issue[] }
+export type Queue = { issues: Issue[]; extras: Extras; me: string; stale: string | null; error: string | null; lost: string[] }
+export type IssueCache = { at: number; me: string; issues: Issue[] }
 
 /** Whether the config says the issues are the queue. */
-const isGithub = (c: Config | null): boolean => normalizeConfig(c ?? DEFAULTS).config.queue === 'github'
-const labelOf = (c: Config | null): string => normalizeConfig(c ?? DEFAULTS).config.queueLabel
+export const isGithub = (c: Config | null): boolean => normalizeConfig(c ?? DEFAULTS).config.queue === 'github'
+export const labelOf = (c: Config | null): string => normalizeConfig(c ?? DEFAULTS).config.queueLabel
 
 /** Where an item's records live in the configured queue mode: with queue: file, the docs/pipeline paths as before. Every record path in this file comes from here. */
-const placesOf = (found: string, c: Config | null): Places => places(found, isGithub(c) ? 'github' : 'file')
+export const placesOf = (found: string, c: Config | null): Places => places(found, isGithub(c) ? 'github' : 'file')
 
 /** A path under the main checkout as the checkout names it (`docs/pipeline/ledgers/p1.json`, `.git/pipeline/12/ledger.json`). */
-const relOf = (found: string, path: string): string => (path.startsWith(`${found}/`) ? path.slice(found.length + 1) : path)
+export const relOf = (found: string, path: string): string => (path.startsWith(`${found}/`) ? path.slice(found.length + 1) : path)
 
 /** Makes sure .git/info/exclude ignores `.pipeline/`, the records' folder in every worktree; local, never committed. */
-async function ensureExclude($: EngineInterface, found: string): Promise<void> {
+export async function ensureExclude(h: Host, found: string): Promise<void> {
   const exclude = places(found, 'github').exclude
-  const had = (await readText($, exclude)) ?? ''
-  if (!had.split('\n').some(l => l.trim() === '.pipeline/')) await $.fs.write(exclude, `${had}${had && !had.endsWith('\n') ? '\n' : ''}.pipeline/\n`)
+  const had = (await readText(h, exclude)) ?? ''
+  if (!had.split('\n').some(l => l.trim() === '.pipeline/')) await h.fs.write(exclude, `${had}${had && !had.endsWith('\n') ? '\n' : ''}.pipeline/\n`)
 }
 
 /** Makes sure the project's .gitignore ignores `.claude/worktrees/`, where the pipeline makes its worktrees; a missing file is created. */
-async function ensureIgnore($: EngineInterface, found: string): Promise<void> {
+export async function ensureIgnore(h: Host, found: string): Promise<void> {
   const file = `${found}/.gitignore`
-  const had = (await readText($, file)) ?? ''
-  if (!had.split('\n').some(l => l.trim() === WORKTREES_IGNORE)) await $.fs.write(file, `${had}${had && !had.endsWith('\n') ? '\n' : ''}${WORKTREES_IGNORE}\n`)
+  const had = (await readText(h, file)) ?? ''
+  if (!had.split('\n').some(l => l.trim() === WORKTREES_IGNORE)) await h.fs.write(file, `${had}${had && !had.endsWith('\n') ? '\n' : ''}${WORKTREES_IGNORE}\n`)
 }
 
 /** A thrown error that says the program is not there, as against one that ran and timed out or was refused. */
-const isMissingProgram = (message: string): boolean => /ENOENT|not found|not recognized|cannot find|no such file/i.test(message)
+export const isMissingProgram = (message: string): boolean => /ENOENT|not found|not recognized|cannot find|no such file/i.test(message)
 
 /**
- * The tracker's `run`: the argv through `$.process.run` in the main checkout. Null only when gh itself is not there;
+ * The tracker's `run`: the argv through `h.process.run` in the main checkout. Null only when gh itself is not there;
  * any other thrown error (a timeout, a refused call) is a failed call with the error as what gh said, so the answer
  * names what happened and not a missing gh.
  */
-const ghRun = ($: EngineInterface, found: string): Run => async argv => {
+export const ghRun = (h: Host, found: string): Run => async argv => {
   try {
-    const r = await $.process.run(argv, { cwd: found, timeoutMs: 30_000 })
+    const r = await h.process.run(argv, { cwd: found, timeoutMs: 30_000 })
     return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -421,9 +391,9 @@ const ghRun = ($: EngineInterface, found: string): Run => async argv => {
 }
 
 /** The issue cache, or null when it is missing or not the tool's shape. */
-async function readCache($: EngineInterface, found: string): Promise<IssueCache | null> {
+export async function readCache(h: Host, found: string): Promise<IssueCache | null> {
   try {
-    const loaded = await loadJson<IssueCache>($, places(found, 'github').issues, ISSUES_FILE)
+    const loaded = await loadJson<IssueCache>(h, places(found, 'github').issues, ISSUES_FILE)
     const v = loaded.value
     return v && typeof v.at === 'number' && typeof v.me === 'string' && Array.isArray(v.issues) ? v : null
   } catch {
@@ -432,14 +402,14 @@ async function readCache($: EngineInterface, found: string): Promise<IssueCache 
 }
 
 /** Changes the cached issues; without a cache, starts one that the next load lists again. */
-async function editCache($: EngineInterface, found: string, change: (issues: Issue[]) => Issue[]): Promise<void> {
-  const cache = await readCache($, found)
-  await $.fs.write(places(found, 'github').issues, serialize({ at: cache?.at ?? 0, me: cache?.me ?? self.me, issues: change(cache?.issues ?? []) }))
+export async function editCache(h: Host, found: string, change: (issues: Issue[]) => Issue[]): Promise<void> {
+  const cache = await readCache(h, found)
+  await h.fs.write(places(found, 'github').issues, serialize({ at: cache?.at ?? 0, me: cache?.me ?? self.me, issues: change(cache?.issues ?? []) }))
 }
 
 /** items.json: missing reads as no extras; a file that does not parse gives its error and is never overwritten. */
-async function readExtras($: EngineInterface, found: string): Promise<Loaded<Extras>> {
-  const loaded = await loadJson<Partial<Extras>>($, places(found, 'github').items, ITEMS_FILE)
+export async function readExtras(h: Host, found: string): Promise<Loaded<Extras>> {
+  const loaded = await loadJson<Partial<Extras>>(h, places(found, 'github').items, ITEMS_FILE)
   if (loaded.error) return { value: null, error: loaded.error }
   const v = loaded.value
   const items = v && v.items && typeof v.items === 'object' && !Array.isArray(v.items) ? v.items : {}
@@ -448,26 +418,26 @@ async function readExtras($: EngineInterface, found: string): Promise<Loaded<Ext
   return { value: v ? { items, pending, ...(leftover.length ? { leftover } : {}) } : { ...EMPTY_EXTRAS, items: {}, pending: [] }, error: null }
 }
 
-async function extrasOrRefuse($: EngineInterface, found: string): Promise<Extras> {
-  const ex = await readExtras($, found)
+export async function extrasOrRefuse(h: Host, found: string): Promise<Extras> {
+  const ex = await readExtras(h, found)
   if (ex.error || !ex.value) throw new Refused(ex.error ?? `${ITEMS_FILE} could not be read`)
   return ex.value
 }
 
-const writeExtras = ($: EngineInterface, found: string, extras: Extras) => $.fs.write(places(found, 'github').items, serialize(extras))
+export const writeExtras = (h: Host, found: string, extras: Extras) => h.fs.write(places(found, 'github').items, serialize(extras))
 
 /**
  * The issues of the queue: the cache when it is younger than a minute; else the gh user (once per session) and the
  * labelled open issues, plus each issue items.json names that the list does not show, written back to the cache.
  * When gh fails the cache answers with its age, and without one the tracker's error is the answer.
  */
-async function loadQueue($: EngineInterface, found: string, c: Config | null): Promise<Queue> {
+export async function loadQueue(h: Host, found: string, c: Config | null): Promise<Queue> {
   const label = labelOf(c)
-  const ex = await readExtras($, found)
+  const ex = await readExtras(h, found)
   if (ex.error || !ex.value) return { issues: [], extras: EMPTY_EXTRAS, me: self.me, stale: null, error: ex.error, lost: [] }
   const extras = ex.value
-  const at = await $.clock.now()
-  const cache = await readCache($, found)
+  const at = await h.clock.now()
+  const cache = await readCache(h, found)
   let issues: Issue[]
   let me: string
   let stale: string | null = null
@@ -475,7 +445,7 @@ async function loadQueue($: EngineInterface, found: string, c: Config | null): P
     issues = cache.issues
     me = cache.me || self.me
   } else {
-    const run = ghRun($, found)
+    const run = ghRun(h, found)
     // A minute after gh failed, it is not asked again: the redraws and the tick would each wait on it.
     const down = self.ghDown && at >= self.ghDown.at && at - self.ghDown.at < CACHE_MS ? self.ghDown : null
     const who: tracker.Result<string> = down ? { ok: false, error: down.error } : self.me ? { ok: true, value: self.me } : await tracker.me(run)
@@ -497,7 +467,7 @@ async function loadQueue($: EngineInterface, found: string, c: Config | null): P
         const known = one.ok ? one.value : cache?.issues.find(i => String(i.number) === id)
         if (known) issues.push(known)
       }
-      await $.fs.write(places(found, 'github').issues, serialize({ at, me, issues }))
+      await h.fs.write(places(found, 'github').issues, serialize({ at, me, issues }))
     }
   }
   self.me = me
@@ -510,10 +480,10 @@ async function loadQueue($: EngineInterface, found: string, c: Config | null): P
  * Runs the tracker operations; the ones that succeed go into the cache, the ones that fail are appended to the
  * pending list in items.json. Answers how many are pending.
  */
-async function pushOps($: EngineInterface, found: string, c: Config | null, ops: Op[]): Promise<number> {
-  const extras = await extrasOrRefuse($, found)
-  const run = ghRun($, found)
-  const cache = await readCache($, found)
+export async function pushOps(h: Host, found: string, c: Config | null, ops: Op[]): Promise<number> {
+  const extras = await extrasOrRefuse(h, found)
+  const run = ghRun(h, found)
+  const cache = await readCache(h, found)
   const me = cache?.me || self.me
   const done: Op[] = []
   const failed: Op[] = []
@@ -532,21 +502,21 @@ async function pushOps($: EngineInterface, found: string, c: Config | null, ops:
     }
     ;(r.ok ? done : failed).push(op)
   }
-  if (cache && done.length) await $.fs.write(places(found, 'github').issues, serialize({ ...cache, issues: applyOps(cache.issues, done, labelOf(c), me) }))
+  if (cache && done.length) await h.fs.write(places(found, 'github').issues, serialize({ ...cache, issues: applyOps(cache.issues, done, labelOf(c), me) }))
   const pending = [...extras.pending, ...failed]
-  await writeExtras($, found, { ...extras, pending })
+  await writeExtras(h, found, { ...extras, pending })
   self.ghPending = pending.length
   return pending.length
 }
 
 /** The backlog the issues make, kept with its readiness; an answered question's label is taken off. */
-async function loadIssueBacklog($: EngineInterface, found: string, c: Config | null): Promise<Loaded<Backlog>> {
+export async function loadIssueBacklog(h: Host, found: string, c: Config | null): Promise<Loaded<Backlog>> {
   try {
-    const q = await loadQueue($, found, c)
+    const q = await loadQueue(h, found, c)
     self.queue = q
     if (q.error) {
       self.readiness = {}
-      await update($, backlog, () => null)
+      await update(h, backlog, () => null)
       return { value: null, error: q.error }
     }
     const label = labelOf(c)
@@ -558,46 +528,46 @@ async function loadIssueBacklog($: EngineInterface, found: string, c: Config | n
     const ops: Op[] = mapped.answered
       .filter(id => !q.extras.pending.some(o => o.kind === 'edit' && o.id === id && o.remove.includes(needsInfo)))
       .map(id => ({ kind: 'edit', id, add: [], remove: [needsInfo] }))
-    if (ops.length) await pushOps($, found, c, ops)
-    await update($, backlog, () => mapped.backlog)
+    if (ops.length) await pushOps(h, found, c, ops)
+    await update(h, backlog, () => mapped.backlog)
     return { value: mapped.backlog, error: null }
   } catch (err) {
     self.readiness = {}
-    await update($, backlog, () => null)
+    await update(h, backlog, () => null)
     return { value: null, error: err instanceof Error ? err.message : String(err) }
   }
 }
 
 /** Retries what is pending, turns the change from the loaded backlog to `next` into tracker operations, keeps the extras. */
-async function writeIssueBacklog($: EngineInterface, found: string, c: Config | null, next: Backlog): Promise<{ backlog: Backlog; readiness: Record<string, Readiness> }> {
+export async function writeIssueBacklog(h: Host, found: string, c: Config | null, next: Backlog): Promise<{ backlog: Backlog; readiness: Record<string, Readiness> }> {
   const label = labelOf(c)
-  const q = await loadQueue($, found, c)
+  const q = await loadQueue(h, found, c)
   if (q.error) throw new Refused(q.error)
-  const before = (await read($, backlog)) ?? toBacklog(q.issues, q.extras, label, q.me).backlog
+  const before = (await read(h, backlog)) ?? toBacklog(q.issues, q.extras, label, q.me).backlog
   if (q.extras.pending.length) {
-    await writeExtras($, found, { ...q.extras, pending: [] })
-    await pushOps($, found, c, q.extras.pending)
+    await writeExtras(h, found, { ...q.extras, pending: [] })
+    await pushOps(h, found, c, q.extras.pending)
   }
-  const issues = (await readCache($, found))?.issues ?? q.issues
-  await pushOps($, found, c, opsFor(before, next, issues, label, q.me))
-  const kept = extrasOf(next, await extrasOrRefuse($, found))
-  await writeExtras($, found, kept)
-  const after = ((await readCache($, found))?.issues ?? issues).filter(i => i.labels.includes(label) || kept.items[String(i.number)] !== undefined)
+  const issues = (await readCache(h, found))?.issues ?? q.issues
+  await pushOps(h, found, c, opsFor(before, next, issues, label, q.me))
+  const kept = extrasOf(next, await extrasOrRefuse(h, found))
+  await writeExtras(h, found, kept)
+  const after = ((await readCache(h, found))?.issues ?? issues).filter(i => i.labels.includes(label) || kept.items[String(i.number)] !== undefined)
   self.readiness = toBacklog(applyOps(after, kept.pending, label, q.me), kept, label, q.me).readiness
-  await update($, backlog, () => next)
-  await update($, fileError, () => null)
+  await update(h, backlog, () => next)
+  await update(h, fileError, () => null)
   return { backlog: next, readiness: self.readiness }
 }
 
 /** An item's one-line state after a GitHub action changed its issue: the backlog loaded again from the cache. */
-async function issueState($: EngineInterface, found: string, id: string, fallback: string): Promise<string> {
-  const b = (await loadBacklog($, found)).value
+export async function issueState(h: Host, found: string, id: string, fallback: string): Promise<string> {
+  const b = (await loadBacklog(h, found)).value
   const item = b?.items.find(i => i.id === id)
   return item ? itemState(item, self.readiness) : fallback
 }
 
 /** `add`: a labelled issue; the cache takes it. */
-async function addIssue($: EngineInterface, found: string, c: Config | null, e: ToolInput): Promise<string> {
+export async function addIssue(h: Host, found: string, c: Config | null, e: ToolInput): Promise<string> {
   const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
   if (!title) throw new Refused('add needs item.title')
   // The issues this one waits for go on a `Needs:` line of the body, where the tool reads them back.
@@ -606,22 +576,22 @@ async function addIssue($: EngineInterface, found: string, c: Config | null, e: 
   const note = typeof e.item === 'string' ? '' : (e.item?.note ?? '').trim()
   const source = typeof e.item === 'string' ? '' : (e.item?.source ?? '').trim()
   const body = withNeeds([note, source ? `Source: ${source}` : ''].filter(Boolean).join('\n\n'), needs)
-  const r = await tracker.create(ghRun($, found), { title, body, labels: [labelOf(c)] })
+  const r = await tracker.create(ghRun(h, found), { title, body, labels: [labelOf(c)] })
   if (!r.ok) throw new Refused(r.error)
   const n = r.value
-  const at = await nowIso($)
-  await editCache($, found, issues => [...issues.filter(i => i.number !== n), { number: n, title, body, author: self.me, labels: [labelOf(c)], assignees: [], state: 'open', url: '', createdAt: at, comments: [] }])
+  const at = await nowIso(h)
+  await editCache(h, found, issues => [...issues.filter(i => i.number !== n), { number: n, title, body, author: self.me, labels: [labelOf(c)], assignees: [], state: 'open', url: '', createdAt: at, comments: [] }])
   // A milestone named with the item: the issue exists either way, and a milestone that cannot be set is said.
   const wanted = typeof e.item === 'string' ? undefined : (e.item as { milestone?: unknown } | undefined)?.milestone
   let milestone = ''
   if (typeof wanted === 'string' && wanted.trim()) {
     try {
-      milestone = ` · milestone ${await putInMilestone($, found, n, wanted)}`
+      milestone = ` · milestone ${await putInMilestone(h, found, n, wanted)}`
     } catch (err) {
       milestone = ` · milestone not set: ${err instanceof Error ? err.message : String(err)}`
     }
   }
-  return `added ${n} · ${await issueState($, found, String(n), 'inbox · no spec')}${milestone}`
+  return `added ${n} · ${await issueState(h, found, String(n), 'inbox · no spec')}${milestone}`
 }
 
 /**
@@ -629,8 +599,8 @@ async function addIssue($: EngineInterface, found: string, c: Config | null, e: 
  * its milestone when the title is empty or null. Answers the milestone's title, or `none`; refuses a title no open
  * milestone has, naming the ones there are.
  */
-async function putInMilestone($: EngineInterface, found: string, issue: number, wanted: unknown): Promise<string> {
-  const run = ghRun($, found)
+export async function putInMilestone(h: Host, found: string, issue: number, wanted: unknown): Promise<string> {
+  const run = ghRun(h, found)
   if (wanted === null || (typeof wanted === 'string' && !wanted.trim())) {
     const r = await tracker.setMilestone(run, issue, null)
     if (!r.ok) throw new Refused(r.error)
@@ -651,9 +621,9 @@ async function putInMilestone($: EngineInterface, found: string, issue: number, 
  * written through the tool so the `Needs:` line is never lost and nobody edits an issue with gh. A new body that names no dependencies keeps the ones the issue had; `needs`
  * sets them, and an empty list removes them. Answers what it changed.
  */
-async function editIssueText($: EngineInterface, found: string, id: string, set: Record<string, unknown>): Promise<string[]> {
-  const run = ghRun($, found)
-  const issue = (await readCache($, found))?.issues.find(i => String(i.number) === id) ?? self.queue?.issues.find(i => String(i.number) === id)
+export async function editIssueText(h: Host, found: string, id: string, set: Record<string, unknown>): Promise<string[]> {
+  const run = ghRun(h, found)
+  const issue = (await readCache(h, found))?.issues.find(i => String(i.number) === id) ?? self.queue?.issues.find(i => String(i.number) === id)
   if (!issue) throw new Refused(`no issue ${id} in the queue`)
   const done: string[] = []
   let title = issue.title
@@ -683,49 +653,49 @@ async function editIssueText($: EngineInterface, found: string, id: string, set:
       if ('needs' in set || needsOf(issue.body).join() !== needs.join()) done.push('needs')
     }
   }
-  if (done.length) await editCache($, found, issues => issues.map(i => (i.number === issue.number ? { ...i, title, body } : i)))
-  if ('milestone' in set) done.push(`milestone ${await putInMilestone($, found, issue.number, set['milestone'])}`)
+  if (done.length) await editCache(h, found, issues => issues.map(i => (i.number === issue.number ? { ...i, title, body } : i)))
+  if ('milestone' in set) done.push(`milestone ${await putInMilestone(h, found, issue.number, set['milestone'])}`)
   return done.length ? [...new Set(done)] : ['nothing: the issue already reads so']
 }
 
 /** `spec`: edits the spec comment (its state and detail kept) or posts one as ready; rewrites the worktree's spec.md. */
-async function specIssue($: EngineInterface, found: string, id: string, e: ToolInput): Promise<string> {
+export async function specIssue(h: Host, found: string, id: string, e: ToolInput): Promise<string> {
   const body = typeof e.text === 'string' ? e.text : ''
   if (!body.trim()) throw new Refused('spec needs text')
-  const run = ghRun($, found)
+  const run = ghRun(h, found)
   const me = self.me
-  const issue = (await readCache($, found))?.issues.find(i => String(i.number) === id) ?? self.queue?.issues.find(i => String(i.number) === id)
+  const issue = (await readCache(h, found))?.issues.find(i => String(i.number) === id) ?? self.queue?.issues.find(i => String(i.number) === id)
   const old = issue ? specCommentOf(issue, me) : null
-  const at = await nowIso($)
+  const at = await nowIso(h)
   if (old) {
     const was = parseSpecComment(old.body)
     const rendered = renderSpecComment(body, was.state || 'ready', was.detail)
     const r = await tracker.editComment(run, old.id, rendered)
     if (!r.ok) throw new Refused(r.error)
-    await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: i.comments.map(cm => (cm.id === old.id ? { ...cm, body: rendered } : cm)) } : i)))
+    await editCache(h, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: i.comments.map(cm => (cm.id === old.id ? { ...cm, body: rendered } : cm)) } : i)))
   } else {
     const rendered = renderSpecComment(body, 'ready', '')
     const r = await tracker.comment(run, Number(id), rendered)
     if (!r.ok) throw new Refused(r.error)
-    await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: [...i.comments, { id: r.value, author: me, association: '', body: rendered, at }] } : i)))
+    await editCache(h, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: [...i.comments, { id: r.value, author: me, association: '', body: rendered, at }] } : i)))
   }
   const P = places(found, 'github')
-  const ledger = (await loadJson<Ledger>($, P.ledger(id), `.git/pipeline/${id}/ledger.json`)).value
-  if (ledger && typeof ledger.worktree === 'string' && ledger.worktree) await $.fs.write(`${worktreePath(found, ledger)}/${P.specRel(id)}`, body)
-  return `${id} · ${await issueState($, found, id, 'ready')} · spec posted`
+  const ledger = (await loadJson<Ledger>(h, P.ledger(id), `.git/pipeline/${id}/ledger.json`)).value
+  if (ledger && typeof ledger.worktree === 'string' && ledger.worktree) await h.fs.write(`${worktreePath(found, ledger)}/${P.specRel(id)}`, body)
+  return `${id} · ${await issueState(h, found, id, 'ready')} · spec posted`
 }
 
 /** `question`: a marked comment on the issue and the needs-info label. */
-async function questionIssue($: EngineInterface, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
+export async function questionIssue(h: Host, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
   const question = typeof e.text === 'string' ? e.text.trim() : ''
   if (!question) throw new Refused('question needs text')
   const posted = `${QUESTION_MARK}\n${question}`
-  const r = await tracker.comment(ghRun($, found), Number(id), posted)
+  const r = await tracker.comment(ghRun(h, found), Number(id), posted)
   if (!r.ok) throw new Refused(r.error)
-  const at = await nowIso($)
-  await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: [...i.comments, { id: r.value, author: self.me, association: '', body: posted, at }] } : i)))
-  await pushOps($, found, c, [{ kind: 'edit', id, add: [labelsOf(labelOf(c)).needsInfo], remove: [] }])
-  return `${id} · ${await issueState($, found, id, 'inbox · open question on the issue')}`
+  const at = await nowIso(h)
+  await editCache(h, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: [...i.comments, { id: r.value, author: self.me, association: '', body: posted, at }] } : i)))
+  await pushOps(h, found, c, [{ kind: 'edit', id, add: [labelsOf(labelOf(c)).needsInfo], remove: [] }])
+  return `${id} · ${await issueState(h, found, id, 'inbox · open question on the issue')}`
 }
 
 /**
@@ -733,20 +703,20 @@ async function questionIssue($: EngineInterface, found: string, c: Config | null
  * same thing that ends the hold when the author answers on GitHub, so the question and its answer are both on the
  * issue, the only record the item has.
  */
-async function answerIssue($: EngineInterface, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
+export async function answerIssue(h: Host, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
   const answer = typeof e.text === 'string' ? e.text.trim() : ''
   if (!answer) throw new Refused('answer needs text')
-  const issue = (await readCache($, found))?.issues.find(i => String(i.number) === id) ?? self.queue?.issues.find(i => String(i.number) === id)
+  const issue = (await readCache(h, found))?.issues.find(i => String(i.number) === id) ?? self.queue?.issues.find(i => String(i.number) === id)
   if (!issue) throw new Refused(`no issue ${id} in the queue`)
   const needsInfo = labelsOf(labelOf(c)).needsInfo
   if (!issue.labels.includes(needsInfo) || isAnswered(issue, self.me)) throw new Refused(`${id} has no open question`)
   const posted = `Answered in the session: ${answer}`
-  const r = await tracker.comment(ghRun($, found), Number(id), posted)
+  const r = await tracker.comment(ghRun(h, found), Number(id), posted)
   if (!r.ok) throw new Refused(r.error)
-  const at = await nowIso($)
-  await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: [...i.comments, { id: r.value, author: self.me, association: '', body: posted, at }] } : i)))
-  await pushOps($, found, c, [{ kind: 'edit', id, add: [], remove: [needsInfo] }])
-  return `${id} · ${await issueState($, found, id, 'ready')} · answer on the issue`
+  const at = await nowIso(h)
+  await editCache(h, found, issues => issues.map(i => (String(i.number) === id ? { ...i, comments: [...i.comments, { id: r.value, author: self.me, association: '', body: posted, at }] } : i)))
+  await pushOps(h, found, c, [{ kind: 'edit', id, add: [], remove: [needsInfo] }])
+  return `${id} · ${await issueState(h, found, id, 'ready')} · answer on the issue`
 }
 
 /**
@@ -754,46 +724,46 @@ async function answerIssue($: EngineInterface, found: string, c: Config | null, 
  * Refused for an item being built or in review, and without a reason. The state labels go, the queue label stays as
  * the record that it was asked for here.
  */
-async function declineIssue($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+export async function declineIssue(h: Host, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
   const reason = typeof e.text === 'string' ? e.text.trim() : ''
   if (!reason) throw new Refused('remove with queue: github closes the issue as not planned and needs "text": the reason, which is written on the issue')
   if (!/^\d+$/.test(id)) throw new Refused(`no item ${id}`)
   const there = current.items.find(i => i.id === id)
   if (there && ['planning', 'building', 'review'].includes(there.status)) throw new Refused(`${id} is ${there.status}: stop it or finish it first`)
-  const issue = await readIssue($, found, id)
+  const issue = await readIssue(h, found, id)
   if (issue.state === 'closed') throw new Refused(`${id} is already closed`)
-  const run = ghRun($, found)
+  const run = ghRun(h, found)
   const said = await tracker.comment(run, Number(id), `${DECLINED_MARK}\nClosed as not planned: ${reason}`)
   if (!said.ok) throw new Refused(said.error)
   const closed = await tracker.close(run, Number(id), true)
   if (!closed.ok) throw new Refused(`the reason is on the issue, but it could not be closed: ${closed.error}`)
   const L = labelsOf(labelOf(c))
   const stale = [L.building, L.blocked, L.needsInfo].filter(l => issue.labels.includes(l))
-  if (stale.length) await pushOps($, found, c, [{ kind: 'edit', id, add: [], remove: stale }])
-  await editCache($, found, issues => issues.filter(i => String(i.number) !== id))
-  const left = (await loadBacklog($, found)).value?.items.length ?? 0
+  if (stale.length) await pushOps(h, found, c, [{ kind: 'edit', id, add: [], remove: stale }])
+  await editCache(h, found, issues => issues.filter(i => String(i.number) !== id))
+  const left = (await loadBacklog(h, found)).value?.items.length ?? 0
   return `${id} closed as not planned · reason on the issue · ${left} item${left === 1 ? '' : 's'} left`
 }
 
 /** `unpark`: the issue is not in the list; read it, refuse a closed one, put the queue label back. */
-async function unparkIssue($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string | undefined): Promise<string> {
+export async function unparkIssue(h: Host, found: string, c: Config | null, current: Backlog, id: string | undefined): Promise<string> {
   if (!id) throw new Refused('an id is needed')
   const there = current.items.find(i => i.id === id)
   if (there) throw new Refused(`${id} is ${there.status}, not parked`)
   if (!/^\d+$/.test(id)) throw new Refused(`no item ${id}`)
-  const r = await tracker.read(ghRun($, found), Number(id))
+  const r = await tracker.read(ghRun(h, found), Number(id))
   if (!r.ok) throw new Refused(r.error)
   if (r.value.state === 'closed') throw new Refused(`${id} is closed`)
-  await editCache($, found, issues => [...issues.filter(i => i.number !== r.value.number), r.value])
-  await pushOps($, found, c, [{ kind: 'edit', id, add: [labelOf(c)], remove: [] }])
-  return `${id} · ${await issueState($, found, id, 'inbox')}`
+  await editCache(h, found, issues => [...issues.filter(i => i.number !== r.value.number), r.value])
+  await pushOps(h, found, c, [{ kind: 'edit', id, add: [labelOf(c)], remove: [] }])
+  return `${id} · ${await issueState(h, found, id, 'inbox')}`
 }
 
 /** One issue read fresh from GitHub (not the cache), written into the cache so the backlog mapped next is true; refused when gh fails. */
-async function readIssue($: EngineInterface, found: string, id: string): Promise<Issue> {
-  const r = await tracker.read(ghRun($, found), Number(id))
+export async function readIssue(h: Host, found: string, id: string): Promise<Issue> {
+  const r = await tracker.read(ghRun(h, found), Number(id))
   if (!r.ok) throw new Refused(r.error)
-  await editCache($, found, issues => [...issues.filter(i => i.number !== r.value.number), r.value])
+  await editCache(h, found, issues => [...issues.filter(i => i.number !== r.value.number), r.value])
   return r.value
 }
 
@@ -802,8 +772,8 @@ async function readIssue($: EngineInterface, found: string, id: string): Promise
  * this machine has no ledger for it (another machine builds it, of another user or of this one: one login) unless
  * forced. Answers the issue and its spec: the spec comment's, or the issue's own text when it has none.
  */
-async function claimIssue($: EngineInterface, found: string, c: Config | null, id: string, hasLedger: boolean, force: boolean): Promise<{ issue: Issue; specMd: string }> {
-  const issue = await readIssue($, found, id)
+export async function claimIssue(h: Host, found: string, c: Config | null, id: string, hasLedger: boolean, force: boolean): Promise<{ issue: Issue; specMd: string }> {
+  const issue = await readIssue(h, found, id)
   if (issue.labels.includes(labelsOf(labelOf(c)).building) && !hasLedger && !force) {
     const other = issue.assignees.find(a => a !== self.me)
     throw new Refused(`${id} is being built ${other ? `elsewhere (by @${other})` : 'on another machine of yours'} · to take it over here: begin with "force": true`)
@@ -814,29 +784,29 @@ async function claimIssue($: EngineInterface, found: string, c: Config | null, i
 }
 
 /** `init` with queue: github: gh must answer for this repository; the config, the labels and the exclude line, no backlog. */
-async function initGithub($: EngineInterface, found: string, c: Config | null, error: string | null): Promise<string> {
+export async function initGithub(h: Host, found: string, c: Config | null, error: string | null): Promise<string> {
   const p = paths(found)
-  const hasConfig = await $.fs.exists(p.config)
+  const hasConfig = await h.fs.exists(p.config)
   if (hasConfig && error) throw new Refused(error)
   if (hasConfig && !isGithub(c)) throw new Refused(`${CONFIG_FILE} exists with queue: file; set it with /pipeline config queue=github`)
   const next = hasConfig ? normalizeConfig(c).config : { ...structuredClone(DEFAULTS), queue: 'github' as const }
-  const run = ghRun($, found)
+  const run = ghRun(h, found)
   const who = self.me ? ({ ok: true, value: self.me } as const) : await tracker.me(run)
   if (!who.ok) throw new Refused(who.error)
   self.me = who.value
   const listed = await tracker.list(run, next.queueLabel)
   if (!listed.ok) throw new Refused(listed.error)
   if (!hasConfig) {
-    await $.fs.write(p.config, serialize(next))
-    await update($, config, () => structuredClone(next))
+    await h.fs.write(p.config, serialize(next))
+    await update(h, config, () => structuredClone(next))
   }
   const L = labelsOf(next.queueLabel)
   const names = [L.queue, L.building, L.blocked, L.needsInfo]
   const labelled = await tracker.ensureLabels(run, names)
   if (!labelled.ok) throw new Refused(labelled.error)
-  await ensureExclude($, found)
-  await ensureIgnore($, found)
-  await update($, fileError, () => null)
+  await ensureExclude(h, found)
+  await ensureIgnore(h, found)
+  await update(h, fileError, () => null)
   const head = hasConfig ? `exists: ${CONFIG_FILE}` : `wrote ${CONFIG_FILE}`
   return `${head} · labels ${names.join(', ')}${hasConfig ? '' : ` · commit ${CONFIG_FILE} on ${next.mainBranch}`}`
 }
@@ -854,8 +824,8 @@ export function hasOpenQuestion(spec: string): boolean {
 }
 
 /** The readiness of every inbox or ready item, with the spec looked up on disk. */
-async function judgeAll($: EngineInterface, found: string, b: Backlog): Promise<Record<string, Readiness>> {
-  if (isGithub(await read($, config))) return self.readiness
+export async function judgeAll(h: Host, found: string, b: Backlog): Promise<Record<string, Readiness>> {
+  if (isGithub(await read(h, config))) return self.readiness
   const p = paths(found)
   const exists = new Map<string, boolean>()
   const open = new Map<string, boolean>()
@@ -864,12 +834,12 @@ async function judgeAll($: EngineInterface, found: string, b: Backlog): Promise<
     const specPath = item.spec ? `${found}/${slashes(item.spec).replace(/^\//, '')}` : p.spec(item.id)
     let there = false
     try {
-      there = await $.fs.exists(specPath)
+      there = await h.fs.exists(specPath)
     } catch {}
     exists.set(item.id, there)
     if (!there) continue
     try {
-      const text = await $.fs.read(specPath)
+      const text = await h.fs.read(specPath)
       open.set(item.id, hasOpenQuestion(typeof text === 'string' ? text : ''))
     } catch {
       open.set(item.id, false)
@@ -879,7 +849,7 @@ async function judgeAll($: EngineInterface, found: string, b: Backlog): Promise<
 }
 
 /** Inbox items that are ready become `ready`; ready items that no longer are go back to `inbox`. */
-function settle(b: Backlog, r: Record<string, Readiness>, now: string): Backlog {
+export function settle(b: Backlog, r: Record<string, Readiness>, now: string): Backlog {
   let out = b
   for (const item of b.items) {
     const judged = r[item.id]
@@ -892,7 +862,7 @@ function settle(b: Backlog, r: Record<string, Readiness>, now: string): Backlog 
 
 // ---------- the tool ----------
 
-type ToolInput = {
+export type ToolInput = {
   action: string
   id?: string
   item?: (Partial<Item> & { title?: string }) | string
@@ -930,29 +900,29 @@ type ToolInput = {
 
 class Refused extends Error {}
 
-async function nowIso($: EngineInterface): Promise<string> {
-  return new Date(await $.clock.now()).toISOString()
+export async function nowIso(h: Host): Promise<string> {
+  return new Date(await h.clock.now()).toISOString()
 }
 
 /** The ledger of an item as it is on disk, where the queue mode keeps it: missing gives null, bad JSON gives the error with its line. */
-async function readLedger($: EngineInterface, found: string, id: string): Promise<Loaded<Ledger>> {
-  const file = placesOf(found, await read($, config)).ledger(id)
-  return loadJson<Ledger>($, file, relOf(found, file))
+export async function readLedger(h: Host, found: string, id: string): Promise<Loaded<Ledger>> {
+  const file = placesOf(found, await read(h, config)).ledger(id)
+  return loadJson<Ledger>(h, file, relOf(found, file))
 }
 
 /**
  * The ledger of an item, when its file is on disk and parses, normalised through the merge so every consumer sees
  * the arrays (a hand-made file, or one from another tool, may leave `tasks`, `rulings` or `blockers` out).
  */
-async function loadLedger($: EngineInterface, found: string, id: string): Promise<Ledger | null> {
+export async function loadLedger(h: Host, found: string, id: string): Promise<Ledger | null> {
   try {
-    const parsed = (await readLedger($, found, id)).value
+    const parsed = (await readLedger(h, found, id)).value
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const set = parsed as unknown as LedgerSet
     const lists = { tasks: Array.isArray(set.tasks) ? set.tasks : [], rulings: Array.isArray(set.rulings) ? set.rulings : [], blockers: Array.isArray(set.blockers) ? set.blockers.filter((b): b is string => typeof b === 'string') : [] }
     // A resume block an earlier version saved from text, one character per key, reads as that text again.
     const resume = repairResume(set.resume, Math.max(1, lists.tasks.length))
-    return mergeLedger(emptyLedger(id), { ...set, ...lists, ...(resume ? { resume } : {}) }, await nowIso($))
+    return mergeLedger(emptyLedger(id), { ...set, ...lists, ...(resume ? { resume } : {}) }, await nowIso(h))
   } catch {
     return null
   }
@@ -963,62 +933,62 @@ async function loadLedger($: EngineInterface, found: string, id: string): Promis
  * A value a redraw would read from disk again, kept for `ttlMs` while `ref` (the backlog the atom holds) is the same
  * object. The panel and the band redraw on every step of a subagent; the tool's own answers never go through here.
  */
-async function memo<T>($: EngineInterface, key: string, ref: unknown, ttlMs: number, make: () => Promise<T>): Promise<T> {
-  const at = await $.clock.now()
+export async function memo<T>(h: Host, key: string, ref: unknown, ttlMs: number, make: () => Promise<T>): Promise<T> {
+  const at = await h.clock.now()
   const hit = self.memo.get(key)
   if (hit && hit.ref === ref && at - hit.at < ttlMs && at >= hit.at) return hit.value as T
   const value = await make()
   self.memo.set(key, { at, ref, value })
   return value
 }
-const DRAW_TTL_MS = 3000
-const drawnLedger = ($: EngineInterface, found: string, id: string) => memo($, `ledger:${id}`, null, DRAW_TTL_MS, () => loadLedger($, found, id))
+export const DRAW_TTL_MS = 3000
+export const drawnLedger = (h: Host, found: string, id: string) => memo(h, `ledger:${id}`, null, DRAW_TTL_MS, () => loadLedger(h, found, id))
 
-async function gather($: EngineInterface, found: string, c: Config | null, b: Backlog | null, error: string | null, isDraw = false): Promise<StatusInput> {
-  const active = await activeItem($, b)
+export async function gather(h: Host, found: string, c: Config | null, b: Backlog | null, error: string | null, isDraw = false): Promise<StatusInput> {
+  const active = await activeItem(h, b)
   return {
     activeId: active?.id ?? null,
     config: c,
     backlog: b,
-    readiness: !b ? {} : isDraw ? await memo($, 'readiness', b, 10_000, () => judgeAll($, found, b)) : await judgeAll($, found, b),
-    ledger: !active ? null : isDraw ? await drawnLedger($, found, active.id) : await loadLedger($, found, active.id),
-    agents: await read($, agents),
-    signals: await read($, signals),
-    now: await $.clock.now(),
+    readiness: !b ? {} : isDraw ? await memo(h, 'readiness', b, 10_000, () => judgeAll(h, found, b)) : await judgeAll(h, found, b),
+    ledger: !active ? null : isDraw ? await drawnLedger(h, found, active.id) : await loadLedger(h, found, active.id),
+    agents: await read(h, agents),
+    signals: await read(h, signals),
+    now: await h.clock.now(),
     fileError: error,
     mergedPending: self.mergedPending,
   }
 }
 
-async function statusNow($: EngineInterface, found: string, c: Config | null, b: Backlog | null, error: string | null): Promise<string> {
-  return statusText(await gather($, found, c, b, error))
+export async function statusNow(h: Host, found: string, c: Config | null, b: Backlog | null, error: string | null): Promise<string> {
+  return statusText(await gather(h, found, c, b, error))
 }
 
 /** The names under a folder, with a slash after each directory; nothing when the folder is not there. */
-async function listDir($: EngineInterface, dir: string): Promise<string[]> {
+export async function listDir(h: Host, dir: string): Promise<string[]> {
   try {
-    if (!(await $.fs.exists(dir))) return []
-    return (await $.fs.list(dir)).map(e => (e.kind === 'dir' ? `${e.name}/` : e.name))
+    if (!(await h.fs.exists(dir))) return []
+    return (await h.fs.list(dir)).map(e => (e.kind === 'dir' ? `${e.name}/` : e.name))
   } catch {
     return []
   }
 }
 
 /** The listing `cleanList` wants: the known parents, the superpowers pointers, the worktree names, the local branches and the merged items' ledger branches. With queue: github the records are not in the repository: only the worktrees. */
-async function cleanInput($: EngineInterface, found: string, b: Backlog | null): Promise<{ listing: string[]; planPaths: Record<string, string>; worktrees: string[]; branches: string[]; ledgerBranches: Record<string, string> }> {
-  const gh = isGithub(await read($, config))
+export async function cleanInput(h: Host, found: string, b: Backlog | null): Promise<{ listing: string[]; planPaths: Record<string, string>; worktrees: string[]; branches: string[]; ledgerBranches: Record<string, string> }> {
+  const gh = isGithub(await read(h, config))
   const ledgers = relOf(found, paths(found).ledgers)
   const plans = relOf(found, paths(found).plans)
   const listing: string[] = []
   for (const parent of gh ? ['.claude/worktrees'] : [ledgers, plans, '.superpowers/sdd', '.claude/worktrees']) {
-    for (const name of await listDir($, `${found}/${parent}`)) listing.push(`${parent}/${name}`)
+    for (const name of await listDir(h, `${found}/${parent}`)) listing.push(`${parent}/${name}`)
   }
   const planPaths: Record<string, string> = {}
   for (const entry of listing.filter(p => p.startsWith('.superpowers/sdd/') && p.endsWith('/'))) {
     const dir = entry.slice('.superpowers/sdd/'.length, -1)
     const texts: string[] = []
     for (const file of ['plan-path', 'progress.md']) {
-      const t = await readText($, `${found}/${entry}${file}`)
+      const t = await readText(h, `${found}/${entry}${file}`)
       if (t) texts.push(t)
     }
     if (texts.length) planPaths[dir] = texts.join('\n')
@@ -1027,19 +997,19 @@ async function cleanInput($: EngineInterface, found: string, b: Backlog | null):
   for (const item of gh ? [] : b?.items ?? []) {
     if (item.status !== 'merged') continue
     const plan = planOf(item)
-    if (!plan.startsWith(`${plans}/`) && (await readText($, `${found}/${plan}`)) !== null) listing.push(plan)
+    if (!plan.startsWith(`${plans}/`) && (await readText(h, `${found}/${plan}`)) !== null) listing.push(plan)
   }
   const worktrees = listing.filter(p => p.startsWith('.claude/worktrees/') && p.endsWith('/')).map(p => p.slice('.claude/worktrees/'.length, -1))
   // The local branches, so a merged item's branch is listed as `branch:<name>` for the caller's `git branch -D`; none when git fails.
   let branches: string[] = []
   try {
-    const r = await $.process.run(['git', '-C', found, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/'], { cwd: found, timeoutMs: 30_000 })
+    const r = await h.process.run(['git', '-C', found, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/'], { cwd: found, timeoutMs: 30_000 })
     if (r.exitCode === 0) branches = r.stdout.split('\n').map(l => l.trim()).filter(Boolean)
   } catch {}
   const ledgerBranches: Record<string, string> = {}
   for (const item of b?.items ?? []) {
     if (item.status !== 'merged' || (typeof item.branch === 'string' && item.branch)) continue
-    const branch = (await loadLedger($, found, item.id))?.branch
+    const branch = (await loadLedger(h, found, item.id))?.branch
     if (typeof branch === 'string' && branch) ledgerBranches[item.id] = branch
   }
   return { listing, planPaths, worktrees, branches, ledgerBranches }
@@ -1048,14 +1018,14 @@ async function cleanInput($: EngineInterface, found: string, b: Backlog | null):
 /**
  * The items whose PR was merged by hand while their Close never ran: every `review` item, and every `building` item
  * with a `pr`, whose branch tip is on `origin/<mainBranch>` (fetched at most once per minute per session). The git
- * calls run through `$.process.run`; a failed one reads as unknown, not merged. The result is kept for the status
+ * calls run through `h.process.run`; a failed one reads as unknown, not merged. The result is kept for the status
  * block and the panel, which never run git themselves.
  */
-async function checkMerged($: EngineInterface, found: string, c: Config | null, b: Backlog | null): Promise<MergedPending[]> {
+export async function checkMerged(h: Host, found: string, c: Config | null, b: Backlog | null): Promise<MergedPending[]> {
   try {
     const ledgers: Record<string, Ledger | null> = {}
     for (const item of b?.items ?? []) {
-      if (item.status === 'review' || item.status === 'building') ledgers[item.id] = await loadLedger($, found, item.id)
+      if (item.status === 'review' || item.status === 'building') ledgers[item.id] = await loadLedger(h, found, item.id)
     }
     const list = mergeCandidates(b, ledgers)
     if (!list.length) {
@@ -1065,13 +1035,13 @@ async function checkMerged($: EngineInterface, found: string, c: Config | null, 
     const mainBranch = c?.mainBranch ?? DEFAULTS.mainBranch
     const git: Git = async argv => {
       try {
-        const r = await $.process.run(argv, { cwd: found, timeoutMs: 60_000 })
+        const r = await h.process.run(argv, { cwd: found, timeoutMs: 60_000 })
         return { exitCode: r.exitCode }
       } catch {
         return null
       }
     }
-    const at = await $.clock.now()
+    const at = await h.clock.now()
     if (isFetchDue(self.lastFetch, at)) {
       self.lastFetch = at
       await git(fetchArgv(found, mainBranch))
@@ -1082,66 +1052,66 @@ async function checkMerged($: EngineInterface, found: string, c: Config | null, 
 }
 
 /** Writes the backlog and its generated view, refreshes the atom and answers what was written, settled, with its readiness. */
-async function writeBacklog($: EngineInterface, found: string, next: Backlog): Promise<{ backlog: Backlog; readiness: Record<string, Readiness> }> {
-  const c = await read($, config)
-  if (isGithub(c)) return writeIssueBacklog($, found, c, next)
+export async function writeBacklog(h: Host, found: string, next: Backlog): Promise<{ backlog: Backlog; readiness: Record<string, Readiness> }> {
+  const c = await read(h, config)
+  if (isGithub(c)) return writeIssueBacklog(h, found, c, next)
   const p = paths(found)
   // Settling moves items between inbox and ready only, so the judgement holds for the settled backlog too.
-  const judged = await judgeAll($, found, next)
-  const settled = settle(next, judged, await nowIso($))
-  await $.fs.write(p.backlog, serialize(settled))
-  await $.fs.write(p.backlogMd, renderBacklogMd(settled))
-  await update($, backlog, () => settled)
-  await update($, fileError, () => null)
+  const judged = await judgeAll(h, found, next)
+  const settled = settle(next, judged, await nowIso(h))
+  await h.fs.write(p.backlog, serialize(settled))
+  await h.fs.write(p.backlogMd, renderBacklogMd(settled))
+  await update(h, backlog, () => settled)
+  await update(h, fileError, () => null)
   return { backlog: settled, readiness: judged }
 }
 
 /** A backlog write's one-line answer: the item's id, what changed and its status after the write. */
-async function writeLine($: EngineInterface, found: string, next: Backlog, id: string, what: (state: string) => string): Promise<string> {
-  const written = await writeBacklog($, found, next)
+export async function writeLine(h: Host, found: string, next: Backlog, id: string, what: (state: string) => string): Promise<string> {
+  const written = await writeBacklog(h, found, next)
   const item = written.backlog.items.find(i => i.id === id)
   return what(item ? itemState(item, written.readiness) : 'gone')
 }
 
 /** Marks every open signal delivered: an answer carried them. */
-async function markDelivered($: EngineInterface): Promise<void> {
-  await update($, signals, list => list.map(s => (s.delivered ? s : { ...s, delivered: true })))
-  await heartbeat($, true)
+export async function markDelivered(h: Host): Promise<void> {
+  await update(h, signals, list => list.map(s => (s.delivered ? s : { ...s, delivered: true })))
+  await heartbeat(h, true)
 }
 
 /** The actions that change the backlog or a ledger: each runs alone across every session on the repository. */
-const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'pr', 'adopt', 'start', 'stop', 'init', 'migrate-apply', 'migrate-github', 'spec', 'question', 'answer'])
-const LOCK_WAIT_MS = 250
-const LOCK_TRIES = 120
+export const LOCKED_ACTIONS = new Set(['add', 'update', 'move', 'remove', 'park', 'unpark', 'ledger', 'begin', 'plan', 'brief', 'accept', 'close', 'pr', 'adopt', 'start', 'stop', 'init', 'migrate-apply', 'migrate-github', 'spec', 'question', 'answer'])
+export const LOCK_WAIT_MS = 250
+export const LOCK_TRIES = 120
 
-const pause = ($: EngineInterface, ms: number) => new Promise<void>(resolve => void $.clock.after(ms, () => resolve()))
+export const pause = (h: Host, ms: number) => new Promise<void>(resolve => void h.clock.after(ms, () => resolve()))
 
 /**
  * Runs `work` holding the repository's pipeline lock: a folder under .git that only one `mkdir` can create, so two
  * sessions never read and write the backlog at once. It waits for another holder up to thirty seconds, then takes
  * the lock over (its holder died). Where there is no repository, or no `mkdir`, the work runs unlocked, as before.
  */
-async function withLock<T>($: EngineInterface, found: string, work: () => Promise<T>): Promise<T> {
+export async function withLock<T>(h: Host, found: string, work: () => Promise<T>): Promise<T> {
   if (self.lockDepth > 0 || !self.hasRepo) return work()
   const dir = `${found}/.git/pipeline.lock`
   const make = async (): Promise<'held' | 'busy' | 'none'> => {
     try {
-      const r = await $.process.run(['mkdir', dir], { cwd: found, timeoutMs: 10_000 })
+      const r = await h.process.run(['mkdir', dir], { cwd: found, timeoutMs: 10_000 })
       if (r.exitCode === 0) return 'held'
-      return (await $.fs.exists(dir)) ? 'busy' : 'none'
+      return (await h.fs.exists(dir)) ? 'busy' : 'none'
     } catch {
       return 'none'
     }
   }
   let state = await make()
   for (let i = 0; state === 'busy' && i < LOCK_TRIES; i++) {
-    await pause($, LOCK_WAIT_MS)
+    await pause(h, LOCK_WAIT_MS)
     state = await make()
   }
   if (state === 'busy') {
     // Thirty seconds: no action holds it that long, so its holder is gone.
     try {
-      await $.process.run(['rmdir', dir], { cwd: found, timeoutMs: 10_000 })
+      await h.process.run(['rmdir', dir], { cwd: found, timeoutMs: 10_000 })
     } catch {}
     state = await make()
   }
@@ -1152,23 +1122,23 @@ async function withLock<T>($: EngineInterface, found: string, work: () => Promis
     self.lockDepth--
     if (state === 'held') {
       try {
-        await $.process.run(['rmdir', dir], { cwd: found, timeoutMs: 10_000 })
+        await h.process.run(['rmdir', dir], { cwd: found, timeoutMs: 10_000 })
       } catch {}
     }
   }
 }
 
-async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
+export async function runTool(h: Host, e: ToolInput): Promise<string> {
   const isOuter = self.toolDepth === 0
   if (isOuter) self.ghPending = null
   self.toolDepth++
   try {
     let answer: string
     if (LOCKED_ACTIONS.has(e.action) && self.lockDepth === 0) {
-      const root = await resolveRoot($)
-      answer = await withLock($, root, () => runToolNow($, e))
+      const root = await resolveRoot(h)
+      answer = await withLock(h, root, () => runToolNow(h, e))
     } else {
-      answer = await runToolNow($, e)
+      answer = await runToolNow(h, e)
     }
     return isOuter && LOCKED_ACTIONS.has(e.action) ? withPending(answer, self.ghPending) : answer
   } finally {
@@ -1177,71 +1147,71 @@ async function runTool($: EngineInterface, e: ToolInput): Promise<string> {
 }
 
 /** A writing action's answer with the GitHub updates still pending at the end of its first line. */
-function withPending(answer: string, pending: number | null): string {
+export function withPending(answer: string, pending: number | null): string {
   if (!pending) return answer
   const [first = '', ...rest] = answer.split('\n')
   return [`${first} · ${pending} GitHub update${pending === 1 ? '' : 's'} pending`, ...rest].join('\n')
 }
 
 /** The refusal of an action the issues make meaningless. */
-const notWithIssues = (action: string) => `${action} does not apply with queue: github: the issues are the queue`
+export const notWithIssues = (action: string) => `${action} does not apply with queue: github: the issues are the queue`
 
-async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
-  const found = await resolveRoot($)
-  const { config: c, backlog: loaded, error } = await loadAll($, found)
+export async function runToolNow(h: Host, e: ToolInput): Promise<string> {
+  const found = await resolveRoot(h)
+  const { config: c, backlog: loaded, error } = await loadAll(h, found)
   const p = paths(found)
 
-  if (e.action === 'init' && (e.queue === 'github' || isGithub(c))) return initGithub($, found, c, error)
+  if (e.action === 'init' && (e.queue === 'github' || isGithub(c))) return initGithub(h, found, c, error)
   if (e.action === 'init') {
-    const hasConfig = await $.fs.exists(p.config)
-    const hasBacklog = await $.fs.exists(p.backlog)
+    const hasConfig = await h.fs.exists(p.config)
+    const hasBacklog = await h.fs.exists(p.backlog)
     if (hasConfig && hasBacklog) {
-      await ensureIgnore($, found)
+      await ensureIgnore(h, found)
       return `exists: ${CONFIG_FILE}`
     }
     const wrote: string[] = []
     if (!hasConfig) {
-      await $.fs.write(p.config, serialize(DEFAULTS))
-      await update($, config, () => structuredClone(DEFAULTS))
+      await h.fs.write(p.config, serialize(DEFAULTS))
+      await update(h, config, () => structuredClone(DEFAULTS))
       wrote.push(CONFIG_FILE)
     }
     if (!hasBacklog) {
       const empty = emptyBacklog()
-      await $.fs.write(p.backlog, serialize(empty))
-      await $.fs.write(p.backlogMd, renderBacklogMd(empty))
-      await update($, backlog, () => empty)
+      await h.fs.write(p.backlog, serialize(empty))
+      await h.fs.write(p.backlogMd, renderBacklogMd(empty))
+      await update(h, backlog, () => empty)
       wrote.push(BACKLOG_FILE, BACKLOG_MD_FILE)
     }
-    await ensureIgnore($, found)
-    await update($, fileError, () => null)
+    await ensureIgnore(h, found)
+    await update(h, fileError, () => null)
     return `wrote ${wrote.join(', ')}\n${commitLine(c?.mainBranch ?? DEFAULTS.mainBranch)}`
   }
   if (e.action === 'status') {
-    if (e.id === undefined) return statusNow($, found, c, loaded, error)
+    if (e.id === undefined) return statusNow(h, found, c, loaded, error)
     const item = loaded?.items.find(i => i.id === e.id) ?? null
     if (!item) return `no item ${e.id}`
-    const ledger = await readLedger($, found, item.id)
+    const ledger = await readLedger(h, found, item.id)
     if (ledger.error) return `${[item.id, item.title, item.status].join(' · ')}\n${ledger.error}`
-    return ledger.value ? ledgerText((await loadLedger($, found, item.id)) ?? ledger.value, item) : `${[item.id, item.title, item.status].join(' · ')}\nno ledger`
+    return ledger.value ? ledgerText((await loadLedger(h, found, item.id)) ?? ledger.value, item) : `${[item.id, item.title, item.status].join(' · ')}\nno ledger`
   }
   if (e.action === 'get') {
-    const r = loaded ? await judgeAll($, found, loaded) : {}
-    const open = (await read($, signals)).filter(s => !s.delivered)
+    const r = loaded ? await judgeAll(h, found, loaded) : {}
+    const open = (await read(h, signals)).filter(s => !s.delivered)
     // The active item is the one in planning, building or review; resume is null until its ledger has the block.
-    const active = await activeItem($, loaded)
-    const ledger = active ? await loadLedger($, found, active.id) : null
+    const active = await activeItem(h, loaded)
+    const ledger = active ? await loadLedger(h, found, active.id) : null
     // A child's record without its log (up to 200 KB each): `log { item }` answers the text.
-    const kids = (await read($, children)).map(({ log: _log, ...rest }) => rest)
+    const kids = (await read(h, children)).map(({ log: _log, ...rest }) => rest)
     // A PR merged by hand: the item's Close is pending, and the run skill does it first.
-    const merged = await checkMerged($, found, c, loaded)
+    const merged = await checkMerged(h, found, c, loaded)
     let answer: string
     if (e.full) {
-      const out: Record<string, unknown> = { config: isGithub(c) ? githubConfig(c) : c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read($, siblings), mergedPending: merged }
+      const out: Record<string, unknown> = { config: isGithub(c) ? githubConfig(c) : c, backlog: loaded, readiness: r, active: active?.id ?? null, resume: ledger?.resume ?? null, signals: open, children: kids, siblings: await read(h, siblings), mergedPending: merged }
       if (error) out['error'] = error
       if (isGithub(c)) Object.assign(out, githubGet(c, e.id))
       answer = JSON.stringify(out, null, 2)
     } else {
-      const out: Record<string, unknown> = slimGet({ config: c ? normalizeConfig(c).config : null, backlog: loaded, readiness: r, active, ledger, signals: open, children: kids, siblings: await read($, siblings) })
+      const out: Record<string, unknown> = slimGet({ config: c ? normalizeConfig(c).config : null, backlog: loaded, readiness: r, active, ledger, signals: open, children: kids, siblings: await read(h, siblings) })
       if (e.id !== undefined) {
         const one = loaded?.items.find(i => i.id === e.id) ?? null
         out['item'] = one ? { ...one, ...(r[one.id] ? { readiness: r[one.id] } : {}) } : null
@@ -1253,59 +1223,59 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       answer = JSON.stringify(out)
     }
     // Each signal is delivered once: what this answer carries is marked.
-    if (open.length) await markDelivered($)
+    if (open.length) await markDelivered(h)
     return answer
   }
   if (e.action === 'signals') {
-    const open = (await read($, signals)).filter(s => !s.delivered)
-    const merged = await checkMerged($, found, c, loaded)
+    const open = (await read(h, signals)).filter(s => !s.delivered)
+    const merged = await checkMerged(h, found, c, loaded)
     const lost = isGithub(c) ? lostLines(c) : []
     if (lost.length) {
-      if (open.length) await markDelivered($)
+      if (open.length) await markDelivered(h)
       return JSON.stringify({ signals: open.map(compactSignal), lost, ...(merged.length ? { mergedPending: merged } : {}) })
     }
     if (!open.length && !merged.length) return 'no signals'
     const answer = merged.length ? JSON.stringify({ signals: open.map(compactSignal), mergedPending: merged }) : JSON.stringify(open.map(compactSignal))
-    if (open.length) await markDelivered($)
+    if (open.length) await markDelivered(h)
     return answer
   }
   if (e.action === 'clean') {
     if (error) throw new Refused(error)
     const id = typeof e.item === 'string' ? e.item : e.item?.id ?? e.id
     // queue: github: what a close had to leave, for a closed issue the backlog no longer holds.
-    const left = isGithub(c) ? await leftoverLines($, found, id) : []
+    const left = isGithub(c) ? await leftoverLines(h, found, id) : []
     if (id !== undefined && !left.length) {
       const item = loaded?.items.find(i => i.id === id)
       if (!item) throw new Refused(`no item ${id}`)
       if (item.status !== 'merged') throw new Refused(`${id} is ${item.status}, not merged`)
     }
-    const listed = cleanList({ config: c, backlog: loaded, ...(id !== undefined ? { item: id } : {}), ...(isGithub(c) ? { queue: 'github' as const } : {}), ...(await cleanInput($, found, loaded)) })
+    const listed = cleanList({ config: c, backlog: loaded, ...(id !== undefined ? { item: id } : {}), ...(isGithub(c) ? { queue: 'github' as const } : {}), ...(await cleanInput(h, found, loaded)) })
     const list = [...listed, ...left.filter(x => !listed.includes(x))]
     return list.length ? list.join('\n') : 'nothing to clean'
   }
   if (e.action === 'migrate') {
-    if (!e.refresh && (await $.fs.exists(p.config))) throw new Refused(`${CONFIG_FILE} exists; pass refresh: true to draft again`)
-    return JSON.stringify(await migrateDraft($, found), null, 2)
+    if (!e.refresh && (await h.fs.exists(p.config))) throw new Refused(`${CONFIG_FILE} exists; pass refresh: true to draft again`)
+    return JSON.stringify(await migrateDraft(h, found), null, 2)
   }
   if (e.action === 'migrate-apply') {
-    if (!e.refresh && (await $.fs.exists(p.dir))) throw new Refused('docs/pipeline/ exists; pass refresh: true to refresh titles, sources and links without changing a status')
+    if (!e.refresh && (await h.fs.exists(p.dir))) throw new Refused('docs/pipeline/ exists; pass refresh: true to refresh titles, sources and links without changing a status')
     if (error) throw new Refused(error)
-    return migrateApply($, found, loaded, e)
+    return migrateApply(h, found, loaded, e)
   }
-  if (e.action === 'migrate-github') return migrateGithub($, found, c, loaded, error, e)
+  if (e.action === 'migrate-github') return migrateGithub(h, found, c, loaded, error, e)
 
   if (e.action === 'log') {
     const id = typeof e.item === 'string' ? e.item : e.item?.id ?? e.id
     if (!id) throw new Refused('an id is needed')
-    const child = (await read($, children)).find(ch => ch.item === id)
-    const log = child?.log || (await readText($, childLog(found, id))) || ''
+    const child = (await read(h, children)).find(ch => ch.item === id)
+    const log = child?.log || (await readText(h, childLog(found, id))) || ''
     return log ? tail(log) : `no log for ${id}`
   }
 
   // Every write: the file as it is on disk, or refused when it does not parse.
   if (error) throw new Refused(error)
   const current = loaded ?? emptyBacklog()
-  const now = await nowIso($)
+  const now = await nowIso(h)
   const need = (id: string | undefined): string => {
     if (!id) throw new Refused('an id is needed')
     if (!current.items.some(i => i.id === id)) throw new Refused(`no item ${id}`)
@@ -1318,7 +1288,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       if (!set || typeof set !== 'object' || Array.isArray(set)) throw new Refused('ledger needs set')
       const ledgerPath = placesOf(found, c).ledger(id)
       const ledgerFile = relOf(found, ledgerPath)
-      const onDisk = await readLedger($, found, id)
+      const onDisk = await readLedger(h, found, id)
       if (onDisk.error) throw new Refused(onDisk.error)
       // A ledger file the item does not link is a leftover of a removed item: never merged into silently.
       const linked = current.items.find(i => i.id === id)?.ledger
@@ -1332,14 +1302,14 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       const shaped = shapeSet(set as Record<string, unknown>, { resume: repairResume(base.resume, Math.max(1, base.tasks?.length ?? 1)), tasks: base.tasks ?? [] })
       if (shaped.problems.length) throw new Refused(`ledger ${id} not written: ${shaped.problems.join('; ')}`)
       const merged = mergeLedger({ ...base, ...(base.resume ? { resume: repairResume(base.resume, Math.max(1, base.tasks?.length ?? 1))! } : {}) }, shaped.set, now)
-      await $.fs.write(ledgerPath, serialize(merged))
+      await h.fs.write(ledgerPath, serialize(merged))
       self.memo.delete(`ledger:${id}`)
       // The item points at its ledger, and carries the branch, PR and plan the ledger names.
       const item = current.items.find(i => i.id === id)!
       const mirror: Partial<Item> = {}
       if (item.ledger !== ledgerFile) mirror.ledger = ledgerFile
       for (const k of ['branch', 'pr', 'plan'] as const) if (typeof set[k] === 'string' && item[k] !== set[k]) mirror[k] = set[k] as string
-      if (Object.keys(mirror).length) await writeBacklog($, found, updateItem(current, id, mirror, now))
+      if (Object.keys(mirror).length) await writeBacklog(h, found, updateItem(current, id, mirror, now))
       return ledgerLine(merged)
     }
     case 'begin': {
@@ -1347,38 +1317,38 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       const named = typeof e.item === 'string' ? e.item : e.item?.id ?? e.id
       const first = named ?? current.items.find(i => i.status === 'ready')?.id
       if (!first) throw new Refused('nothing is ready: every item waits for a spec, an answer or another item')
-      return beginAction($, found, c, current, need(first), e)
+      return beginAction(h, found, c, current, need(first), e)
     }
     case 'ship':
-      return shipAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+      return shipAction(h, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'pr':
-      return prAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+      return prAction(h, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'accept':
-      return acceptAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+      return acceptAction(h, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'close': {
       const id = typeof e.item === 'string' ? e.item : e.item?.id ?? e.id
       // With the issues as the queue a closed item is no longer listed: a second close is answered, not refused.
       if (id && isGithub(c) && /^\d+$/.test(id) && !current.items.some(i => i.id === id)) {
-        const left = (await extrasOrRefuse($, found)).leftover?.find(l => l.id === id)
+        const left = (await extrasOrRefuse(h, found)).leftover?.find(l => l.id === id)
         return `${id} is already closed${left ? ` · its worktree ${left.worktree} is removed by the next begin or /pipeline clean` : ''} · nothing to do`
       }
-      return closeAction($, found, c, current, need(id), e)
+      return closeAction(h, found, c, current, need(id), e)
     }
     case 'gate':
-      return gateAction($, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+      return gateAction(h, found, c, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'merge':
-      return mergeAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+      return mergeAction(h, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'plan':
-      return planAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+      return planAction(h, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'brief':
-      return briefAction($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
+      return briefAction(h, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e)
     case 'add': {
       if (isGithub(c)) {
-        const added = await addIssue($, found, c, e)
+        const added = await addIssue(h, found, c, e)
         const n = /^added (\d+)/.exec(added)?.[1]
         // What add said about the milestone stays on the answer when the spec's line replaces the state.
         const milestone = / · milestone .*$/.exec(added)?.[0] ?? ''
-        if (n && typeof e.text === 'string' && e.text.trim()) return `${added.split(' · ')[0]} · ${withoutId(n, await specIssue($, found, n, e))}${milestone}`
+        if (n && typeof e.text === 'string' && e.text.trim()) return `${added.split(' · ')[0]} · ${withoutId(n, await specIssue(h, found, n, e))}${milestone}`
         return added
       }
       const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
@@ -1388,10 +1358,10 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       // The spec given with the item is written and linked in the same call.
       if (typeof e.text === 'string' && e.text.trim()) {
         const rel = `docs/pipeline/specs/${id}.md`
-        await $.fs.write(`${found}/${rel}`, e.text.endsWith('\n') ? e.text : `${e.text}\n`)
+        await h.fs.write(`${found}/${rel}`, e.text.endsWith('\n') ? e.text : `${e.text}\n`)
         next = updateItem(next, id, { spec: rel }, now)
       }
-      return writeLine($, found, next, id, state => `added ${id} · ${state}`)
+      return writeLine(h, found, next, id, state => `added ${id} · ${state}`)
     }
     case 'update': {
       const id = need(e.id)
@@ -1401,19 +1371,19 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       let said: string[] = []
       let fields = e.set as Record<string, unknown>
       if (isGithub(c) && TEXT.some(k => k in fields)) {
-        said = await editIssueText($, found, id, fields)
+        said = await editIssueText(h, found, id, fields)
         fields = Object.fromEntries(Object.entries(fields).filter(([k]) => !TEXT.includes(k)))
-        if (!Object.keys(fields).length) return `${id} · ${await issueState($, found, id, 'updated')} · set ${said.join(', ')}`
+        if (!Object.keys(fields).length) return `${id} · ${await issueState(h, found, id, 'updated')} · set ${said.join(', ')}`
       }
       const before = current.items.find(i => i.id === id)
       const next = updateItem(current, id, fields as Partial<Item>, now)
       const others = [...said, ...Object.keys(fields).filter(k => k !== 'status')]
-      const out = await writeLine($, found, next, id, state => [id, state, ...(others.length ? [`set ${others.join(', ')}`] : [])].join(' · '))
+      const out = await writeLine(h, found, next, id, state => [id, state, ...(others.length ? [`set ${others.join(', ')}`] : [])].join(' · '))
       const after = next.items.find(i => i.id === id)
       if (before && after && startsRun(before.status, after.status)) {
-        await queueRename($, c, after)
+        await queueRename(h, c, after)
         // Direct mode dispatches no agents, so the start of a run is what opens the panel.
-        await autoOpen($, 'run')
+        await h.ui.reveal('run')
       }
       return out
     }
@@ -1423,35 +1393,35 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       const to = e.to
       if (to !== 'top' && !(to && typeof to === 'object' && typeof to.after === 'string')) throw new Refused('move needs to: "top" or { after: "<id>" }')
       if (to !== 'top') need(to.after)
-      return writeLine($, found, moveItem(current, id, to), id, state => `${id} · moved ${to === 'top' ? 'to the top' : `after ${to.after}`} · ${state}`)
+      return writeLine(h, found, moveItem(current, id, to), id, state => `${id} · moved ${to === 'top' ? 'to the top' : `after ${to.after}`} · ${state}`)
     }
     case 'start':
-      return startChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e.force === true)
+      return startChild(h, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id), e.force === true)
     case 'stop':
-      return stopChild($, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
+      return stopChild(h, found, c, current, need(typeof e.item === 'string' ? e.item : e.item?.id ?? e.id))
     case 'adopt':
-      return adoptAction($, found, c, current, e)
+      return adoptAction(h, found, c, current, e)
     case 'remove': {
-      if (isGithub(c)) return declineIssue($, found, c, current, need(e.id), e)
+      if (isGithub(c)) return declineIssue(h, found, c, current, need(e.id), e)
       const id = need(e.id)
-      const left = (await writeBacklog($, found, removeItem(current, id))).backlog.items.length
+      const left = (await writeBacklog(h, found, removeItem(current, id))).backlog.items.length
       return `removed ${id} · ${left} item${left === 1 ? '' : 's'} left`
     }
     case 'park': {
       const id = need(e.id)
-      return writeLine($, found, updateItem(current, id, { status: 'parked' }, now), id, state => `${id} · ${state}`)
+      return writeLine(h, found, updateItem(current, id, { status: 'parked' }, now), id, state => `${id} · ${state}`)
     }
     case 'unpark': {
-      if (isGithub(c)) return unparkIssue($, found, c, current, e.id)
+      if (isGithub(c)) return unparkIssue(h, found, c, current, e.id)
       const id = need(e.id)
-      return writeLine($, found, updateItem(current, id, { status: 'inbox' }, now), id, state => `${id} · ${state}`)
+      return writeLine(h, found, updateItem(current, id, { status: 'inbox' }, now), id, state => `${id} · ${state}`)
     }
     case 'spec':
     case 'question':
     case 'answer': {
       if (!isGithub(c)) throw new Refused(`${e.action} is for queue: github; with queue: file the spec is a file and a question its Open section`)
       const id = need(e.id)
-      return e.action === 'spec' ? specIssue($, found, id, e) : e.action === 'question' ? questionIssue($, found, c, id, e) : answerIssue($, found, c, id, e)
+      return e.action === 'spec' ? specIssue(h, found, id, e) : e.action === 'question' ? questionIssue(h, found, c, id, e) : answerIssue(h, found, c, id, e)
     }
     default:
       throw new Refused(`unknown action "${String(e.action)}"`)
@@ -1459,7 +1429,7 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
 }
 
 /** The keys `get` adds with queue: github: how old the issues are when gh failed, the issues that lost the label, the quoted issue. */
-function githubGet(c: Config | null, id: string | undefined): Record<string, unknown> {
+export function githubGet(c: Config | null, id: string | undefined): Record<string, unknown> {
   const q = self.queue
   const out: Record<string, unknown> = {}
   if (q?.stale) out['stale'] = q.stale
@@ -1474,32 +1444,32 @@ function githubGet(c: Config | null, id: string | undefined): Record<string, unk
  * The config as `get` answers it with queue: github: an afterMerge entry under docs/pipeline/ has nothing to act on
  * (no BACKLOG.md, no record on mainBranch), so it is left out; pushMain and retain are not read in this mode.
  */
-function githubConfig(c: Config | null): Config | null {
+export function githubConfig(c: Config | null): Config | null {
   if (!c) return c
   const recordsDir = `${places('', 'file').recordsDir}/`
   return { ...c, afterMerge: normalizeConfig(c).config.afterMerge.filter(x => !x.replace(/^\.?\/+/, '').startsWith(recordsDir)) }
 }
 
 /** `<id> lost the <label> label` for each issue in flight that is open without the queue label. */
-const lostLines = (c: Config | null): string[] => (self.queue?.lost ?? []).map(id => `${id} lost the ${labelOf(c)} label`)
+export const lostLines = (c: Config | null): string[] => (self.queue?.lost ?? []).map(id => `${id} lost the ${labelOf(c)} label`)
 
-const BRIEF_KINDS: readonly string[] = ['implementer', 'fix', 'review', 'final']
+export const BRIEF_KINDS: readonly string[] = ['implementer', 'fix', 'review', 'final']
 
 /** The item's worktree as an absolute path: the ledger's, under the main checkout when relative; the main checkout without one. */
-const worktreePath = (found: string, ledger: Ledger | null): string => {
+export const worktreePath = (found: string, ledger: Ledger | null): string => {
   const w = typeof ledger?.worktree === 'string' ? slashes(ledger.worktree) : ''
   return !w ? found : /^(?:\/|[A-Za-z]:)/.test(w) ? w : `${found}/${w}`
 }
 
 /** A file of the item, read from its worktree first and from the main checkout otherwise. */
-async function readItemFile($: EngineInterface, found: string, wt: string, rel: string): Promise<string | null> {
-  return (await readText($, `${wt}/${rel}`)) ?? (wt === found ? null : await readText($, `${found}/${rel}`))
+export async function readItemFile(h: Host, found: string, wt: string, rel: string): Promise<string | null> {
+  return (await readText(h, `${wt}/${rel}`)) ?? (wt === found ? null : await readText(h, `${found}/${rel}`))
 }
 
 /** One git answer in the worktree, trimmed; null when git fails. */
-async function gitOut($: EngineInterface, wt: string, args: string[]): Promise<string | null> {
+export async function gitOut(h: Host, wt: string, args: string[]): Promise<string | null> {
   try {
-    const r = await $.process.run(['git', '-C', wt, ...args], { cwd: wt, timeoutMs: 30_000 })
+    const r = await h.process.run(['git', '-C', wt, ...args], { cwd: wt, timeoutMs: 30_000 })
     return r.exitCode === 0 ? r.stdout.trim() : null
   } catch {
     return null
@@ -1507,9 +1477,9 @@ async function gitOut($: EngineInterface, wt: string, args: string[]): Promise<s
 }
 
 /** The plan of an item, parsed and sound, or refused with the format or the problems. */
-async function loadPlan($: EngineInterface, found: string, wt: string, id: string, ledger: Ledger | null, allowNone = false) {
-  const rel = typeof ledger?.plan === 'string' && ledger.plan ? ledger.plan : placesOf(found, await read($, config)).planRel(id)
-  const text = await readItemFile($, found, wt, rel)
+export async function loadPlan(h: Host, found: string, wt: string, id: string, ledger: Ledger | null, allowNone = false) {
+  const rel = typeof ledger?.plan === 'string' && ledger.plan ? ledger.plan : placesOf(found, await read(h, config)).planRel(id)
+  const text = await readItemFile(h, found, wt, rel)
   if (text === null) {
     // Direct mode writes no plan: the one brief it may ask for, the review of the whole branch, needs none.
     if (allowNone && !(ledger?.tasks ?? []).length) return { plan: { title: '', constraints: '', parked: '', tasks: [] }, rel }
@@ -1522,32 +1492,32 @@ async function loadPlan($: EngineInterface, found: string, wt: string, id: strin
 }
 
 /** A brief's answer without its leading item id, for joining onto another answer. */
-const withoutId = (id: string, line: string) => (line.startsWith(`${id} · `) ? line.slice(id.length + 3) : line)
+export const withoutId = (id: string, line: string) => (line.startsWith(`${id} · `) ? line.slice(id.length + 3) : line)
 
-const FACTS_MAX = 12
+export const FACTS_MAX = 12
 
 /**
  * What a run learned about working in this repository (a command's working spelling, a step that must come first):
  * one line per fact in the facts file of the queue mode, the newest twelve kept, given to every implementer and reviewer.
  */
-async function addFact($: EngineInterface, found: string, fact: string): Promise<void> {
+export async function addFact(h: Host, found: string, fact: string): Promise<void> {
   const line = fact.replace(/\s+/g, ' ').trim().slice(0, 240)
   if (!line) return
-  const path = placesOf(found, await read($, config)).facts
-  const lines = ((await readText($, path)) ?? '').split('\n').map(l => l.replace(/^[-*]\s+/, '').trim()).filter(l => l && !l.startsWith('#'))
+  const path = placesOf(found, await read(h, config)).facts
+  const lines = ((await readText(h, path)) ?? '').split('\n').map(l => l.replace(/^[-*]\s+/, '').trim()).filter(l => l && !l.startsWith('#'))
   if (lines.some(l => l.toLowerCase() === line.toLowerCase())) return
   const kept = [...lines, line].slice(-FACTS_MAX)
-  await $.fs.write(path, `# Facts\n\nWhat runs learned about working in this repository; the tool keeps the newest ${FACTS_MAX} and gives them to every brief. Delete a line that stopped being true.\n\n${kept.map(l => `- ${l}`).join('\n')}\n`)
+  await h.fs.write(path, `# Facts\n\nWhat runs learned about working in this repository; the tool keeps the newest ${FACTS_MAX} and gives them to every brief. Delete a line that stopped being true.\n\n${kept.map(l => `- ${l}`).join('\n')}\n`)
 }
 
 /** Stages the paths and commits them in the worktree with the attribution lines; false when there was nothing to commit or git failed. */
-async function commitPaths($: EngineInterface, wt: string, rels: string[], message: string, attribution: string): Promise<boolean> {
-  if ((await gitOut($, wt, ['add', '--', ...rels])) === null) return false
-  return (await gitOut($, wt, ['commit', '-q', ...commitArgs(message, attribution), '--', ...rels])) !== null
+export async function commitPaths(h: Host, wt: string, rels: string[], message: string, attribution: string): Promise<boolean> {
+  if ((await gitOut(h, wt, ['add', '--', ...rels])) === null) return false
+  return (await gitOut(h, wt, ['commit', '-q', ...commitArgs(message, attribution), '--', ...rels])) !== null
 }
 
 /** The lead's model use since the last record, added to the ledger's `lead` and reset. */
-async function recordLead($: EngineInterface, ledger: Ledger | null): Promise<Record<string, unknown>> {
+export async function recordLead(h: Host, ledger: Ledger | null): Promise<Record<string, unknown>> {
   const before = (ledger?.['lead'] ?? {}) as { tokens?: number; cached?: number }
   const lead = { tokens: (Number(before.tokens) || 0) + self.lead.tokens, cached: (Number(before.cached) || 0) + self.lead.cached }
   self.lead = { tokens: 0, cached: 0 }
@@ -1558,30 +1528,30 @@ async function recordLead($: EngineInterface, ledger: Ledger | null): Promise<Re
  * `begin`: the item is this session's. The claim check, the worktree on the item's branch (made here, reused when
  * there), the base, the status and the ledger in one call; the answer names the worktree to enter and what is next.
  */
-async function beginAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput = { action: 'begin' }): Promise<string> {
+export async function beginAction(h: Host, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput = { action: 'begin' }): Promise<string> {
   // An item whose pull request was merged by hand is closed here, in code, so the lead spends no call on it.
   try {
-    for (const m of await checkMerged($, found, c, current)) if (m.id !== id) await runTool($, { action: 'close', item: m.id, ...(m.pr ? { pr: m.pr } : {}) })
+    for (const m of await checkMerged(h, found, c, current)) if (m.id !== id) await runTool(h, { action: 'close', item: m.id, ...(m.pr ? { pr: m.pr } : {}) })
   } catch {}
   const item = current.items.find(i => i.id === id)!
-  const isChild = await isChildSession($)
+  const isChild = await isChildSession(h)
   const isActive = (ACTIVE_STATUSES as readonly string[]).includes(item.status)
   if (!isActive && item.status !== 'ready' && item.status !== 'blocked') {
-    const why = item.status === 'inbox' ? (await judgeAll($, found, current))[id] : undefined
+    const why = item.status === 'inbox' ? (await judgeAll(h, found, current))[id] : undefined
     throw new Refused(`${id} is ${item.status}${why && !why.ready ? `: ${why.reason}` : ''}, not ready`)
   }
   // An item another live session runs is not taken over: two sessions asking for the next item get two items.
   // The live file is read now, under the lock, so a claim made a moment ago by another session is seen.
   if (isActive && self.item !== id && !isChild) {
-    await heartbeat($, true)
-    const other = (await read($, siblings)).find(x => !x.isStale && x.item === id)
+    await heartbeat(h, true)
+    const other = (await read(h, siblings)).find(x => !x.isStale && x.item === id)
     if (other) throw new Refused(`${id} is run by another session (${other.title}); pick the next item`)
-    if (runningOf(await read($, children)).some(ch => ch.item === id)) throw new Refused(`${id} is run by a child session of this one`)
+    if (runningOf(await read(h, children)).some(ch => ch.item === id)) throw new Refused(`${id} is run by a child session of this one`)
   }
   const mainBranch = c?.mainBranch ?? DEFAULTS.mainBranch
   // What an earlier close had to leave behind (a worktree its session sat in) goes now.
-  await sweepMerged($, found, c, current)
-  const ledger = await loadLedger($, found, id)
+  await sweepMerged(h, found, c, current)
+  const ledger = await loadLedger(h, found, id)
   const branch = typeof ledger?.branch === 'string' && ledger.branch ? ledger.branch : itemBranchOf(c?.branch ?? DEFAULTS.branch, id)
   const rel = typeof ledger?.worktree === 'string' && ledger.worktree ? slashes(ledger.worktree) : `.claude/worktrees/${id}`
   const wt = worktreePath(found, { ...(ledger ?? emptyLedger(id)), worktree: rel })
@@ -1591,43 +1561,43 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
   let specMd = ''
   let seen: string[] = []
   if (gh) {
-    const fresh = await claimIssue($, found, c, id, ledger !== null, e.force === true)
+    const fresh = await claimIssue(h, found, c, id, ledger !== null, e.force === true)
     specMd = fresh.specMd
     seen = fresh.issue.assignees
   }
   // Off the remote's main when it is known, so the branch starts from what a PR will be compared with.
-  await gitOut($, found, ['fetch', '-q', 'origin', mainBranch])
-  const from = (await gitOut($, found, ['rev-parse', '--verify', '-q', `origin/${mainBranch}`])) !== null ? `origin/${mainBranch}` : mainBranch
-  await ensureWorktree($, found, wt, branch, from)
+  await gitOut(h, found, ['fetch', '-q', 'origin', mainBranch])
+  const from = (await gitOut(h, found, ['rev-parse', '--verify', '-q', `origin/${mainBranch}`])) !== null ? `origin/${mainBranch}` : mainBranch
+  await ensureWorktree(h, found, wt, branch, from)
   if (gh) {
-    await ensureExclude($, found)
-    await $.fs.write(`${wt}/${P.specRel(id)}`, specMd)
+    await ensureExclude(h, found)
+    await h.fs.write(`${wt}/${P.specRel(id)}`, specMd)
   }
-  const base = ledger?.base ?? (await gitOut($, wt, ['merge-base', 'HEAD', from])) ?? (await gitOut($, wt, ['rev-parse', 'HEAD'])) ?? undefined
+  const base = ledger?.base ?? (await gitOut(h, wt, ['merge-base', 'HEAD', from])) ?? (await gitOut(h, wt, ['rev-parse', 'HEAD'])) ?? undefined
   const hasTasks = (ledger?.tasks ?? []).length > 0
   // Direct mode has no planning stage: the agent builds the item its own way, so a begun item is building.
   const isDirect = normalizeConfig(c ?? DEFAULTS).config.mode === 'direct' && !hasTasks
   const status = item.status === 'ready' || (item.status === 'blocked' && !hasTasks) ? (isDirect ? 'building' : 'planning') : item.status === 'blocked' ? 'building' : item.status
   self.item = id
-  const record = () => runTool($, { action: 'ledger', item: id, set: { branch, worktree: rel, ...(base ? { base: base.slice(0, 12) } : {}) } })
+  const record = () => runTool(h, { action: 'ledger', item: id, set: { branch, worktree: rel, ...(base ? { base: base.slice(0, 12) } : {}) } })
   if (!gh) await record()
-  if (status !== item.status) await runTool($, { action: 'update', id, set: { status } })
+  if (status !== item.status) await runTool(h, { action: 'update', id, set: { status } })
   if (gh) {
     // Two machines that labelled the issue in the same second: of the assignees new since the first read and this
     // user, the login that sorts first keeps the claim. The others let go without touching a label or the status:
     // their worktree, their assignment and their entry in items.json go, and the winner's claim stands.
     if (status !== item.status) {
-      const after = await readIssue($, found, id)
+      const after = await readIssue(h, found, id)
       const rivals = after.assignees.filter(a => a !== self.me && !seen.includes(a))
       const winner = [...rivals, self.me].sort()[0]
       if (rivals.length && winner !== self.me) {
-        await gitMain($, found, ['worktree', 'remove', '--force', wt])
-        const off = await tracker.edit(ghRun($, found), Number(id), { unassign: self.me })
-        if (off.ok) await editCache($, found, issues => issues.map(i => (String(i.number) === id ? { ...i, assignees: i.assignees.filter(a => a !== self.me) } : i)))
-        const extras = await extrasOrRefuse($, found)
+        await gitMain(h, found, ['worktree', 'remove', '--force', wt])
+        const off = await tracker.edit(ghRun(h, found), Number(id), { unassign: self.me })
+        if (off.ok) await editCache(h, found, issues => issues.map(i => (String(i.number) === id ? { ...i, assignees: i.assignees.filter(a => a !== self.me) } : i)))
+        const extras = await extrasOrRefuse(h, found)
         const { [id]: _gone, ...items } = extras.items
-        await writeExtras($, found, { ...extras, items })
-        await loadBacklog($, found)
+        await writeExtras(h, found, { ...extras, items })
+        await loadBacklog(h, found)
         if (self.item === id) self.item = ''
         throw new Refused(`${id} is being built by @${winner}; pick the next item`)
       }
@@ -1635,11 +1605,11 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
     // Recorded once the item is in flight, so its entry in items.json keeps the ledger's link.
     await record()
   }
-  await heartbeat($, true)
+  await heartbeat(h, true)
   const spec = gh ? P.specRel(id) : item.spec ?? P.specRel(id)
   const r = ledger?.resume
   // Direct mode hands the spec over with the answer, so the lead spends no turn reading it.
-  const specBody = isDirect ? ((await readItemFile($, found, wt, spec)) ?? '').trim() : ''
+  const specBody = isDirect ? ((await readItemFile(h, found, wt, spec)) ?? '').trim() : ''
   const specText = specBody ? `\n\nThe spec (${spec}):\n\n${specBody.length > 6000 ? `${specBody.slice(0, 6000)}\n… (cut: read the file for the rest)` : specBody}` : ` (the spec: ${spec})`
   const next = hasTasks && r ? `resume: task ${r.task}/${ledger!.tasks.length} · ${r.state}${r.lastVerified ? ` · verified ${r.lastVerified}` : ''}` : isDirect ? `next: build it your own way in ${isChild ? 'this directory' : wt}, then ship with "message"${specText}` : `next: in that worktree read ${spec}, write the plan at ${P.planRel(id)}, then plan`
   return `${id} · ${status} · branch ${branch} · base ${(base ?? '?').slice(0, 7)} · ${isChild ? 'this directory is the worktree' : `worktree ${wt}`} · ${next}`
@@ -1649,27 +1619,27 @@ async function beginAction($: EngineInterface, found: string, c: Config | null, 
  * `accept`: a verified task is recorded and saved in one call. The open dispatch closed, the task accepted with its
  * commit range, the briefs and reports committed, the branch pushed, the resume block moved to the next task.
  */
-async function acceptAction($: EngineInterface, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
-  const ledger = await loadLedger($, found, id)
+export async function acceptAction(h: Host, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
+  const ledger = await loadLedger(h, found, id)
   if (!ledger?.tasks.length) throw new Refused(`${id} has no tasks: call plan first`)
   const n = Number(e.task)
   const task = ledger.tasks.find(t => t.n === n)
   if (!task) throw new Refused(`accept needs task: 1 to ${ledger.tasks.length}`)
   const wt = worktreePath(found, ledger)
   const from = ledger.resume?.lastVerified ?? ledger.base ?? ''
-  const head = (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? ''
+  const head = (await gitOut(h, wt, ['rev-parse', '--short', 'HEAD'])) ?? ''
   if (!head) throw new Refused(`git could not read HEAD in ${wt}`)
-  if (from && (await gitOut($, wt, ['rev-parse', '--short', from])) === head) throw new Refused(`task ${n} has no commit after ${from}: nothing to accept`)
+  if (from && (await gitOut(h, wt, ['rev-parse', '--short', from])) === head) throw new Refused(`task ${n} has no commit after ${from}: nothing to accept`)
   // The pipeline's own files (a brief rendered again, a report rewritten) are committed below, not the implementer's to commit.
   const P = placesOf(found, c)
   const gh = isGithub(c)
-  const dirty = await gitOut($, wt, ['status', '--porcelain', '--untracked-files=no', '--', '.', `:(exclude)${P.recordsDir}`])
+  const dirty = await gitOut(h, wt, ['status', '--porcelain', '--untracked-files=no', '--', '.', `:(exclude)${P.recordsDir}`])
   if (dirty) throw new Refused(`uncommitted changes in the worktree, the implementer did not commit:\n${dirty.split('\n').slice(0, 8).join('\n')}`)
   const wasReviewed = (task.dispatches ?? []).some(d => d.role === 'reviewer')
   // The review the config asks for is checked here, so the lead calls accept straight after its own verification.
   const cfg = normalizeConfig(c ?? DEFAULTS).config
   if (!wasReviewed && cfg.taskReview !== 'off' && from) {
-    const names = await gitOut($, wt, ['diff', '--name-only', `${from}..${head}`])
+    const names = await gitOut(h, wt, ['diff', '--name-only', `${from}..${head}`])
     const risky = names === null ? [] : riskyMatches(names.split('\n').map(l => l.trim()).filter(Boolean), cfg.riskyPaths)
     if (cfg.taskReview === 'always' || risky.length) {
       throw new Refused(`review first: ${risky.length ? `task ${n} touches ${risky[0]}` : 'taskReview is always'} · brief { kind: "review", task: ${n}, commits: "${from}..${head}", close: { tokens, minutes, result } }, then accept`)
@@ -1677,23 +1647,23 @@ async function acceptAction($: EngineInterface, found: string, c: Config | null,
   }
   const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
   // queue: github keeps the records out of the repository: nothing to commit.
-  const isRecorded = gh ? false : await commitPaths($, wt, [P.briefDir(id)], `${id}: task ${n} record`, attribution)
-  const after = isRecorded ? (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? head : head
-  const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
+  const isRecorded = gh ? false : await commitPaths(h, wt, [P.briefDir(id)], `${id}: task ${n} record`, attribution)
+  const after = isRecorded ? (await gitOut(h, wt, ['rev-parse', '--short', 'HEAD'])) ?? head : head
+  const isPushed = ledger.branch ? (await gitOut(h, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
   const next = ledger.tasks.find(t => t.n !== n && t.status !== 'accepted')?.n
   const close = { ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}), ...(typeof e.minutes === 'number' ? { minutes: e.minutes } : {}), result: 'done' }
   const carried = typeof e.carried === 'string' && e.carried.trim() ? [e.carried.trim()] : undefined
   const review = { kind: (wasReviewed ? 'independent' : 'lead-diff') as 'independent' | 'lead-diff', verdict: e.verdict?.trim() || 'approved', ...(carried ? { carried } : {}) }
-  await runTool($, { action: 'ledger', item: id, set: { tasks: [{ n, close, status: 'accepted', commits: `${from || 'base'}..${head}`, review }], resume: { task: next ?? n, state: `task ${n} accepted`, lastVerified: after }, ...(await recordLead($, ledger)) } })
+  await runTool(h, { action: 'ledger', item: id, set: { tasks: [{ n, close, status: 'accepted', commits: `${from || 'base'}..${head}`, review }], resume: { task: next ?? n, state: `task ${n} accepted`, lastVerified: after }, ...(await recordLead(h, ledger)) } })
   const done = ledger.tasks.filter(t => t.status === 'accepted' || t.n === n).length
   // The issue's status line shows the task counter.
-  if (gh) await runTool($, { action: 'update', id, set: { note: `task ${done}/${ledger.tasks.length}` } })
-  if (typeof e.fact === 'string' && e.fact.trim()) await addFact($, found, e.fact)
+  if (gh) await runTool(h, { action: 'update', id, set: { note: `task ${done}/${ledger.tasks.length}` } })
+  if (typeof e.fact === 'string' && e.fact.trim()) await addFact(h, found, e.fact)
   const line = `${id} · task ${n} accepted · ${done}/${ledger.tasks.length} · ${from ? `${from.slice(0, 7)}..` : ''}${head} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'}`
   // The next Agent call comes with the answer: the next task's implementer, or the final review after the last.
   try {
-    const current = (await loadBacklog($, found)).value
-    if (current) return `${line} · ${withoutId(id, await briefAction($, found, c, current, id, next ? { action: 'brief', kind: 'implementer', task: next, ...(carried ? { carried: carried[0]! } : {}) } : { action: 'brief', kind: 'final' }))}`
+    const current = (await loadBacklog(h, found)).value
+    if (current) return `${line} · ${withoutId(id, await briefAction(h, found, c, current, id, next ? { action: 'brief', kind: 'implementer', task: next, ...(carried ? { carried: carried[0]! } : {}) } : { action: 'brief', kind: 'final' }))}`
   } catch {}
   return `${line} · next: ${next ? `brief task ${next}` : 'brief final'}`
 }
@@ -1706,17 +1676,17 @@ async function acceptAction($: EngineInterface, found: string, c: Config | null,
  * A shell command line run to its end through `runLong`. `sh` first; where there is no `sh` on PATH (Windows outside
  * Git Bash) the `sh.exe` that ships with Git, found from `git --exec-path`. Throws the first error when neither starts.
  */
-async function runShell($: EngineInterface, command: string, cwd: string): Promise<{ code: number | null; out: string }> {
+export async function runShell(h: Host, command: string, cwd: string): Promise<{ code: number | null; out: string }> {
   try {
-    return await runLong($, ['sh', '-c', command], cwd)
+    return await runLong(h, ['sh', '-c', command], cwd)
   } catch (err) {
     // <Git>/mingw64/libexec/git-core (or ucrt64, clangarm64, usr) → <Git>/bin/sh.exe, else <Git>/usr/bin/sh.exe
-    const exec = slashes((await gitOut($, cwd, ['--exec-path'])) ?? '')
+    const exec = slashes((await gitOut(h, cwd, ['--exec-path'])) ?? '')
     const root = /^(.*)\/[^/]+\/(?:libexec|lib)\/git-core\/?$/.exec(exec)?.[1]
     if (!root) throw err
     for (const sh of [`${root}/bin/sh.exe`, `${root}/usr/bin/sh.exe`]) {
       try {
-        return await runLong($, [sh, '-c', command], cwd)
+        return await runLong(h, [sh, '-c', command], cwd)
       } catch {
         // try the next one
       }
@@ -1725,8 +1695,8 @@ async function runShell($: EngineInterface, command: string, cwd: string): Promi
   }
 }
 
-async function runLong($: EngineInterface, argv: string[], cwd: string): Promise<{ code: number | null; out: string }> {
-  const stream = $.process.spawn({ argv, cwd })
+export async function runLong(h: Host, argv: string[], cwd: string): Promise<{ code: number | null; out: string }> {
+  const stream = h.process.spawn({ argv, cwd })
   let out = ''
   for (;;) {
     const r = await stream.next()
@@ -1741,10 +1711,10 @@ async function runLong($: EngineInterface, argv: string[], cwd: string): Promise
  * checks answer their names and nothing is merged. Not under the lock while it waits: CI may take longer than another
  * session should wait for it.
  */
-async function mergeAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+export async function mergeAction(h: Host, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
   const cfg = normalizeConfig(c ?? DEFAULTS).config
   const item = current.items.find(i => i.id === id)!
-  const ledger = await loadLedger($, found, id)
+  const ledger = await loadLedger(h, found, id)
   const pr = e.pr?.trim() || item.pr || ledger?.pr || ''
   const n = Number(/(\d+)\/?$/.exec(pr)?.[1])
   if (!n) throw new Refused(`merge needs the pull request: pass "pr": "#31" (${id} carries none)`)
@@ -1752,24 +1722,24 @@ async function mergeAction($: EngineInterface, found: string, c: Config | null, 
   // A pull request the item did not open itself (a follow-up branch, a PR made by hand): its head is the item's
   // branch from here on, so close looks for the right one.
   if (!(typeof ledger?.branch === 'string' && ledger.branch) && !item.branch) {
-    const info = await tracker.prInfo(ghRun($, found), n)
-    if (info.ok && info.value.head) await runTool($, { action: 'ledger', item: id, set: { branch: info.value.head, pr: `#${n}` } })
+    const info = await tracker.prInfo(ghRun(h, found), n)
+    if (info.ok && info.value.head) await runTool(h, { action: 'ledger', item: id, set: { branch: info.value.head, pr: `#${n}` } })
   }
   // A real wait between polls: `sleep` as a process, so it does not hang on a clock that only a test moves; the clock where there is no sleep.
   const wait = async (ms: number): Promise<void> => {
     try {
-      const r = await $.process.run(['sleep', String(Math.ceil(ms / 1000))], { cwd: found, timeoutMs: ms + 10_000 })
+      const r = await h.process.run(['sleep', String(Math.ceil(ms / 1000))], { cwd: found, timeoutMs: ms + 10_000 })
       if (r.exitCode === 0) return
     } catch {
       // no sleep on this machine
     }
-    await pause($, ms)
+    await pause(h, ms)
   }
-  const run = ghRun($, found)
+  const run = ghRun(h, found)
   // A repository with workflow files is expected to report: no check within five minutes is then not "no CI",
   // and the pull request is not merged on it (unless forced).
   const wtOf = worktreePath(found, ledger)
-  const flows = [...(await listDir($, `${wtOf}/.github/workflows`)), ...(wtOf === found ? [] : await listDir($, `${found}/.github/workflows`))]
+  const flows = [...(await listDir(h, `${wtOf}/.github/workflows`)), ...(wtOf === found ? [] : await listDir(h, `${found}/.github/workflows`))]
   const expectsCi = flows.some(f => /\.ya?ml$/i.test(f))
   const state = await tracker.watchChecks(run, n, wait, expectsCi)
   if (!state.ok) throw new Refused(`${state.error} · or ${yourself}`)
@@ -1779,7 +1749,7 @@ async function mergeAction($: EngineInterface, found: string, c: Config | null, 
   const merged = await tracker.mergePr(run, n, cfg.mergeMethod)
   if (!merged.ok) throw new Refused(`PR #${n} could not be merged: ${merged.error}`)
   // A squash leaves the branch tip off mainBranch, so close is told the merge happened.
-  const closed = await runTool($, { action: 'close', item: id, pr: pr.startsWith('#') || /^https?:/.test(pr) ? pr : `#${n}`, ...(cfg.mergeMethod === 'squash' || e.force ? { force: true } : {}) })
+  const closed = await runTool(h, { action: 'close', item: id, pr: pr.startsWith('#') || /^https?:/.test(pr) ? pr : `#${n}`, ...(cfg.mergeMethod === 'squash' || e.force ? { force: true } : {}) })
   return `${closed} · CI ${state.value.state !== 'none' ? 'green' : state.value.quiet ? 'none (no workflow ran for this commit)' : 'none'}`
 }
 
@@ -1787,8 +1757,8 @@ async function mergeAction($: EngineInterface, found: string, c: Config | null, 
  * `gate`: the tool runs `checks.gate` in the worktree itself and records what happened with the final verdict, so
  * a gate is never green by assumption. Green: the records committed and the branch pushed. Red: the output's tail.
  */
-async function gateAction($: EngineInterface, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
-  const ledger = await loadLedger($, found, id)
+export async function gateAction(h: Host, found: string, c: Config | null, id: string, e: ToolInput): Promise<string> {
+  const ledger = await loadLedger(h, found, id)
   if (!ledger) throw new Refused(`${id} has no ledger`)
   const wt = worktreePath(found, ledger)
   const cfg = normalizeConfig(c ?? DEFAULTS).config
@@ -1800,27 +1770,27 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
   let verified = ledger.resume?.lastVerified ?? ''
   if (isDirect) {
     const base = ledger.base ?? ''
-    const head = (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? ''
-    if (base && head && (await gitOut($, wt, ['rev-parse', '--short', base])) === head) throw new Refused(`${id} has no commit after ${base.slice(0, 7)}: build it and commit, then gate`)
-    const dirty = await gitOut($, wt, ['status', '--porcelain', '--untracked-files=no', '--', '.', ':(exclude)docs/pipeline', ':(exclude).pipeline'])
+    const head = (await gitOut(h, wt, ['rev-parse', '--short', 'HEAD'])) ?? ''
+    if (base && head && (await gitOut(h, wt, ['rev-parse', '--short', base])) === head) throw new Refused(`${id} has no commit after ${base.slice(0, 7)}: build it and commit, then gate`)
+    const dirty = await gitOut(h, wt, ['status', '--porcelain', '--untracked-files=no', '--', '.', ':(exclude)docs/pipeline', ':(exclude).pipeline'])
     if (dirty) throw new Refused(`uncommitted changes in the worktree: commit them, then gate\n${dirty.split('\n').slice(0, 8).join('\n')}`)
     range = base && head ? `${base.slice(0, 7)}..${head}` : ''
     if (head) verified = head
     const reviewed = Boolean(e.verdict?.trim() || ledger.final?.verdict)
     if (!reviewed && cfg.taskReview !== 'off' && range) {
-      const names = await gitOut($, wt, ['diff', '--name-only', `${base}..${head}`])
+      const names = await gitOut(h, wt, ['diff', '--name-only', `${base}..${head}`])
       const risky = names === null ? [] : riskyMatches(names.split('\n').map(l => l.trim()).filter(Boolean), cfg.riskyPaths)
       if (cfg.taskReview === 'always' || risky.length) {
         throw new Refused(`review first: ${risky.length ? `the branch touches ${risky[0]}` : 'taskReview is always'} · brief { item: "${id}", kind: "final" }, the Agent call it answers, then gate with "verdict"`)
       }
     }
-    await runTool($, { action: 'ledger', item: id, set: { resume: { task: 1, state: 'gate running', ...(head ? { lastVerified: head } : {}) } } })
+    await runTool(h, { action: 'ledger', item: id, set: { resume: { task: 1, state: 'gate running', ...(head ? { lastVerified: head } : {}) } } })
   }
   let gate = 'none configured'
   let output = ''
   if (command) {
     try {
-      const r = await runShell($, command, wt)
+      const r = await runShell(h, command, wt)
       gate = r.code === 0 ? 'green' : `red (exit ${r.code ?? 'signal'})`
       if (r.code !== 0) output = tail(r.out.trim(), 20)
     } catch (err) {
@@ -1829,11 +1799,11 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
   }
   const verdict = e.verdict?.trim() || ledger.final?.verdict || (isDirect ? 'no review asked' : 'not reviewed')
   const final = { ...(ledger.final ?? {}), verdict, gate, ...(range ? { commits: range } : {}), ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}) }
-  await runTool($, { action: 'ledger', item: id, set: { final, resume: { task: isDirect ? 1 : (ledger.resume?.task ?? ledger.tasks.length), state: gate.startsWith('red') ? 'gate red' : 'gate run', ...(verified ? { lastVerified: verified } : {}) }, ...(await recordLead($, ledger)) } })
+  await runTool(h, { action: 'ledger', item: id, set: { final, resume: { task: isDirect ? 1 : (ledger.resume?.task ?? ledger.tasks.length), state: gate.startsWith('red') ? 'gate red' : 'gate run', ...(verified ? { lastVerified: verified } : {}) }, ...(await recordLead(h, ledger)) } })
   if (gate.startsWith('red')) return `${id} · gate ${gate} · \`${command}\`\n${output}`
   const attribution = typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
-  if (!isGithub(c)) await commitPaths($, wt, [placesOf(found, c).briefDir(id)], `${id}: final review record`, attribution)
-  const isPushed = ledger.branch ? (await gitOut($, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
+  if (!isGithub(c)) await commitPaths(h, wt, [placesOf(found, c).briefDir(id)], `${id}: final review record`, attribution)
+  const isPushed = ledger.branch ? (await gitOut(h, wt, ['push', '-q', '-u', 'origin', ledger.branch])) !== null : false
   return `${id} · gate ${gate} · final ${verdict} · ${isPushed ? 'pushed' : 'not pushed (git push failed: push it yourself)'} · next: ${isDirect || /approved/i.test(verdict) ? `ship { item: "${id}" }` : 'the final review'}`
 }
 
@@ -1843,9 +1813,9 @@ async function gateAction($: EngineInterface, found: string, c: Config | null, i
  * stops at the first thing the lead must act on (a red gate, a review to dispatch, red CI) and says what. On the
  * full loop it is the same end once every task is accepted: the gate with the final verdict, then the rest.
  */
-async function shipAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+export async function shipAction(h: Host, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
   const cfg = normalizeConfig(c ?? DEFAULTS).config
-  const ledger = await loadLedger($, found, id)
+  const ledger = await loadLedger(h, found, id)
   if (!ledger?.branch) throw new Refused(`${id} has no branch on record: begin it first`)
   // The full loop: the tasks are the implementers' commits, so nothing is committed here; ship is the gate with
   // the final verdict (unless it already ran green), the pull request and the merge.
@@ -1854,25 +1824,25 @@ async function shipAction($: EngineInterface, found: string, c: Config | null, c
   if (open) throw new Refused(`${id} runs on the full loop and task ${open.n} is not accepted: accept its tasks, then ship with the final verdict`)
   const isGated = isFull && ledger.final?.gate === 'green' && /approved/i.test(ledger.final?.verdict ?? '') && !e.verdict
   const wt = worktreePath(found, ledger)
-  if (typeof e.attribution === 'string') await runTool($, { action: 'ledger', item: id, set: { attribution: e.attribution } })
+  if (typeof e.attribution === 'string') await runTool(h, { action: 'ledger', item: id, set: { attribution: e.attribution } })
   const attribution = typeof e.attribution === 'string' ? e.attribution : typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
   const SCOPE = ['--', '.', ':(exclude)docs/pipeline', ':(exclude).pipeline']
-  const dirty = isFull ? '' : await gitOut($, wt, ['status', '--porcelain', ...SCOPE])
+  const dirty = isFull ? '' : await gitOut(h, wt, ['status', '--porcelain', ...SCOPE])
   if (dirty) {
     if (!e.message?.trim()) throw new Refused('uncommitted changes in the worktree: pass "message" and ship commits them')
-    await gitOut($, wt, ['add', '-A', ...SCOPE])
-    const done = await gitOut($, wt, ['commit', '-q', ...commitArgs(e.message, attribution)])
+    await gitOut(h, wt, ['add', '-A', ...SCOPE])
+    const done = await gitOut(h, wt, ['commit', '-q', ...commitArgs(e.message, attribution)])
     if (done === null) throw new Refused('git commit failed in the worktree: commit it yourself, then ship')
   }
   // The gate, with the review a risky branch needs answered as the call to make.
   let gated = `${id} · gate green`
   if (!isGated) try {
-    gated = await runTool($, { action: 'gate', item: id, ...(e.verdict ? { verdict: e.verdict } : {}), ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}) })
+    gated = await runTool(h, { action: 'gate', item: id, ...(e.verdict ? { verdict: e.verdict } : {}), ...(typeof e.tokens === 'number' ? { tokens: e.tokens } : {}) })
   } catch (err) {
     const said = err instanceof Error ? err.message : String(err)
     if (!said.startsWith('review first')) throw err
-    const after = (await loadBacklog($, found)).value ?? current
-    const brief = await briefAction($, found, c, after, id, { action: 'brief', kind: 'final' })
+    const after = (await loadBacklog(h, found)).value ?? current
+    const brief = await briefAction(h, found, c, after, id, { action: 'brief', kind: 'final' })
     return `${id} · ${said.split(' · ')[0]} · ${withoutId(id, brief)} Then ship again with "verdict".`
   }
   if (/· gate red/.test(gated.split('\n')[0] ?? '')) return gated
@@ -1881,16 +1851,16 @@ async function shipAction($: EngineInterface, found: string, c: Config | null, c
   // The pull request; without gh the branch is pushed and the rest is the lead's.
   let opened: string
   try {
-    opened = await runTool($, { action: 'pr', item: id, ...(e.title ? { title: e.title } : {}), ...(e.body ? { body: e.body } : {}) })
+    opened = await runTool(h, { action: 'pr', item: id, ...(e.title ? { title: e.title } : {}), ...(e.body ? { body: e.body } : {}) })
   } catch (err) {
     return `${gated.replace(/ · next: .*$/, '')} · PR not opened (${err instanceof Error ? err.message.split(' · ')[0] : String(err)}): open it yourself, then update with "pr" and "status": "review"`
   }
   let out = opened
-  if (cfg.merge === 'auto') out = await runTool($, { action: 'merge', item: id })
+  if (cfg.merge === 'auto') out = await runTool(h, { action: 'merge', item: id })
   // Under run all, the next item is begun with the same answer.
   if (e.next && (cfg.merge !== 'auto' || / merged/.test(out))) {
     try {
-      out = `${out}\n\nNext item:\n${await runTool($, { action: 'begin' })}`
+      out = `${out}\n\nNext item:\n${await runTool(h, { action: 'begin' })}`
     } catch (err) {
       out = `${out} · ${err instanceof Error ? err.message : String(err)}`
     }
@@ -1902,31 +1872,31 @@ async function shipAction($: EngineInterface, found: string, c: Config | null, c
  * `pr`: opens the item's pull request through gh and records it, in one call. The title is the item's, the body
  * the spec's What and Acceptance unless one is given. Under `merge: pr` the item waits in review for the user.
  */
-async function prAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+export async function prAction(h: Host, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
   const cfg = normalizeConfig(c ?? DEFAULTS).config
   const item = current.items.find(i => i.id === id)!
-  const ledger = await loadLedger($, found, id)
+  const ledger = await loadLedger(h, found, id)
   if (!ledger?.branch) throw new Refused(`${id} has no branch on record: begin it first`)
   if (item.pr || ledger.pr) return `${id} · PR ${item.pr ?? ledger.pr} is already open · next: ${cfg.merge === 'auto' ? 'merge' : 'the user merges it'}`
   const wt = worktreePath(found, ledger)
   const P = placesOf(found, c)
-  const spec = (await readItemFile($, found, wt, isGithub(c) ? P.specRel(id) : item.spec ?? P.specRel(id))) ?? ''
+  const spec = (await readItemFile(h, found, wt, isGithub(c) ? P.specRel(id) : item.spec ?? P.specRel(id))) ?? ''
   const acceptance = section(spec, 'Acceptance')
   const what = section(spec, 'What')
   // Of the attribution lines, the git trailers belong to commits; the rest ends the pull request's text.
   const attribution = splitAttribution(typeof ledger['attribution'] === 'string' ? (ledger['attribution'] as string) : '').rest.join('\n')
   const body = typeof e.body === 'string' && e.body.trim() ? e.body.trim() : [what, acceptance ? `## Acceptance\n\n${acceptance}` : '', isGithub(c) ? `Closes #${id}` : '', attribution].filter(Boolean).join('\n\n')
   const title = typeof e.title === 'string' && e.title.trim() ? e.title.trim() : isGithub(c) ? item.title : `${id}: ${item.title}`
-  const made = await tracker.createPr(ghRun($, found), { base: cfg.mainBranch, head: ledger.branch, title, body })
+  const made = await tracker.createPr(ghRun(h, found), { base: cfg.mainBranch, head: ledger.branch, title, body })
   if (!made.ok) throw new Refused(`${made.error} · or open the pull request yourself, then update with "pr"`)
   const pr = `#${made.value}`
-  await runTool($, { action: 'ledger', item: id, set: { pr } })
-  await runTool($, { action: 'update', id, set: { status: 'review', pr } })
+  await runTool(h, { action: 'ledger', item: id, set: { pr } })
+  await runTool(h, { action: 'update', id, set: { status: 'review', pr } })
   return `${id} review · PR ${pr} · next: ${cfg.merge === 'auto' ? `merge { item: "${id}" }` : 'the user merges it; close runs on a later get'}`
 }
 
 /** Whether a pull request's text already closes the issue on merge, in one of the words GitHub reads. */
-const closesIssue = (body: string, id: string): boolean => new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${id}\\b`, 'i').test(body)
+export const closesIssue = (body: string, id: string): boolean => new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${id}\\b`, 'i').test(body)
 
 /**
  * `adopt`: a pull request that was opened with no item becomes one. The item is made from the pull request's title
@@ -1935,12 +1905,12 @@ const closesIssue = (body: string, id: string): boolean => new RegExp(`\\b(?:clo
  * gets `Closes #<issue>` when it does not say so yet. Refused for a pull request that is merged or closed, or that
  * an item already carries.
  */
-async function adoptAction($: EngineInterface, found: string, c: Config | null, current: Backlog, e: ToolInput): Promise<string> {
+export async function adoptAction(h: Host, found: string, c: Config | null, current: Backlog, e: ToolInput): Promise<string> {
   const cfg = normalizeConfig(c ?? DEFAULTS).config
   const n = Number(/(\d+)\/?$/.exec(e.pr?.trim() ?? '')?.[1])
   if (!n) throw new Refused('adopt needs "pr": the pull request, as #114')
   const pr = `#${n}`
-  const run = ghRun($, found)
+  const run = ghRun(h, found)
   const got = await tracker.prDetail(run, n)
   if (!got.ok) throw new Refused(got.error)
   const { title, body, head, state } = got.value
@@ -1950,11 +1920,11 @@ async function adoptAction($: EngineInterface, found: string, c: Config | null, 
   if (has) throw new Refused(`PR ${pr} already belongs to ${has.id} (${has.status})`)
   const note = `adopted from PR ${pr}`
   const text = body.trim()
-  const added = await runTool($, { action: 'add', item: { title: title || `Pull request ${pr}`, note: isGithub(c) ? [text, `Adopted from pull request ${pr}.`].filter(Boolean).join('\n\n') : note } })
+  const added = await runTool(h, { action: 'add', item: { title: title || `Pull request ${pr}`, note: isGithub(c) ? [text, `Adopted from pull request ${pr}.`].filter(Boolean).join('\n\n') : note } })
   const id = /^added (\S+)/.exec(added)?.[1]
   if (!id) throw new Refused(`the item for PR ${pr} could not be made: ${added}`)
-  await runTool($, { action: 'ledger', item: id, set: { branch: head, pr } })
-  await runTool($, { action: 'update', id, set: { status: 'review', pr, branch: head, note } })
+  await runTool(h, { action: 'ledger', item: id, set: { branch: head, pr } })
+  await runTool(h, { action: 'update', id, set: { status: 'review', pr, branch: head, note } })
   let linked = ''
   if (isGithub(c) && !closesIssue(body, id)) {
     const set = await tracker.setPrBody(run, n, [text, `Closes #${id}`].filter(Boolean).join('\n\n'))
@@ -1964,9 +1934,9 @@ async function adoptAction($: EngineInterface, found: string, c: Config | null, 
 }
 
 /** One git answer in the main checkout: the exit code and the first line of what it said. */
-async function gitMain($: EngineInterface, found: string, args: string[]): Promise<{ ok: boolean; said: string }> {
+export async function gitMain(h: Host, found: string, args: string[]): Promise<{ ok: boolean; said: string }> {
   try {
-    const r = await $.process.run(['git', '-C', found, ...args], { cwd: found, timeoutMs: 120_000 })
+    const r = await h.process.run(['git', '-C', found, ...args], { cwd: found, timeoutMs: 120_000 })
     return { ok: r.exitCode === 0, said: (r.stderr || r.stdout).trim().split('\n')[0] ?? '' }
   } catch (err) {
     return { ok: false, said: err instanceof Error ? err.message : String(err) }
@@ -1974,9 +1944,9 @@ async function gitMain($: EngineInterface, found: string, args: string[]): Promi
 }
 
 /** Whether this session's working directory is inside the folder. */
-async function isInside($: EngineInterface, dir: string): Promise<boolean> {
+export async function isInside(h: Host, dir: string): Promise<boolean> {
   try {
-    const cwd = `${slashes(await $.session.cwd())}/`
+    const cwd = `${slashes(await h.session.cwd())}/`
     return cwd.startsWith(`${slashes(dir)}/`)
   } catch {
     return false
@@ -1988,27 +1958,27 @@ async function isInside($: EngineInterface, dir: string): Promise<boolean> {
  * `git rm`, untracked ones with `git clean`, a worktree with `git worktree remove`, a `branch:` line with
  * `git branch -D`. A worktree this session is inside is left, and named in `kept`.
  */
-async function removeCleaned($: EngineInterface, found: string, list: string[]): Promise<{ removed: number; kept: string[]; paths: string[] }> {
+export async function removeCleaned(h: Host, found: string, list: string[]): Promise<{ removed: number; kept: string[]; paths: string[] }> {
   let removed = 0
   const kept: string[] = []
   const paths: string[] = []
   for (const entry of list) {
     if (entry.startsWith('branch:')) {
       // A branch still checked out in a kept worktree cannot go; it goes with the worktree later.
-      if ((await gitMain($, found, ['branch', '-D', entry.slice('branch:'.length)])).ok) removed++
+      if ((await gitMain(h, found, ['branch', '-D', entry.slice('branch:'.length)])).ok) removed++
       continue
     }
     const rel = entry.replace(/\/+$/, '')
     if (rel.startsWith('.claude/worktrees/')) {
-      if (await isInside($, `${found}/${rel}`)) {
+      if (await isInside(h, `${found}/${rel}`)) {
         kept.push(rel)
         continue
       }
-      if ((await gitMain($, found, ['worktree', 'remove', '--force', rel])).ok) removed++
+      if ((await gitMain(h, found, ['worktree', 'remove', '--force', rel])).ok) removed++
       continue
     }
-    const tracked = await gitMain($, found, ['rm', '-r', '-q', '--ignore-unmatch', '--', rel])
-    await gitMain($, found, ['clean', '-fdq', '--', rel])
+    const tracked = await gitMain(h, found, ['rm', '-r', '-q', '--ignore-unmatch', '--', rel])
+    await gitMain(h, found, ['clean', '-fdq', '--', rel])
     if (tracked.ok) {
       removed++
       paths.push(rel)
@@ -2018,42 +1988,42 @@ async function removeCleaned($: EngineInterface, found: string, list: string[]):
 }
 
 /** The worktrees and local branches of items already merged, removed when this session is not inside them: what an earlier close had to leave. */
-async function sweepMerged($: EngineInterface, found: string, c: Config | null, b: Backlog): Promise<void> {
+export async function sweepMerged(h: Host, found: string, c: Config | null, b: Backlog): Promise<void> {
   try {
-    const list = cleanList({ config: c, backlog: b, ...(isGithub(c) ? { queue: 'github' as const } : {}), ...(await cleanInput($, found, b)) }).filter(x => x.startsWith('branch:') || x.startsWith('.claude/worktrees/'))
+    const list = cleanList({ config: c, backlog: b, ...(isGithub(c) ? { queue: 'github' as const } : {}), ...(await cleanInput(h, found, b)) }).filter(x => x.startsWith('branch:') || x.startsWith('.claude/worktrees/'))
     // Worktrees first, so their branches are free to delete.
-    await removeCleaned($, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
+    await removeCleaned(h, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
   } catch {}
-  if (isGithub(c)) await sweepLeftover($, found)
+  if (isGithub(c)) await sweepLeftover(h, found)
 }
 
 /**
  * queue: github. A closed issue is not in the backlog, so the worktree a close had to leave is kept in items.json:
  * each one this session is not inside is removed, then its branch, and its entry dropped.
  */
-async function sweepLeftover($: EngineInterface, found: string): Promise<void> {
+export async function sweepLeftover(h: Host, found: string): Promise<void> {
   try {
-    const extras = await extrasOrRefuse($, found)
+    const extras = await extrasOrRefuse(h, found)
     const left = extras.leftover ?? []
     if (!left.length) return
     const kept: Leftover[] = []
     for (const l of left) {
       const dir = worktreePath(found, { ...emptyLedger(l.id), worktree: l.worktree })
-      if (await isInside($, dir)) {
+      if (await isInside(h, dir)) {
         kept.push(l)
         continue
       }
-      await gitMain($, found, ['worktree', 'remove', '--force', l.worktree])
-      if (l.branch) await gitMain($, found, ['branch', '-D', l.branch])
+      await gitMain(h, found, ['worktree', 'remove', '--force', l.worktree])
+      if (l.branch) await gitMain(h, found, ['branch', '-D', l.branch])
     }
     const { leftover: _was, ...rest } = extras
-    await writeExtras($, found, { ...rest, ...(kept.length ? { leftover: kept } : {}) })
+    await writeExtras(h, found, { ...rest, ...(kept.length ? { leftover: kept } : {}) })
   } catch {}
 }
 
 /** queue: github: the worktrees and branches a close had to leave, as `clean` lists them; for one item when `id` is given. */
-async function leftoverLines($: EngineInterface, found: string, id: string | undefined): Promise<string[]> {
-  const ex = await readExtras($, found)
+export async function leftoverLines(h: Host, found: string, id: string | undefined): Promise<string[]> {
+  const ex = await readExtras(h, found)
   return (ex.value?.leftover ?? []).filter(l => id === undefined || l.id === id).flatMap(l => [l.worktree.replace(/\/+$/, ''), ...(l.branch ? [`branch:${l.branch}`] : [])])
 }
 
@@ -2061,10 +2031,10 @@ async function leftoverLines($: EngineInterface, found: string, id: string | und
  * `close`: the whole Close in one call, run by the tool in the main checkout, so it works from a session that
  * sits in the item's worktree and cannot leave it. Refused when the pull request is not on mainBranch yet.
  */
-async function closeAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+export async function closeAction(h: Host, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
   const cfg = normalizeConfig(c ?? DEFAULTS).config
   const item = current.items.find(i => i.id === id)!
-  const ledger = await loadLedger($, found, id)
+  const ledger = await loadLedger(h, found, id)
   const branch = (typeof ledger?.branch === 'string' && ledger.branch) || item.branch || itemBranchOf(cfg.branch, id)
   const main = cfg.mainBranch
   const pr = e.pr?.trim() || item.pr || ledger?.pr || undefined
@@ -2072,47 +2042,47 @@ async function closeAction($: EngineInterface, found: string, c: Config | null, 
 
   if (gh) {
     // queue: github has no record to commit on mainBranch: the main checkout is left as it is, origin/<main> is enough.
-    await gitMain($, found, ['fetch', '-q', 'origin', main])
+    await gitMain(h, found, ['fetch', '-q', 'origin', main])
   } else {
     // The main checkout on mainBranch, with the merge in it.
-    const on = await gitOut($, found, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    const on = await gitOut(h, found, ['rev-parse', '--abbrev-ref', 'HEAD'])
     if (on !== main) {
-      const co = await gitMain($, found, ['checkout', main])
+      const co = await gitMain(h, found, ['checkout', main])
       if (!co.ok) throw new Refused(`the main checkout is on ${on ?? 'an unknown branch'} and git checkout ${main} failed: ${co.said}`)
     }
-    await gitMain($, found, ['fetch', '-q', 'origin', main])
-    const pull = await gitMain($, found, ['merge', '--ff-only', `origin/${main}`])
+    await gitMain(h, found, ['fetch', '-q', 'origin', main])
+    const pull = await gitMain(h, found, ['merge', '--ff-only', `origin/${main}`])
     if (!pull.ok) throw new Refused(`${main} in the main checkout could not be fast-forwarded to origin/${main}: ${pull.said}`)
   }
   if (item.status !== 'merged' && !e.force) {
-    const tip = (await gitOut($, found, ['rev-parse', '--verify', '-q', branch])) ?? (await gitOut($, found, ['rev-parse', '--verify', '-q', `origin/${branch}`]))
-    let isIn = tip !== null && (await gitMain($, found, ['merge-base', '--is-ancestor', tip, `origin/${main}`])).ok
+    const tip = (await gitOut(h, found, ['rev-parse', '--verify', '-q', branch])) ?? (await gitOut(h, found, ['rev-parse', '--verify', '-q', `origin/${branch}`]))
+    let isIn = tip !== null && (await gitMain(h, found, ['merge-base', '--is-ancestor', tip, `origin/${main}`])).ok
     // GitHub saying the pull request is merged settles it, also after a squash and for a branch of another name.
     const prN = Number(/(\d+)\/?$/.exec(pr ?? '')?.[1])
     if (!isIn && prN) {
-      const there = await tracker.prInfo(ghRun($, found), prN)
+      const there = await tracker.prInfo(ghRun(h, found), prN)
       isIn = there.ok && there.value.merged
     }
     if (!isIn) throw new Refused(`${branch} is not on origin/${main}: the pull request is not merged yet; after a squash merge pass "force": true`)
   }
 
   const closed = async () => {
-    if (ledger) await runTool($, { action: 'ledger', item: id, set: { resume: { task: ledger.resume?.task ?? ledger.tasks.length, state: 'closed', ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) }, ...(await recordLead($, ledger)) } })
+    if (ledger) await runTool(h, { action: 'ledger', item: id, set: { resume: { task: ledger.resume?.task ?? ledger.tasks.length, state: 'closed', ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) }, ...(await recordLead(h, ledger)) } })
   }
   // queue: github: a merged issue leaves the backlog, so its ledger is closed while the item is still there.
   if (gh) await closed()
   // Merged in the backlog (with queue: github the labels off and the issue closed), then what retain lets go.
-  if (item.status !== 'merged' || (pr && item.pr !== pr)) await runTool($, { action: 'update', id, set: { status: 'merged', ...(pr ? { pr } : {}) } })
-  const after = (await loadBacklog($, found)).value ?? current
+  if (item.status !== 'merged' || (pr && item.pr !== pr)) await runTool(h, { action: 'update', id, set: { status: 'merged', ...(pr ? { pr } : {}) } })
+  const after = (await loadBacklog(h, found)).value ?? current
   const merged = after.items.some(i => i.id === id) ? after : { ...after, items: [...after.items, { ...item, status: 'merged' as const, ...(pr ? { pr } : {}) }] }
-  const list = cleanList({ config: c, backlog: merged, item: id, ...(gh ? { queue: 'github' as const } : {}), ...(await cleanInput($, found, merged)) })
-  const { kept, paths: gone } = await removeCleaned($, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
+  const list = cleanList({ config: c, backlog: merged, item: id, ...(gh ? { queue: 'github' as const } : {}), ...(await cleanInput(h, found, merged)) })
+  const { kept, paths: gone } = await removeCleaned(h, found, [...list.filter(x => !x.startsWith('branch:')), ...list.filter(x => x.startsWith('branch:'))])
   if (!gh) await closed()
   if (gh) {
     if (kept.length) {
-      const extras = await extrasOrRefuse($, found)
+      const extras = await extrasOrRefuse(h, found)
       const leftover = [...(extras.leftover ?? []).filter(l => l.id !== id), { id, worktree: kept[0]!, branch }]
-      await writeExtras($, found, { ...extras, leftover })
+      await writeExtras(h, found, { ...extras, leftover })
     }
     if (self.item === id) self.item = ''
     const tasks = ledger?.tasks.length ?? 0
@@ -2123,9 +2093,9 @@ async function closeAction($: EngineInterface, found: string, c: Config | null, 
 
   // The record on mainBranch.
   const attribution = typeof ledger?.['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
-  await gitMain($, found, ['add', '-A', '--', 'docs/pipeline'])
-  const commit = await gitMain($, found, ['commit', '-q', ...commitArgs(`${id}: close records`, attribution), '--', 'docs/pipeline', ...gone.filter(x => !x.startsWith('docs/pipeline/'))])
-  const pushed = cfg.pushMain === false ? 'not pushed (pushMain is off)' : (await gitMain($, found, ['push', '-q', 'origin', main])).ok ? 'pushed' : 'not pushed (git push failed: push it yourself)'
+  await gitMain(h, found, ['add', '-A', '--', 'docs/pipeline'])
+  const commit = await gitMain(h, found, ['commit', '-q', ...commitArgs(`${id}: close records`, attribution), '--', 'docs/pipeline', ...gone.filter(x => !x.startsWith('docs/pipeline/'))])
+  const pushed = cfg.pushMain === false ? 'not pushed (pushMain is off)' : (await gitMain(h, found, ['push', '-q', 'origin', main])).ok ? 'pushed' : 'not pushed (git push failed: push it yourself)'
   if (self.item === id) self.item = ''
   const tasks = ledger?.tasks.length ?? 0
   const next = after.items.find(i => i.status === 'ready')
@@ -2134,41 +2104,41 @@ async function closeAction($: EngineInterface, found: string, c: Config | null, 
 }
 
 /** `plan`: the checked plan becomes the ledger's tasks and resume block, and the item is building. */
-async function planAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
-  const ledger = await loadLedger($, found, id)
+export async function planAction(h: Host, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+  const ledger = await loadLedger(h, found, id)
   const wt = worktreePath(found, ledger)
-  const { plan, rel } = await loadPlan($, found, wt, id, ledger)
+  const { plan, rel } = await loadPlan(h, found, wt, id, ledger)
   const known = new Map((ledger?.tasks ?? []).map(t => [t.n, t]))
   const tasks = plan.tasks.map(t => (known.has(t.n) ? { n: t.n, title: t.title } : { n: t.n, title: t.title, status: 'pending' as const, dispatches: [] }))
   const next = plan.tasks.find(t => known.get(t.n)?.status !== 'accepted')?.n ?? plan.tasks.length
-  const lastVerified = ledger?.resume?.lastVerified ?? ledger?.base ?? (await gitOut($, wt, ['rev-parse', '--short', 'HEAD'])) ?? undefined
+  const lastVerified = ledger?.resume?.lastVerified ?? ledger?.base ?? (await gitOut(h, wt, ['rev-parse', '--short', 'HEAD'])) ?? undefined
   const set: LedgerSet = { plan: rel, tasks, resume: { task: next, state: known.size ? ledger?.resume?.state ?? 'planned' : 'planned', ...(lastVerified ? { lastVerified } : {}) } }
   if (typeof e.attribution === 'string') set['attribution'] = e.attribution
-  await runTool($, { action: 'ledger', item: id, set })
+  await runTool(h, { action: 'ledger', item: id, set })
   const item = current.items.find(i => i.id === id)!
-  if (item.status !== 'building') await runTool($, { action: 'update', id, set: { status: 'building' } })
+  if (item.status !== 'building') await runTool(h, { action: 'update', id, set: { status: 'building' } })
   // The plan is committed here, so the lead spends no turn on it; nothing to commit is fine. queue: github commits no record.
   const attribution = typeof e.attribution === 'string' ? e.attribution : typeof ledger?.['attribution'] === 'string' ? (ledger['attribution'] as string) : ''
-  const committed = isGithub(c) ? false : await commitPaths($, wt, [rel], `${id}: plan`, attribution)
+  const committed = isGithub(c) ? false : await commitPaths(h, wt, [rel], `${id}: plan`, attribution)
   const head = `${id} · building · ${plan.tasks.length} task${plan.tasks.length === 1 ? '' : 's'}${committed ? ' · plan committed' : ''}`
   // A fresh plan answers the first Agent call too, so the lead spends no turn asking for it.
   if (!known.size) {
     try {
-      const after = (await loadBacklog($, found)).value ?? current
-      return `${head} · ${withoutId(id, await briefAction($, found, c, after, id, { action: 'brief', kind: 'implementer', task: next }))}`
+      const after = (await loadBacklog(h, found)).value ?? current
+      return `${head} · ${withoutId(id, await briefAction(h, found, c, after, id, { action: 'brief', kind: 'implementer', task: next }))}`
     } catch {}
   }
   return `${head} · next: brief task ${next}`
 }
 
 /** `brief`: one brief rendered into the worktree, its dispatch opened in the ledger, and the Agent call in one line. */
-async function briefAction($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
+export async function briefAction(h: Host, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
   const kind = e.kind as BriefKind
   if (!BRIEF_KINDS.includes(String(e.kind))) throw new Refused('brief needs kind: implementer, fix, review or final')
   const cfg = normalizeConfig(c ?? DEFAULTS).config
-  const ledger = (await loadLedger($, found, id)) ?? emptyLedger(id)
+  const ledger = (await loadLedger(h, found, id)) ?? emptyLedger(id)
   const wt = worktreePath(found, ledger)
-  const { plan } = await loadPlan($, found, wt, id, ledger, kind === 'final')
+  const { plan } = await loadPlan(h, found, wt, id, ledger, kind === 'final')
   const n = kind === 'final' ? plan.tasks.length : Number(e.task)
   if (kind !== 'final' && !plan.tasks.some(t => t.n === n)) throw new Refused(`brief needs task: 1 to ${plan.tasks.length}`)
   const P = placesOf(found, c)
@@ -2180,7 +2150,7 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
     if (!e.commits?.trim()) throw new Refused('a review brief needs commits, as <sha>..<sha>')
     if (!e.findings?.trim()) {
       if (cfg.taskReview === 'off') return `no review: taskReview off · accept task ${n} with review.kind lead-diff`
-      const names = await gitOut($, wt, ['diff', '--name-only', e.commits.trim()])
+      const names = await gitOut(h, wt, ['diff', '--name-only', e.commits.trim()])
       risky = names === null ? [] : riskyMatches(names.split('\n').map(l => l.trim()).filter(Boolean), cfg.riskyPaths)
       if (cfg.taskReview === 'risky' && names !== null && !risky.length) return `no review: ${e.commits.trim()} touches no risky path · accept task ${n} with review.kind lead-diff`
     }
@@ -2188,22 +2158,22 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
 
   // The round is the first whose brief is not on disk yet: fix rounds from 1, a re-review and a second final review from 2.
   let round = 1
-  if (kind !== 'implementer') while (round < 50 && (await $.fs.exists(`${wt}/${briefPaths(id, kind, n, round, dir).brief}`))) round++
+  if (kind !== 'implementer') while (round < 50 && (await h.fs.exists(`${wt}/${briefPaths(id, kind, n, round, dir).brief}`))) round++
   if ((kind === 'review' || kind === 'final') && round > 1 && !e.findings?.trim()) throw new Refused(`${briefPaths(id, kind, n, 1, dir).brief} exists: dispatch it again by its path, or pass findings for a scoped re-review`)
 
   const item = current.items.find(i => i.id === id)!
-  const template = await readItemFile($, found, wt, `docs/pipeline/templates/${kind}.md`)
-  const head = kind === 'final' ? await gitOut($, wt, ['rev-parse', '--short', 'HEAD']) : null
+  const template = await readItemFile(h, found, wt, `docs/pipeline/templates/${kind}.md`)
+  const head = kind === 'final' ? await gitOut(h, wt, ['rev-parse', '--short', 'HEAD']) : null
   let out: ReturnType<typeof renderBrief>
   try {
     out = renderBrief({
       kind, item: id, itemTitle: item.title, task: n, round, plan, config: cfg, ledger,
       root: wt,
       places: { specRel: P.specRel(id), planRel: P.planRel(id), recordsDir: P.recordsDir, briefDir: dir },
-      rulesMd: (await readItemFile($, found, wt, 'docs/pipeline/rules.md')) ?? '',
-      factsMd: (await readText($, P.facts)) ?? '',
+      rulesMd: (await readItemFile(h, found, wt, 'docs/pipeline/rules.md')) ?? '',
+      factsMd: (await readText(h, P.facts)) ?? '',
       // queue: github: the spec cache begin wrote in the worktree.
-      specMd: (isGithub(c) ? await readText($, `${wt}/${P.specRel(id)}`) : await readItemFile($, found, wt, item.spec ?? P.specRel(id))) ?? '',
+      specMd: (isGithub(c) ? await readText(h, `${wt}/${P.specRel(id)}`) : await readItemFile(h, found, wt, item.spec ?? P.specRel(id))) ?? '',
       ...(template ? { template } : {}),
       ...(e.findings !== undefined ? { findings: e.findings } : {}),
       ...(e.carried !== undefined ? { carried: e.carried } : {}),
@@ -2216,10 +2186,10 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
   } catch (err) {
     throw new Refused(err instanceof Error ? err.message : String(err))
   }
-  await $.fs.write(`${wt}/${out.brief}`, out.text)
+  await h.fs.write(`${wt}/${out.brief}`, out.text)
 
   // The dispatch before this one (the implementer's before a fix or a review) is closed in the same call.
-  if (e.close && typeof e.close === 'object' && kind !== 'final') await runTool($, { action: 'ledger', item: id, set: { tasks: [{ n, close: e.close }] } })
+  if (e.close && typeof e.close === 'object' && kind !== 'final') await runTool(h, { action: 'ledger', item: id, set: { tasks: [{ n, close: e.close }] } })
   const total = plan.tasks.length
   const state = kind === 'implementer' ? 'implementer dispatched' : kind === 'fix' ? `fix round ${round} dispatched` : kind === 'review' ? 'review dispatched' : 'final review dispatched'
   const set: LedgerSet = { resume: { task: n, state, ...(ledger.resume?.lastVerified ? { lastVerified: ledger.resume.lastVerified } : {}) } }
@@ -2231,13 +2201,13 @@ async function briefAction($: EngineInterface, found: string, c: Config | null, 
     set.tasks = [{ n, ...(kind === 'implementer' ? { status: 'running' as const } : kind === 'fix' ? { status: 'fix' as const } : {}), dispatches: isSame ? [] : [dispatch as never] }]
   }
   if (typeof e.attribution === 'string') set['attribution'] = e.attribution
-  await runTool($, { action: 'ledger', item: id, set })
+  await runTool(h, { action: 'ledger', item: id, set })
   const what = kind === 'final' ? 'final review' : kind === 'fix' ? `task ${n}/${total} · fix round ${round} of ${cfg.limits.fixRounds}` : kind === 'review' ? `task ${n}/${total} · review${round > 1 ? ` ${round}` : ''}` : `task ${n}/${total}`
   return `${id} · ${what} · Agent subagent_type pipeline:${kind === 'review' || kind === 'final' ? 'reviewer' : 'implementer'} model ${out.model} effort ${out.effort} · prompt: Read ${wt}/${out.brief} and follow it.`
 }
 
 /** Whether an update starts an item's run: to planning, or to building from another status. */
-const startsRun = (before: Item['status'], after: Item['status']) => (after === 'planning' || after === 'building') && before !== after
+export const startsRun = (before: Item['status'], after: Item['status']) => (after === 'planning' || after === 'building') && before !== after
 
 /**
  * Queues the session's name after the item it starts (`p12 · CSV export`), once per item in this session, unless
@@ -2245,21 +2215,21 @@ const startsRun = (before: Item['status'], after: Item['status']) => (after === 
  * built-in rename command cannot run from the tool's own hook (it would wait on the turn the hook holds), so the
  * name waits for the turn's end.
  */
-async function queueRename($: EngineInterface, c: Config | null, item: Item): Promise<void> {
+export async function queueRename(h: Host, c: Config | null, item: Item): Promise<void> {
   if ((c?.renameSession ?? DEFAULTS.renameSession) === false || self.renamed.has(item.id)) return
-  if (await isChildSession($)) return
+  if (await isChildSession(h)) return
   self.renamed.add(item.id)
   self.pendingRename = sessionName(item)
 }
 
 /** The queued rename, at the turn's end; a refusal (no such command, a surface without names) is ignored. */
-async function renameNow($: EngineInterface): Promise<void> {
+export async function renameNow(h: Host): Promise<void> {
   const name = self.pendingRename
   if (!name) return
   self.pendingRename = ''
   self.sessionName = name
   try {
-    await $.command.run({ command: 'rename', args: name })
+    await h.command.run({ command: 'rename', args: name })
   } catch {}
 }
 
@@ -2269,18 +2239,18 @@ async function renameNow($: EngineInterface): Promise<void> {
  * `info.json` and the project's `index.md`. Runs at the end of each turn and of the session; a subagent file that
  * did not grow is not copied again. A failure is said once and never stops the session.
  */
-async function saveTranscript($: EngineInterface, endingId?: string): Promise<void> {
-  if (!isTranscripts) return
+export async function saveTranscript(h: Host, endingId?: string): Promise<void> {
+  if (!opts.isTranscripts) return
   try {
-    const source = slashes((await $.session.info()).transcriptPath ?? '')
-    const data = (await $.process.hookEnv())['CLAUDE_PLUGIN_DATA']
+    const source = slashes((await h.session.info()).transcriptPath ?? '')
+    const data = (await h.process.hookEnv())['CLAUDE_PLUGIN_DATA']
     if (!source || !data) return
-    const text = await readText($, source)
+    const text = await readText(h, source)
     if (text === null) return
-    const found = (await read($, root)) || (await resolveRoot($))
+    const found = (await read(h, root)) || (await resolveRoot(h))
     const project = found.split('/').pop() || 'project'
-    const id = endingId || (await $.session.id())
-    const at = await $.clock.now()
+    const id = endingId || (await h.session.id())
+    const at = await h.clock.now()
     const log = self.log
     if (log.id !== id) {
       log.id = id
@@ -2290,29 +2260,29 @@ async function saveTranscript($: EngineInterface, endingId?: string): Promise<vo
     }
     if (!log.version) {
       try {
-        const root = (await $.process.hookEnv())['CLAUDE_PLUGIN_ROOT']
-        log.version = String((JSON.parse((await readText($, `${slashes(root ?? '')}/.claude-plugin/plugin.json`)) ?? '{}') as { version?: unknown }).version ?? '')
+        const root = (await h.process.hookEnv())['CLAUDE_PLUGIN_ROOT']
+        log.version = String((JSON.parse((await readText(h, `${slashes(root ?? '')}/.claude-plugin/plugin.json`)) ?? '{}') as { version?: unknown }).version ?? '')
       } catch {}
     }
     const name = self.sessionName || self.pendingRename
     const title = `${project} · ${name || id}`
-    await $.fs.write(`${log.folder}/session.jsonl`, text)
-    await $.fs.write(`${log.folder}/session.md`, digest(text, title))
+    await h.fs.write(`${log.folder}/session.jsonl`, text)
+    await h.fs.write(`${log.folder}/session.md`, digest(text, title))
     // The subagents' transcripts lie beside the session's, under a folder of its name.
     const dir = `${source.replace(/\.jsonl$/, '')}/subagents`
     let subagents = 0
     try {
       // A session that started no subagent has no such folder: the listing fails and nothing is copied.
       {
-        for (const e of await $.fs.list(dir)) {
+        for (const e of await h.fs.list(dir)) {
           if (e.kind !== 'file' || !e.name.endsWith('.jsonl')) continue
           subagents++
           const size = (e as { size?: number }).size ?? -1
           if (size >= 0 && log.sizes.get(e.name) === size) continue
-          const t = await readText($, `${dir}/${e.name}`)
+          const t = await readText(h, `${dir}/${e.name}`)
           if (t === null) continue
-          await $.fs.write(`${log.folder}/subagents/${e.name}`, t)
-          await $.fs.write(`${log.folder}/subagents/${e.name.replace(/\.jsonl$/, '.md')}`, digest(t, `${title} · ${e.name.replace(/\.jsonl$/, '')}`))
+          await h.fs.write(`${log.folder}/subagents/${e.name}`, t)
+          await h.fs.write(`${log.folder}/subagents/${e.name.replace(/\.jsonl$/, '.md')}`, digest(t, `${title} · ${e.name.replace(/\.jsonl$/, '')}`))
           log.sizes.set(e.name, size)
         }
       }
@@ -2331,20 +2301,20 @@ async function saveTranscript($: EngineInterface, endingId?: string): Promise<vo
       source,
       subagents,
     }
-    await $.fs.write(`${log.folder}/info.json`, `${JSON.stringify(record, null, 2)}\n`)
+    await h.fs.write(`${log.folder}/info.json`, `${JSON.stringify(record, null, 2)}\n`)
     const projectDir = log.folder.slice(0, log.folder.lastIndexOf('/'))
     let all: Record<string, SessionRecord> = {}
     try {
-      all = JSON.parse((await readText($, `${projectDir}/index.json`)) ?? '{}') as Record<string, SessionRecord>
+      all = JSON.parse((await readText(h, `${projectDir}/index.json`)) ?? '{}') as Record<string, SessionRecord>
     } catch {}
     all[folder] = record
-    await $.fs.write(`${projectDir}/index.json`, `${JSON.stringify(all, null, 2)}\n`)
-    await $.fs.write(`${projectDir}/index.md`, indexMd(project, Object.values(all)))
+    await h.fs.write(`${projectDir}/index.json`, `${JSON.stringify(all, null, 2)}\n`)
+    await h.fs.write(`${projectDir}/index.md`, indexMd(project, Object.values(all)))
   } catch (err) {
     if (self.log.hasFailed) return
     self.log.hasFailed = true
     try {
-      await $.ui.toast(`pipeline: could not save the transcript: ${err instanceof Error ? err.message : String(err)}`)
+      await h.ui.toast(`pipeline: could not save the transcript: ${err instanceof Error ? err.message : String(err)}`)
     } catch {}
   }
 }
@@ -2352,22 +2322,22 @@ async function saveTranscript($: EngineInterface, endingId?: string): Promise<vo
 // ---------- the session runner ----------
 
 /** The variable a child session is started with; a session that sees it starts no children. */
-const CHILD_MARK = 'PIPELINE_CHILD'
+export const CHILD_MARK = 'PIPELINE_CHILD'
 
 /** Whether this session was started by the session runner: the mark is in its environment. */
-async function isChildSession($: EngineInterface): Promise<boolean> {
+export async function isChildSession(h: Host): Promise<boolean> {
   try {
-    return Boolean(await $.env.get('PIPELINE_CHILD'))
+    return Boolean(await h.env.get('PIPELINE_CHILD'))
   } catch {
     return false
   }
 }
 
 /** The session's permission mode: the one the engine last told us, else the settings' default mode, else `default`. */
-async function permissionModeOf($: EngineInterface): Promise<string> {
+export async function permissionModeOf(h: Host): Promise<string> {
   if (self.permissionMode) return self.permissionMode
   try {
-    const permissions = await $.settings.read({ key: 'permissions' })
+    const permissions = await h.settings.read({ key: 'permissions' })
     const mode = permissions && typeof permissions === 'object' ? (permissions as { defaultMode?: unknown }).defaultMode : undefined
     if (typeof mode === 'string' && mode) return mode
   } catch {}
@@ -2375,13 +2345,13 @@ async function permissionModeOf($: EngineInterface): Promise<string> {
 }
 
 /** The item's worktree: made off mainBranch on its branch, reused when it is there, added on the branch alone when the branch exists. */
-async function ensureWorktree($: EngineInterface, found: string, worktree: string, branch: string, mainBranch: string): Promise<void> {
+export async function ensureWorktree(h: Host, found: string, worktree: string, branch: string, mainBranch: string): Promise<void> {
   try {
-    if (await $.fs.exists(worktree)) return
+    if (await h.fs.exists(worktree)) return
   } catch {}
   const add = async (argv: string[]) => {
     try {
-      return await $.process.run(argv, { cwd: found, timeoutMs: 120_000 })
+      return await h.process.run(argv, { cwd: found, timeoutMs: 120_000 })
     } catch (err) {
       return { exitCode: 1, stdout: '', stderr: err instanceof Error ? err.message : String(err) }
     }
@@ -2391,27 +2361,27 @@ async function ensureWorktree($: EngineInterface, found: string, worktree: strin
   if (r.exitCode !== 0) throw new Refused(`git worktree add failed: ${(r.stderr || r.stdout).trim().split('\n')[0] ?? ''}`)
 }
 
-const list = (xs: readonly string[]) => `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`
+export const list = (xs: readonly string[]) => `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`
 
 /** `start`: the checks, the worktree, the item marked building, the ledger's branch and worktree, the child spawned and its loop detached. */
-async function startChild($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string, force = false): Promise<string> {
+export async function startChild(h: Host, found: string, c: Config | null, current: Backlog, id: string, force = false): Promise<string> {
   // The mechanical guard against recursion: a child is started with PIPELINE_CHILD set, and never starts children.
-  if (await isChildSession($)) throw new Refused('a child session does not start children')
+  if (await isChildSession(h)) throw new Refused('a child session does not start children')
   const runner = c?.runner ?? DEFAULTS.runner
   if (runner !== 'session') throw new Refused(`runner is ${runner}; set it with /pipeline config runner=session`)
   const item = current.items.find(i => i.id === id)!
-  const running = runningOf(await read($, children))
+  const running = runningOf(await read(h, children))
   const own = running.find(ch => ch.item === id)
   if (own) throw new Refused(`${id} already runs in session ${own.id}`)
   if (item.status !== 'ready' && item.status !== 'blocked' && item.status !== 'building') throw new Refused(`${id} is ${item.status}, not ready`)
   // queue: github: the claim begin checks, so the child's begin does not pass on the ledger written here.
-  const hasLedger = isGithub(c) && (await loadLedger($, found, id)) !== null
-  if (isGithub(c)) await claimIssue($, found, c, id, hasLedger, force)
+  const hasLedger = isGithub(c) && (await loadLedger(h, found, id)) !== null
+  if (isGithub(c)) await claimIssue(h, found, c, id, hasLedger, force)
   // A building item the session runner did not start is being run in a session, this one or another: not taken over.
   // With queue: github and no ledger here, a forced start takes over another machine's run, as begin does.
   const isTakeover = isGithub(c) && force && !hasLedger
   if (item.status === 'building' && !isTakeover && !/session runner/.test(item.note ?? '')) throw new Refused(`${id} is being run in-session (building, note: ${item.note || 'none'}); finish or stop that run, or block the item, before starting it as a child session`)
-  const mode = await permissionModeOf($)
+  const mode = await permissionModeOf(h)
   if (!(ALLOWED_MODES as readonly string[]).includes(mode)) {
     throw new Refused(`the session's permission mode is ${mode}; a headless child cannot ask, so switch to ${list(ALLOWED_MODES)} (Shift+Tab) and start again`)
   }
@@ -2419,32 +2389,32 @@ async function startChild($: EngineInterface, found: string, c: Config | null, c
   if (running.length >= parallel) throw new Refused(`${running.length} child session${running.length === 1 ? '' : 's'} running; limits.parallel is ${parallel}`)
   const worktree = worktreeOf(found, id)
   const branch = itemBranchOf(c?.branch ?? DEFAULTS.branch, id)
-  await ensureWorktree($, found, worktree, branch, c?.mainBranch ?? DEFAULTS.mainBranch)
-  const at = await $.clock.now()
+  await ensureWorktree(h, found, worktree, branch, c?.mainBranch ?? DEFAULTS.mainBranch)
+  const at = await h.clock.now()
   const sessionId = crypto.randomUUID()
   const isResume = item.status !== 'ready'
   const note = item.status === 'blocked' && item.note ? `session runner · was blocked: ${item.note}` : 'session runner'
-  await writeBacklog($, found, updateItem(current, id, { status: 'building', note }, new Date(at).toISOString()))
+  await writeBacklog(h, found, updateItem(current, id, { status: 'building', note }, new Date(at).toISOString()))
   try {
-    await runTool($, { action: 'ledger', item: id, set: { branch, worktree: `.claude/worktrees/${id}` } })
+    await runTool(h, { action: 'ledger', item: id, set: { branch, worktree: `.claude/worktrees/${id}` } })
   } catch {}
   const child: ChildSession = { id: sessionId, item: id, worktree, branch, status: 'starting', startedAt: at, log: '' }
-  await update($, children, prev => [...prev.filter(ch => ch.item !== id), child])
+  await update(h, children, prev => [...prev.filter(ch => ch.item !== id), child])
   const argv = childArgv({ prompt: childPrompt(id, { isResume }), permissionMode: mode, sessionId, ...((c?.renameSession ?? DEFAULTS.renameSession) !== false ? { name: sessionName(item) } : {}) })
   // `env` is set over the host's environment, so the child inherits the rest and sees the mark.
-  void runChild($, found, child, { argv, cwd: worktree, env: { [CHILD_MARK]: '1' } })
-  await heartbeat($, true)
+  void runChild(h, found, child, { argv, cwd: worktree, env: { [CHILD_MARK]: '1' } })
+  await heartbeat(h, true)
   return `started ${id} in .claude/worktrees/${id} · session ${sessionId} · log .git/pipeline/${id}.log`
 }
 
 /** The child's life: its output into the record and the log file, piece by piece, then its end. */
-async function runChild($: EngineInterface, found: string, child: ChildSession, request: { argv: string[]; cwd: string; env: Record<string, string> }): Promise<void> {
+export async function runChild(h: Host, found: string, child: ChildSession, request: { argv: string[]; cwd: string; env: Record<string, string> }): Promise<void> {
   const logPath = childLog(found, child.item)
   const proc = { stream: null as null | AsyncGenerator<{ stream: string; text: string }, { code: number | null; signal: string | null }>, partial: '', lastWrite: -Infinity }
   self.procs.set(child.item, proc)
   let end: { code: number | null; signal: string | null } = { code: null, signal: 'SIGTERM' }
   try {
-    const stream = $.process.spawn(request)
+    const stream = h.process.spawn(request)
     proc.stream = stream
     for (;;) {
       const r = await stream.next()
@@ -2452,17 +2422,17 @@ async function runChild($: EngineInterface, found: string, child: ChildSession, 
         if (r.value) end = r.value
         break
       }
-      const at = await $.clock.now()
-      const before = (await read($, children)).find(ch => ch.id === child.id)
+      const at = await h.clock.now()
+      const before = (await read(h, children)).find(ch => ch.id === child.id)
       if (!before) break
       const { child: next, partial } = appendOutput(before, r.value.text, proc.partial)
       proc.partial = partial
       const after = { ...next, status: next.status === 'starting' ? ('running' as const) : next.status }
-      await update($, children, prev => prev.map(ch => (ch.id === child.id ? after : ch)))
+      await update(h, children, prev => prev.map(ch => (ch.id === child.id ? after : ch)))
       if (at - proc.lastWrite >= LOG_WRITE_MS) {
         proc.lastWrite = at
         try {
-          await $.fs.write(logPath, after.log)
+          await h.fs.write(logPath, after.log)
         } catch {}
       }
     }
@@ -2470,49 +2440,49 @@ async function runChild($: EngineInterface, found: string, child: ChildSession, 
     // The child could not start, or the stream failed: the record says so and the item is blocked below.
     end = { code: 1, signal: null }
     const message = `could not run the child: ${err instanceof Error ? err.message : String(err)}`
-    await update($, children, prev => prev.map(ch => (ch.id === child.id ? { ...ch, log: `${ch.log}${message}\n`, lastLine: message } : ch))).catch(() => {})
+    await update(h, children, prev => prev.map(ch => (ch.id === child.id ? { ...ch, log: `${ch.log}${message}\n`, lastLine: message } : ch))).catch(() => {})
   } finally {
     // Only this child's own entry: the item may have been started again while this process was still ending.
     if (self.procs.get(child.item) === proc) self.procs.delete(child.item)
   }
   try {
-    await finishChild($, found, child.id, end, proc.partial, logPath)
+    await finishChild(h, found, child.id, end, proc.partial, logPath)
   } catch {}
 }
 
 /** The child ended: the record closed, the log flushed, a failed exit blocks the item, the person hears of it. */
-async function finishChild($: EngineInterface, found: string, id: string, end: { code: number | null; signal: string | null }, partial: string, logPath: string): Promise<void> {
-  const at = await $.clock.now()
-  const before = (await read($, children)).find(ch => ch.id === id)
+export async function finishChild(h: Host, found: string, id: string, end: { code: number | null; signal: string | null }, partial: string, logPath: string): Promise<void> {
+  const at = await h.clock.now()
+  const before = (await read(h, children)).find(ch => ch.id === id)
   if (!before) return
   const flushed = partial.trim() ? appendOutput(before, '\n', partial).child : before
   const after = withExit(flushed, end, at)
-  await update($, children, prev => prev.map(ch => (ch.id === id ? after : ch)))
+  await update(h, children, prev => prev.map(ch => (ch.id === id ? after : ch)))
   try {
-    await $.fs.write(logPath, after.log)
+    await h.fs.write(logPath, after.log)
   } catch {}
-  const c = await read($, config)
+  const c = await read(h, config)
   // Stopped by the person: the item was blocked then. Failed: blocked now, unless the child got it past the build.
   if (before.status !== 'stopped' && after.status === 'failed') {
-    const { backlog: fresh, error } = await loadAll($, found)
+    const { backlog: fresh, error } = await loadAll(h, found)
     const item = fresh?.items.find(i => i.id === after.item)
     if (!error && fresh && item && item.status !== 'merged' && item.status !== 'review') {
-      await writeBacklog($, found, updateItem(fresh, item.id, { status: 'blocked', note: exitNote(after, end) }, new Date(at).toISOString()))
+      await writeBacklog(h, found, updateItem(fresh, item.id, { status: 'blocked', note: exitNote(after, end) }, new Date(at).toISOString()))
       try {
-        await runTool($, { action: 'ledger', item: item.id, set: { blockers: [exitNote(after, end)] } })
+        await runTool(h, { action: 'ledger', item: item.id, set: { blockers: [exitNote(after, end)] } })
       } catch {}
     }
   }
-  if (before.status !== 'stopped') await announce($, c, `pipeline: child ${after.item} ${after.status}${after.lastLine ? ` · ${after.lastLine}` : ''}`)
-  await heartbeat($, true)
+  if (before.status !== 'stopped') await announce(h, c, `pipeline: child ${after.item} ${after.status}${after.lastLine ? ` · ${after.lastLine}` : ''}`)
+  await heartbeat(h, true)
 }
 
 /** `stop`: the child's stream closed, which kills it; the record stopped; the item blocked unless it is past the build. */
-async function stopChild($: EngineInterface, found: string, c: Config | null, current: Backlog, id: string): Promise<string> {
-  const child = runningOf(await read($, children)).find(ch => ch.item === id)
+export async function stopChild(h: Host, found: string, c: Config | null, current: Backlog, id: string): Promise<string> {
+  const child = runningOf(await read(h, children)).find(ch => ch.item === id)
   if (!child) throw new Refused(`no child session runs ${id}`)
-  const at = await $.clock.now()
-  await update($, children, prev => prev.map(ch => (ch.id === child.id ? withStopped(ch, at) : ch)))
+  const at = await h.clock.now()
+  await update(h, children, prev => prev.map(ch => (ch.id === child.id ? withStopped(ch, at) : ch)))
   const proc = self.procs.get(id)
   // Not awaited: the engine kills the child when the loop is left, and the loop's own end closes the record.
   if (proc?.stream) void proc.stream.return({ code: null, signal: 'SIGTERM' }).catch(() => {})
@@ -2520,59 +2490,59 @@ async function stopChild($: EngineInterface, found: string, c: Config | null, cu
   const reason = 'stopped by the user'
   let outcome = ''
   if (item && item.status !== 'merged' && item.status !== 'review') {
-    await writeBacklog($, found, updateItem(current, id, { status: 'blocked', note: reason }, new Date(at).toISOString()))
+    await writeBacklog(h, found, updateItem(current, id, { status: 'blocked', note: reason }, new Date(at).toISOString()))
     try {
-      await runTool($, { action: 'ledger', item: id, set: { blockers: [reason] } })
+      await runTool(h, { action: 'ledger', item: id, set: { blockers: [reason] } })
     } catch {}
     outcome = ` · ${id} blocked: ${reason}`
   } else if (item) outcome = ` · ${id} stays ${item.status}`
-  await heartbeat($, true)
+  await heartbeat(h, true)
   return `stopped ${id} · session ${child.id}${outcome}`
 }
 
 // ---------- migration ----------
 
-const SDD_DIR = '.superpowers/sdd'
-const HISTORICAL = /^Historical\./
+export const SDD_DIR = '.superpowers/sdd'
+export const HISTORICAL = /^Historical\./
 
 /** Repo-relative paths under `<root>/<dir>`, files and folders (with a slash), down to `depth` levels; nothing when the folder is not there. */
-async function walk($: EngineInterface, found: string, dir: string, depth: number): Promise<string[]> {
+export async function walk(h: Host, found: string, dir: string, depth: number): Promise<string[]> {
   const out: string[] = []
-  for (const name of await listDir($, dir ? `${found}/${dir}` : found)) {
+  for (const name of await listDir(h, dir ? `${found}/${dir}` : found)) {
     const rel = dir ? `${dir}/${name}` : name
     out.push(rel)
-    if (name.endsWith('/') && depth > 1) out.push(...(await walk($, found, rel.slice(0, -1), depth - 1)))
+    if (name.endsWith('/') && depth > 1) out.push(...(await walk(h, found, rel.slice(0, -1), depth - 1)))
   }
   return out
 }
 
 /** The project as the migration reads it: the listing of the known places, the branches and the superpowers increments. */
-async function scanProject($: EngineInterface, found: string): Promise<{ listing: string[]; branches: string[]; increments: Increment[] }> {
+export async function scanProject(h: Host, found: string): Promise<{ listing: string[]; branches: string[]; increments: Increment[] }> {
   const listing: string[] = []
   const seen = new Set<string>()
   const add = (paths: string[]) => {
     for (const p of paths) if (!seen.has(p)) { seen.add(p); listing.push(p) }
   }
-  const top = await walk($, found, '', 1)
+  const top = await walk(h, found, '', 1)
   add(top)
-  for (const dir of top.filter(p => p.endsWith('/') && !p.startsWith('.'))) if (await $.fs.exists(`${found}/${dir}CLAUDE.md`)) add([`${dir}CLAUDE.md`])
-  add(await walk($, found, 'docs', 1))
-  for (const dir of ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/superpowers/ledgers', '.github/workflows']) add(await walk($, found, dir, 1))
-  add(await walk($, found, SDD_DIR, 5))
-  add(await walk($, found, '.claude/skills', 2))
+  for (const dir of top.filter(p => p.endsWith('/') && !p.startsWith('.'))) if (await h.fs.exists(`${found}/${dir}CLAUDE.md`)) add([`${dir}CLAUDE.md`])
+  add(await walk(h, found, 'docs', 1))
+  for (const dir of ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/superpowers/ledgers', '.github/workflows']) add(await walk(h, found, dir, 1))
+  add(await walk(h, found, SDD_DIR, 5))
+  add(await walk(h, found, '.claude/skills', 2))
 
   const branches: string[] = []
-  for (const p of await walk($, found, '.git/refs/heads', 6)) if (!p.endsWith('/')) branches.push(p.slice('.git/refs/heads/'.length))
-  const packed = await readText($, `${found}/.git/packed-refs`)
+  for (const p of await walk(h, found, '.git/refs/heads', 6)) if (!p.endsWith('/')) branches.push(p.slice('.git/refs/heads/'.length))
+  const packed = await readText(h, `${found}/.git/packed-refs`)
   for (const m of (packed ?? '').matchAll(/^[0-9a-f]{40} refs\/heads\/(\S+)/gm)) if (!branches.includes(m[1]!)) branches.push(m[1]!)
 
   const increments: Increment[] = []
   for (const dir of listing.filter(p => p.startsWith(`${SDD_DIR}/`) && p.endsWith('/') && p.slice(SDD_DIR.length + 1, -1).indexOf('/') < 0)) {
     const name = dir.slice(SDD_DIR.length + 1, -1)
     const texts: string[] = []
-    const pointer = await readText($, `${found}/${dir}plan-path`)
+    const pointer = await readText(h, `${found}/${dir}plan-path`)
     if (pointer) texts.push(pointer.trim())
-    const progress = await readText($, `${found}/${dir}progress.md`)
+    const progress = await readText(h, `${found}/${dir}progress.md`)
     const header = /^#\s+.*$/m.exec(progress ?? '')?.[0]
     if (header) texts.push(header)
     increments.push({ dir: name, pointer: texts.join('\n') })
@@ -2580,20 +2550,20 @@ async function scanProject($: EngineInterface, found: string): Promise<{ listing
   return { listing, branches, increments }
 }
 
-const isMd = (p: string) => /\.md$/i.test(p)
-const isLedger = (p: string) => /^\.superpowers\/sdd\/(?:.*\/)?progress\.md$/.test(p) || /^docs\/superpowers\/ledgers\/[^/]+\.md$/.test(p)
-const isSkill = (p: string) => /^\.claude\/skills\/[^/]+\/SKILL\.md$/.test(p)
-const isWorkflow = (p: string) => /^\.github\/workflows\/[^/]+$/.test(p)
-const isClaudeMd = (p: string) => p === 'CLAUDE.md' || p.endsWith('/CLAUDE.md')
+export const isMd = (p: string) => /\.md$/i.test(p)
+export const isLedger = (p: string) => /^\.superpowers\/sdd\/(?:.*\/)?progress\.md$/.test(p) || /^docs\/superpowers\/ledgers\/[^/]+\.md$/.test(p)
+export const isSkill = (p: string) => /^\.claude\/skills\/[^/]+\/SKILL\.md$/.test(p)
+export const isWorkflow = (p: string) => /^\.github\/workflows\/[^/]+$/.test(p)
+export const isClaudeMd = (p: string) => p === 'CLAUDE.md' || p.endsWith('/CLAUDE.md')
 
 /** `migrate`: the sources read, the drafted config with its sources, the items, the rules, the active item, the bulk and the report. Writes nothing. */
-async function migrateDraft($: EngineInterface, found: string): Promise<Record<string, unknown>> {
-  const { listing, branches, increments } = await scanProject($, found)
-  const claudeMd = (await readText($, `${found}/CLAUDE.md`)) ?? ''
+export async function migrateDraft(h: Host, found: string): Promise<Record<string, unknown>> {
+  const { listing, branches, increments } = await scanProject(h, found)
+  const claudeMd = (await readText(h, `${found}/CLAUDE.md`)) ?? ''
   const sources = findSources(listing, claudeMd).filter(p => !p.endsWith('/'))
   const texts = new Map<string, string>()
   for (const file of sources) {
-    const t = await readText($, `${found}/${file}`)
+    const t = await readText(h, `${found}/${file}`)
     if (t !== null) texts.set(file, t)
   }
   const report: string[] = []
@@ -2622,7 +2592,7 @@ async function migrateDraft($: EngineInterface, found: string): Promise<Record<s
   const decisions: MigrateRule[] = []
   const backlogMd = texts.get('docs/backlog.md')
   if (backlogMd !== undefined) {
-    const own = itemsFromBacklogMd(backlogMd, 'docs/backlog.md', await repoUrl($))
+    const own = itemsFromBacklogMd(backlogMd, 'docs/backlog.md', await repoUrl(h))
     items.push(...own)
     decisions.push(...decisionsFromBacklogMd(backlogMd, 'docs/backlog.md'))
     const counts = `${own.length} items (${own.filter(i => i.status === 'merged').length} merged, ${own.filter(i => i.status === 'parked').length} parked)`
@@ -2662,14 +2632,14 @@ async function migrateDraft($: EngineInterface, found: string): Promise<Record<s
   return { sources, config: drafted, sourcesOfConfig, items, rules, active, bulk, unsure, report: report.join('\n') }
 }
 
-type ApplyItem = Partial<Item> & { resume?: ActiveItem['resume'] }
+export type ApplyItem = Partial<Item> & { resume?: ActiveItem['resume'] }
 
-const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+export const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 
 /** `migrate-apply`: the four files from the corrected drafts, the ledger of a building item, the Historical lines, the bulk list. */
-async function migrateApply($: EngineInterface, found: string, loaded: Backlog | null, e: ToolInput): Promise<string> {
+export async function migrateApply(h: Host, found: string, loaded: Backlog | null, e: ToolInput): Promise<string> {
   const p = paths(found)
-  const now = await nowIso($)
+  const now = await nowIso(h)
   const isRefresh = Boolean(e.refresh)
 
   const { config: given, problems } = normalizeConfig(e.config ?? {})
@@ -2684,13 +2654,13 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
 
   // The config: on a refresh the file on disk is the user's and stays as it is (the re-draft would overwrite
   // keys they tuned); it is written only when missing.
-  const onDisk = isRefresh ? await loadJson<Record<string, unknown>>($, p.config, CONFIG_FILE) : { value: null, error: null }
+  const onDisk = isRefresh ? await loadJson<Record<string, unknown>>(h, p.config, CONFIG_FILE) : { value: null, error: null }
   if (onDisk.error) throw new Refused(onDisk.error)
   const nextConfig = onDisk.value ?? given
-  if (!onDisk.value) await $.fs.write(p.config, serialize(given))
-  await update($, config, () => normalizeConfig(nextConfig).config)
-  if (!isRefresh || !(await $.fs.exists(p.rules))) await $.fs.write(p.rules, renderRulesMd(rules))
-  await ensureIgnore($, found)
+  if (!onDisk.value) await h.fs.write(p.config, serialize(given))
+  await update(h, config, () => normalizeConfig(nextConfig).config)
+  if (!isRefresh || !(await h.fs.exists(p.rules))) await h.fs.write(p.rules, renderRulesMd(rules))
+  await ensureIgnore(h, found)
 
   // The items: added in order with new ids; on a refresh matched by id or title and only their titles, sources and links
   // refreshed (the ledger link is the tool's own and stays).
@@ -2743,7 +2713,7 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
       ...(typeof item.ledger === 'string' ? { importedFrom: item.ledger } : {}),
       resume: { ...item.resume!, at: now },
     }
-    await $.fs.write(p.ledger(id), serialize(ledger))
+    await h.fs.write(p.ledger(id), serialize(ledger))
     next = updateItem(next, id, { ledger: file }, now)
   }
   // A spec stub for every item added now that lands inbox or building without one, so settle can make the
@@ -2752,24 +2722,24 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
   for (const item of next.items) {
     if (!fresh.has(item.id) || (item.status !== 'inbox' && item.status !== 'building') || item.spec) continue
     const file = places(found, 'file').specRel(item.id)
-    if (!(await $.fs.exists(p.spec(item.id)))) {
-      await $.fs.write(p.spec(item.id), specStub(item.id, item.title, item.note, item.source))
+    if (!(await h.fs.exists(p.spec(item.id)))) {
+      await h.fs.write(p.spec(item.id), specStub(item.id, item.title, item.note, item.source))
       stubs += 1
     }
     next = updateItem(next, item.id, { spec: file }, now)
   }
-  const written = await writeBacklog($, found, next)
-  const status = await statusNow($, found, normalizeConfig(nextConfig).config, written.backlog, null)
+  const written = await writeBacklog(h, found, next)
+  const status = await statusNow(h, found, normalizeConfig(nextConfig).config, written.backlog, null)
 
   // The Historical line, once, on the old queue and ledger files.
-  const { listing, increments } = await scanProject($, found)
+  const { listing, increments } = await scanProject(h, found)
   // The old queue, the top-level ledger and its archive, and every nested progress.md and final review.
   const old = ['docs/backlog.md', 'docs/SLICES.md', ...listing.filter(f => /^\.superpowers\/sdd\/(?:.*\/)?(?:progress\.md|progress-archive\.md|final-review[^/]*\.md)$/.test(f))]
   let added = 0
   for (const f of old) {
-    const text = await readText($, `${found}/${f}`)
+    const text = await readText(h, `${found}/${f}`)
     if (text === null || HISTORICAL.test(text)) continue
-    await $.fs.write(`${found}/${f}`, `${historicalLine(now.slice(0, 10))}\n\n${text}`)
+    await h.fs.write(`${found}/${f}`, `${historicalLine(now.slice(0, 10))}\n\n${text}`)
     added += 1
   }
   const bulk = bulkToRemove(listing, incrementsOf(increments, next.items).merged)
@@ -2780,7 +2750,7 @@ async function migrateApply($: EngineInterface, found: string, loaded: Backlog |
 }
 
 /** What a project on issues no longer needs, for the lead to remove with git rm once migrate-github has applied. */
-const FILE_RECORDS = ['docs/pipeline/backlog.json', 'docs/pipeline/BACKLOG.md', 'docs/pipeline/facts.md', 'docs/pipeline/specs', 'docs/pipeline/plans', 'docs/pipeline/ledgers']
+export const FILE_RECORDS = ['docs/pipeline/backlog.json', 'docs/pipeline/BACKLOG.md', 'docs/pipeline/facts.md', 'docs/pipeline/specs', 'docs/pipeline/plans', 'docs/pipeline/ledgers']
 
 /**
  * `migrate-github`: a file backlog moved onto GitHub issues. Without `apply`, the draft. With it: an issue per open
@@ -2789,7 +2759,7 @@ const FILE_RECORDS = ['docs/pipeline/backlog.json', 'docs/pipeline/BACKLOG.md', 
  * the config set to queue: github and .pipeline/ ignored. It deletes nothing. A failure stops it with what was made;
  * an item whose title already has a labelled open issue is not made again, so a second apply finishes the move.
  */
-async function migrateGithub($: EngineInterface, found: string, c: Config | null, loaded: Backlog | null, error: string | null, e: ToolInput): Promise<string> {
+export async function migrateGithub(h: Host, found: string, c: Config | null, loaded: Backlog | null, error: string | null, e: ToolInput): Promise<string> {
   if (isGithub(c)) throw new Refused(`${CONFIG_FILE} already has queue: github; there is no file backlog to move`)
   if (error) throw new Refused(error)
   if (!loaded) throw new Refused(`no ${BACKLOG_FILE} to move`)
@@ -2804,14 +2774,14 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
     const create = []
     const questions: string[] = []
     for (const item of m.create) {
-      const spec = await readText($, specPath(item))
+      const spec = await readText(h, specPath(item))
       create.push({ id: item.id, title: item.title, status: item.status, spec: spec !== null ? relOf(found, specPath(item)) : null })
       if (questionOf(item, spec)) questions.push(item.id)
     }
     return JSON.stringify({ create, active: m.active.map(i => i.id), questions, skipped: { merged: m.skipped.merged, parked: m.skipped.parked.map(i => ({ id: i.id, title: i.title })) }, remove: FILE_RECORDS }, null, 2)
   }
 
-  const run = ghRun($, found)
+  const run = ghRun(h, found)
   const who = await tracker.me(run)
   if (!who.ok) throw new Refused(who.error)
   const me = who.value
@@ -2822,14 +2792,14 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
   if (!labelled.ok) throw new Refused(labelled.error)
   const listed = await tracker.list(run, label)
   if (!listed.ok) throw new Refused(listed.error)
-  const extras = await extrasOrRefuse($, found)
+  const extras = await extrasOrRefuse(h, found)
 
   const ids = new Map<string, string>()
   const bodies = new Map<string, string>()
   const lines: string[] = []
   const stop = (error: string) => new Refused([`migration stopped: ${error}`, ...lines, 'the issues above stay; apply again and it skips them'].join('\n'))
   for (const item of m.create) {
-    const spec = await readText($, specPath(item))
+    const spec = await readText(h, specPath(item))
     const isActive = (ACTIVE_STATUSES as readonly string[]).includes(item.status)
     const isBlocked = item.status === 'blocked'
     const state = isActive || isBlocked ? item.status : 'ready'
@@ -2883,55 +2853,55 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
     const kept: Partial<Item> = { status: item.status }
     for (const k of ['branch', 'pr', 'note', 'size'] as const) if (item[k] !== undefined && item[k] !== null && item[k] !== '') (kept as Record<string, unknown>)[k] = item[k]
     const from = item.ledger ? `${found}/${slashes(item.ledger).replace(/^\//, '')}` : F.ledger(item.id)
-    const old = await loadJson<Ledger>($, from, relOf(found, from))
+    const old = await loadJson<Ledger>(h, from, relOf(found, from))
     if (old.error) throw stop(old.error)
     if (old.value && typeof old.value === 'object' && !Array.isArray(old.value)) {
       const briefs = F.briefDir(item.id)
       const moved = JSON.parse(JSON.stringify(old.value).split(`"${briefs}/`).join(`"${P.briefDir(id)}/`)) as Ledger
       const planFrom = typeof old.value.plan === 'string' && old.value.plan ? old.value.plan : typeof item.plan === 'string' && item.plan ? item.plan : null
       const ledger: Ledger = { ...moved, item: id, ...(planFrom ? { plan: P.planRel(id) } : {}) }
-      await $.fs.write(P.ledger(id), serialize(ledger))
+      await h.fs.write(P.ledger(id), serialize(ledger))
       kept.ledger = relOf(found, P.ledger(id))
       if (planFrom) kept.plan = P.planRel(id)
       if (typeof ledger.worktree === 'string' && ledger.worktree) {
         const wt = worktreePath(found, ledger)
-        const plan = planFrom ? await readItemFile($, found, wt, planFrom) : null
-        if (plan !== null) await $.fs.write(`${wt}/${P.planRel(id)}`, plan)
+        const plan = planFrom ? await readItemFile(h, found, wt, planFrom) : null
+        if (plan !== null) await h.fs.write(`${wt}/${P.planRel(id)}`, plan)
         let dir = `${wt}/${briefs}`
-        let names = (await listDir($, dir)).filter(n => !n.endsWith('/'))
+        let names = (await listDir(h, dir)).filter(n => !n.endsWith('/'))
         if (!names.length && wt !== found) {
           dir = `${found}/${briefs}`
-          names = (await listDir($, dir)).filter(n => !n.endsWith('/'))
+          names = (await listDir(h, dir)).filter(n => !n.endsWith('/'))
         }
         for (const name of names) {
-          const text = await readText($, `${dir}/${name}`)
-          if (text !== null) await $.fs.write(`${wt}/${P.briefDir(id)}/${name}`, text)
+          const text = await readText(h, `${dir}/${name}`)
+          if (text !== null) await h.fs.write(`${wt}/${P.briefDir(id)}/${name}`, text)
         }
       }
-    } else if (!(await $.fs.exists(P.ledger(id)))) {
+    } else if (!(await h.fs.exists(P.ledger(id)))) {
       // No ledger to carry: a fresh one with the branch and PR, so this machine's begin knows the item as its own.
       const fresh: Ledger = { ...emptyLedger(id), ...(typeof item.branch === 'string' && item.branch ? { branch: item.branch } : {}), ...(typeof item.pr === 'string' && item.pr ? { pr: item.pr } : {}) }
-      await $.fs.write(P.ledger(id), serialize(fresh))
+      await h.fs.write(P.ledger(id), serialize(fresh))
       kept.ledger = relOf(found, P.ledger(id))
     } else {
       kept.ledger = relOf(found, P.ledger(id))
     }
     items[id] = kept
   }
-  const facts = await readText($, F.facts)
-  if (facts !== null) await $.fs.write(P.facts, facts)
-  await writeExtras($, found, { ...extras, items })
+  const facts = await readText(h, F.facts)
+  if (facts !== null) await h.fs.write(P.facts, facts)
+  await writeExtras(h, found, { ...extras, items })
 
   // The config on disk with queue: github, every other key as the user left it.
-  const onDisk = await loadJson<Record<string, unknown>>($, p.config, CONFIG_FILE)
+  const onDisk = await loadJson<Record<string, unknown>>(h, p.config, CONFIG_FILE)
   if (onDisk.error) throw stop(onDisk.error)
   const nextConfig = { ...(onDisk.value ?? structuredClone(DEFAULTS)), queue: 'github' }
-  await $.fs.write(p.config, serialize(nextConfig))
+  await h.fs.write(p.config, serialize(nextConfig))
   const normal = normalizeConfig(nextConfig).config
-  await update($, config, () => normal)
-  await ensureExclude($, found)
-  await update($, fileError, () => null)
-  await loadBacklog($, found)
+  await update(h, config, () => normal)
+  await ensureExclude(h, found)
+  await update(h, fileError, () => null)
+  await loadBacklog(h, found)
 
   const parked = m.skipped.parked.map(i => i.id)
   return [
@@ -2945,7 +2915,7 @@ async function migrateGithub($: EngineInterface, found: string, c: Config | null
 // ---------- the watchdog and the live file ----------
 
 /** The limits in force: the config's over the defaults, so a partial config still has every number. */
-function limitsOf(c: Config | null): Config['limits'] {
+export function limitsOf(c: Config | null): Config['limits'] {
   const given = c && typeof c.limits === 'object' && c.limits ? c.limits : {}
   const out = { ...DEFAULTS.limits }
   for (const k of Object.keys(out) as (keyof Config['limits'])[]) {
@@ -2955,26 +2925,26 @@ function limitsOf(c: Config | null): Config['limits'] {
   return out
 }
 
-const protectedOf = (c: Config | null): string[] => (Array.isArray(c?.protectedPaths) ? c.protectedPaths.filter((g): g is string => typeof g === 'string' && g !== '') : DEFAULTS.protectedPaths)
+export const protectedOf = (c: Config | null): string[] => (Array.isArray(c?.protectedPaths) ? c.protectedPaths.filter((g): g is string => typeof g === 'string' && g !== '') : DEFAULTS.protectedPaths)
 
-async function homeDir($: EngineInterface): Promise<string> {
-  // `$.env.get` takes a literal name, so the module's reads can be listed.
+export async function homeDir(h: Host): Promise<string> {
+  // `h.env.get` takes a literal name, so the module's reads can be listed.
   let v: string | undefined
   try {
-    v = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
+    v = (await h.env.get('HOME')) || (await h.env.get('USERPROFILE'))
   } catch {}
   return v ? slashes(v) : ''
 }
 
-async function liveFile($: EngineInterface): Promise<string> {
-  const found = (await read($, root)) || (await resolveRoot($))
-  return livePath(found, self.hasRepo, self.hasRepo ? '' : await homeDir($), self.hasRepo ? '' : await hashRoot(found))
+export async function liveFile(h: Host): Promise<string> {
+  const found = (await read(h, root)) || (await resolveRoot(h))
+  return livePath(found, self.hasRepo, self.hasRepo ? '' : await homeDir(h), self.hasRepo ? '' : await hashRoot(found))
 }
 
-async function readText($: EngineInterface, path: string): Promise<string | null> {
+export async function readText(h: Host, path: string): Promise<string | null> {
   try {
-    if (!(await $.fs.exists(path))) return null
-    const t = await $.fs.read(path)
+    if (!(await h.fs.exists(path))) return null
+    const t = await h.fs.read(path)
     return typeof t === 'string' ? t : null
   } catch {
     return null
@@ -2982,12 +2952,12 @@ async function readText($: EngineInterface, path: string): Promise<string | null
 }
 
 /** The branch the session's own checkout is on: `.git` is a folder in a main checkout, a `gitdir:` file in a worktree. */
-async function branchOf($: EngineInterface): Promise<string | undefined> {
+export async function branchOf(h: Host): Promise<string | undefined> {
   try {
-    const top = self.sessionRoot || slashes(await $.session.root())
-    const pointer = await readText($, `${top}/.git`)
+    const top = self.sessionRoot || slashes(await h.session.root())
+    const pointer = await readText(h, `${top}/.git`)
     const gitDir = pointer?.startsWith('gitdir:') ? slashes(pointer.slice(7).trim()) : `${top}/.git`
-    const head = await readText($, `${gitDir}/HEAD`)
+    const head = await readText(h, `${gitDir}/HEAD`)
     return /^ref: refs\/heads\/(.+?)\s*$/m.exec(head ?? '')?.[1]
   } catch {
     return undefined
@@ -3000,44 +2970,44 @@ async function branchOf($: EngineInterface): Promise<string | undefined> {
  * child of this session runs; else the first active item no other live session claims and, with queue: github, this
  * machine has a record of. Null when every active item is another session's or another machine's.
  */
-async function activeItem($: EngineInterface, b: Backlog | null): Promise<Item | null> {
+export async function activeItem(h: Host, b: Backlog | null): Promise<Item | null> {
   const actives = (b?.items ?? []).filter(i => (ACTIVE_STATUSES as readonly string[]).includes(i.status))
   if (!actives.length) return null
   const mine = actives.find(i => i.id === self.item)
   if (mine) return mine
   try {
-    const name = /\/\.claude\/worktrees\/([^/]+)/.exec(`${slashes(await $.session.cwd())}/`)?.[1]
+    const name = /\/\.claude\/worktrees\/([^/]+)/.exec(`${slashes(await h.session.cwd())}/`)?.[1]
     const inTree = name ? actives.find(i => i.id === name) : undefined
     if (inTree) return inTree
   } catch {}
-  const branch = await branchOf($)
+  const branch = await branchOf(h)
   const onBranch = branch ? actives.find(i => i.branch === branch) : undefined
   if (onBranch) return onBranch
-  const kids = new Set((await read($, children)).map(ch => ch.item))
+  const kids = new Set((await read(h, children)).map(ch => ch.item))
   const ofChild = actives.find(i => kids.has(i.id))
   if (ofChild) return ofChild
-  const claimed = new Set((await read($, siblings)).filter(x => !x.isStale && x.item).map(x => x.item))
+  const claimed = new Set((await read(h, siblings)).filter(x => !x.isStale && x.item).map(x => x.item))
   // With the issues as the queue the building label travels and the record does not: an item in flight that has
   // no branch and no ledger here was begun on another machine, and is not this session's to resume.
-  const isElsewhere = isGithub(await read($, config)) ? (i: Item) => !i.branch && !i.ledger : () => false
+  const isElsewhere = isGithub(await read(h, config)) ? (i: Item) => !i.branch && !i.ledger : () => false
   return actives.find(i => !claimed.has(i.id) && !isElsewhere(i)) ?? null
 }
 
 /** This session's live entry: the active item, the running agents and every signal of this session. */
-async function entryOf($: EngineInterface, previous: LiveEntry | undefined, at: number): Promise<LiveEntry> {
+export async function entryOf(h: Host, previous: LiveEntry | undefined, at: number): Promise<LiveEntry> {
   const nowIso = new Date(at).toISOString()
   if (!self.startedAt) self.startedAt = nowIso
-  const active = await activeItem($, await read($, backlog))
+  const active = await activeItem(h, await read(h, backlog))
   // An item a child session runs, or ran, is the child's: its own entry names it, and a child that exited with the
   // item still building leaves it to the dead signal, not to this session's entry.
-  const owned = new Set((await read($, children)).map(ch => ch.item))
+  const owned = new Set((await read(h, children)).map(ch => ch.item))
   const item = active && !owned.has(active.id) ? active : null
-  const running = (await read($, agents)).filter(a => a.status === 'running')
+  const running = (await read(h, agents)).filter(a => a.status === 'running')
   let cwd = ''
   try {
-    cwd = slashes(await $.session.cwd())
+    cwd = slashes(await h.session.cwd())
   } catch {}
-  const branch = await branchOf($)
+  const branch = await branchOf(h)
   const title = item ? `${item.id} · ${item.title}` : cwd.split('/').pop() || 'pipeline'
   // Unknown fields of the entry on disk survive; branch and item are this write's.
   const { branch: _b, item: _i, ...kept } = previous ?? {}
@@ -3050,26 +3020,26 @@ async function entryOf($: EngineInterface, previous: LiveEntry | undefined, at: 
     startedAt: self.startedAt,
     seenAt: nowIso,
     agents: running,
-    signals: await read($, signals),
+    signals: await read(h, signals),
   }
 }
 
 /**
  * Writes this session's entry after a fresh read of the file, throttled to one write per 2 s unless forced.
  * Every file this module writes (the live file, the backlog, a ledger, the config) goes through a direct
- * `$.fs.write`: the API has no rename, so a write-to-temp-then-rename is not available; the reads parse
+ * `h.fs.write`: the API has no rename, so a write-to-temp-then-rename is not available; the reads parse
  * defensively instead, and a file that does not parse is refused and left alone.
  */
-async function heartbeat($: EngineInterface, isForced = false): Promise<void> {
+export async function heartbeat(h: Host, isForced = false): Promise<void> {
   try {
-    const at = await $.clock.now()
+    const at = await h.clock.now()
     if (!isForced && at - self.lastWrite < HEARTBEAT_MS) return
     self.lastWrite = at
-    const path = await liveFile($)
-    const id = await $.session.id()
-    const current = parseLive((await readText($, path)) ?? '')
-    await $.fs.write(path, serialize(withEntry(current, id, await entryOf($, current.sessions[id], at), at)))
-    await refreshSiblings($, current, id, at)
+    const path = await liveFile(h)
+    const id = await h.session.id()
+    const current = parseLive((await readText(h, path)) ?? '')
+    await h.fs.write(path, serialize(withEntry(current, id, await entryOf(h, current.sessions[id], at), at)))
+    await refreshSiblings(h, current, id, at)
   } catch {}
 }
 
@@ -3078,36 +3048,36 @@ async function heartbeat($: EngineInterface, isForced = false): Promise<void> {
  * entry in this session's own cwd or root, which is this session's under an earlier id (after a /clear or a resume
  * the process goes on under a new id without a session.start).
  */
-async function refreshSiblings($: EngineInterface, current: Live, id: string, at: number): Promise<void> {
-  const own = (await read($, children)).map(ch => ch.id)
+export async function refreshSiblings(h: Host, current: Live, id: string, at: number): Promise<void> {
+  const own = (await read(h, children)).map(ch => ch.id)
   const cwds: string[] = []
-  for (const get of [() => $.session.cwd(), () => $.session.root()]) {
+  for (const get of [() => h.session.cwd(), () => h.session.root()]) {
     try {
       cwds.push(slashes(await get()))
     } catch {}
   }
-  await update($, siblings, () => siblingsOf(current, id, at, own, cwds))
+  await update(h, siblings, () => siblingsOf(current, id, at, own, cwds))
 }
 
 /** A signal to the person, per `config.notify`: a push notification, or a toast when the push is refused. */
-async function notify($: EngineInterface, c: Config | null, list: Signal[]): Promise<void> {
+export async function notify(h: Host, c: Config | null, list: Signal[]): Promise<void> {
   const mode = c?.notify ?? DEFAULTS.notify
   if (mode === 'off') return
-  for (const s of list) await announce($, c, `pipeline: ${s.kind} · ${s.agent} · ${s.detail}`)
+  for (const s of list) await announce(h, c, `pipeline: ${s.kind} · ${s.agent} · ${s.detail}`)
 }
 
 /** One message to the person: a push notification, or a toast when the push is refused; nothing with notify off. */
-async function announce($: EngineInterface, c: Config | null, text: string): Promise<void> {
+export async function announce(h: Host, c: Config | null, text: string): Promise<void> {
   if ((c?.notify ?? DEFAULTS.notify) === 'off') return
   const message = text.slice(0, 200)
   let isSent = false
   try {
-    const r = await $.tool.call({ tool: 'PushNotification', message, status: 'proactive' })
+    const r = await h.tool.call({ tool: 'PushNotification', message, status: 'proactive' })
     isSent = !(r && typeof r === 'object' && 'deny' in r && r.deny !== undefined)
   } catch {}
   if (!isSent) {
     try {
-      await $.ui.toast(message)
+      await h.ui.toast(message)
     } catch {}
   }
 }
@@ -3117,53 +3087,53 @@ async function announce($: EngineInterface, c: Config | null, text: string): Pro
  * stale since this session started (it died under STALE_MS before our start, say) gives its dead signals now,
  * and is dropped from the file so it is reported once; the live file is refreshed.
  */
-async function tick($: EngineInterface): Promise<void> {
+export async function tick(h: Host): Promise<void> {
   try {
-    const at = await $.clock.now()
-    let c = await read($, config)
-    const kids = await read($, children)
+    const at = await h.clock.now()
+    let c = await read(h, config)
+    const kids = await read(h, children)
     // Other sessions (the children, a sibling) write the backlog too: with the session runner the files are re-read.
     if (kids.length || c?.runner === 'session') {
-      const found = (await read($, root)) || (await resolveRoot($))
-      c = (await loadAll($, found)).config
+      const found = (await read(h, root)) || (await resolveRoot(h))
+      c = (await loadAll(h, found)).config
     }
-    const fresh = raiseSignals(await read($, agents), limitsOf(c), at, await read($, signals))
+    const fresh = raiseSignals(await read(h, agents), limitsOf(c), at, await read(h, signals))
     if (fresh.length) {
-      await update($, signals, list => [...list, ...fresh])
-      await notify($, c, fresh)
+      await update(h, signals, list => [...list, ...fresh])
+      await notify(h, c, fresh)
     }
     if (kids.length) {
-      const path = await liveFile($)
-      const live = parseLive((await readText($, path)) ?? '')
-      const before = await read($, signals)
-      const added = mergeSignals(before, childSignals({ children: kids, live, items: (await read($, backlog))?.items ?? [], now: at, staleMs: STALE_MS })).slice(before.length)
+      const path = await liveFile(h)
+      const live = parseLive((await readText(h, path)) ?? '')
+      const before = await read(h, signals)
+      const added = mergeSignals(before, childSignals({ children: kids, live, items: (await read(h, backlog))?.items ?? [], now: at, staleMs: STALE_MS })).slice(before.length)
       if (added.length) {
-        await update($, signals, list => mergeSignals(list, added))
-        await notify($, c, added)
+        await update(h, signals, list => mergeSignals(list, added))
+        await notify(h, c, added)
       }
     }
-    await reportGone($, at, c)
-    await update($, now, () => at)
-    await heartbeat($, true)
+    await reportGone(h, at, c)
+    await update(h, now, () => at)
+    await heartbeat(h, true)
   } catch {}
 }
 
 /** The gone entries of other sessions in the live file: their signals restored and their agents dead, then dropped. */
-async function reportGone($: EngineInterface, at: number, c: Config | null): Promise<void> {
-  const path = await liveFile($)
-  const id = await $.session.id()
-  const current = parseLive((await readText($, path)) ?? '')
+export async function reportGone(h: Host, at: number, c: Config | null): Promise<void> {
+  const path = await liveFile(h)
+  const id = await h.session.id()
+  const current = parseLive((await readText(h, path)) ?? '')
   // This session's own entry is alive by definition: it is refreshed by the heartbeat right after.
   const dead = deadAgents(withoutEntry(current, id), id, at)
   if (!dead.sessions.length) return
   let pruned = current
   for (const gone of dead.sessions) pruned = withoutEntry(pruned, gone)
-  await $.fs.write(path, serialize(pruned))
-  const before = await read($, signals)
+  await h.fs.write(path, serialize(pruned))
+  const before = await read(h, signals)
   const added = mergeSignals(before, dead.signals).slice(before.length)
   if (!added.length) return
-  await update($, signals, list => mergeSignals(list, added))
-  await notify($, c, added.filter(s => dead.fresh.includes(s)))
+  await update(h, signals, list => mergeSignals(list, added))
+  await notify(h, c, added.filter(s => dead.fresh.includes(s)))
 }
 
 /**
@@ -3171,49 +3141,49 @@ async function reportGone($: EngineInterface, at: number, c: Config | null): Pro
  * stale one) come back into the atom, and the agents they list running are dead; then this session's fresh
  * entry, and the ticker.
  */
-async function arrive($: EngineInterface): Promise<void> {
-  const at = await $.clock.now()
-  const path = await liveFile($)
-  const id = await $.session.id()
-  let current = parseLive((await readText($, path)) ?? '')
+export async function arrive(h: Host): Promise<void> {
+  const at = await h.clock.now()
+  const path = await liveFile(h)
+  const id = await h.session.id()
+  let current = parseLive((await readText(h, path)) ?? '')
   const dead = deadAgents(current, id, at)
   // Nothing that ran before this start is still running.
-  await update($, agents, list => list.map((a): AgentRun => (a.status === 'running' ? { ...a, status: 'failed', endedAt: at } : a)))
+  await update(h, agents, list => list.map((a): AgentRun => (a.status === 'running' ? { ...a, status: 'failed', endedAt: at } : a)))
   if (dead.sessions.length) {
     // A signal the atom still holds (the state survived) is not doubled; the restored ones stay undelivered.
-    const before = await read($, signals)
+    const before = await read(h, signals)
     const added = mergeSignals(before, dead.signals).slice(before.length)
-    if (added.length) await update($, signals, list => mergeSignals(list, added))
+    if (added.length) await update(h, signals, list => mergeSignals(list, added))
     for (const gone of dead.sessions) current = withoutEntry(current, gone)
     // The person hears of the dead ones now; a restored signal was announced when it was raised.
     const announced = added.filter(s => dead.fresh.includes(s))
-    if (announced.length) await notify($, await read($, config), announced)
+    if (announced.length) await notify(h, await read(h, config), announced)
   }
   try {
-    await orphanChildren($, at)
+    await orphanChildren(h, at)
   } catch {}
   self.startedAt = new Date(at).toISOString()
   self.lastWrite = at
-  await $.fs.write(path, serialize(withEntry(current, id, await entryOf($, undefined, at), at)))
-  await refreshSiblings($, current, id, at)
+  await h.fs.write(path, serialize(withEntry(current, id, await entryOf(h, undefined, at), at)))
+  await refreshSiblings(h, current, id, at)
   self.ticker?.cancel()
-  self.ticker = $.clock.every(TICK_MS, () => void tick($))
+  self.ticker = h.clock.every(TICK_MS, () => void tick(h))
 }
 
-const RESTARTED = 'the parent session restarted'
+export const RESTARTED = 'the parent session restarted'
 
 /**
  * The child records of a life before this one (the state survives a hot reload, the processes do not: a child dies
  * with its parent's module): every starting or running record whose item has no process here is failed, its item
  * blocked unless the child got it past the build, and a dead signal is raised once for each.
  */
-async function orphanChildren($: EngineInterface, at: number): Promise<void> {
-  const orphans = runningOf(await read($, children)).filter(ch => !self.procs.has(ch.item))
+export async function orphanChildren(h: Host, at: number): Promise<void> {
+  const orphans = runningOf(await read(h, children)).filter(ch => !self.procs.has(ch.item))
   if (!orphans.length) return
   const ids = new Set(orphans.map(o => o.id))
-  await update($, children, prev => prev.map(ch => (ids.has(ch.id) ? { ...ch, status: 'failed' as const, endedAt: at, lastLine: RESTARTED } : ch)))
-  const found = (await read($, root)) || (await resolveRoot($))
-  const { config: c, backlog: fresh, error } = await loadAll($, found)
+  await update(h, children, prev => prev.map(ch => (ids.has(ch.id) ? { ...ch, status: 'failed' as const, endedAt: at, lastLine: RESTARTED } : ch)))
+  const found = (await read(h, root)) || (await resolveRoot(h))
+  const { config: c, backlog: fresh, error } = await loadAll(h, found)
   const blocked: string[] = []
   if (!error && fresh) {
     let next = fresh
@@ -3223,492 +3193,55 @@ async function orphanChildren($: EngineInterface, at: number): Promise<void> {
       next = updateItem(next, item.id, { status: 'blocked', note: RESTARTED }, new Date(at).toISOString())
       blocked.push(item.id)
     }
-    if (blocked.length) await writeBacklog($, found, next)
+    if (blocked.length) await writeBacklog(h, found, next)
     for (const id of blocked) {
       try {
-        await runTool($, { action: 'ledger', item: id, set: { blockers: [RESTARTED] } })
+        await runTool(h, { action: 'ledger', item: id, set: { blockers: [RESTARTED] } })
       } catch {}
     }
   }
   const dead: Signal[] = orphans.map(o => ({ kind: 'dead', agent: `child ${o.item}`, agentId: o.id, detail: `${RESTARTED} while the child session ran${blocked.includes(o.item) ? ` · ${o.item} blocked` : ''} · resume with /pipeline run ${o.item}`, at, delivered: false }))
-  const before = await read($, signals)
+  const before = await read(h, signals)
   const added = mergeSignals(before, dead).slice(before.length)
   if (!added.length) return
-  await update($, signals, list => mergeSignals(list, added))
-  await notify($, c, added)
+  await update(h, signals, list => mergeSignals(list, added))
+  await notify(h, c, added)
 }
 
 /** Between items: one wake-up at `silentMinutes` while an agent runs, where the host offers ScheduleWakeup; never two pending. */
-async function scheduleWake($: EngineInterface, at: number): Promise<void> {
+export async function scheduleWake(h: Host, at: number): Promise<void> {
   if (at < self.wakeUntil) return
-  if (!(await read($, agents)).some(a => a.status === 'running') && !runningOf(await read($, children)).length) return
+  if (!(await read(h, agents)).some(a => a.status === 'running') && !runningOf(await read(h, children)).length) return
   let isOffered = false
   try {
-    isOffered = (await $.tool.list()).some(t => t.name === 'ScheduleWakeup')
+    isOffered = (await h.tool.list()).some(t => t.name === 'ScheduleWakeup')
   } catch {}
   if (!isOffered) return
-  const delaySeconds = limitsOf(await read($, config)).silentMinutes * 60
+  const delaySeconds = limitsOf(await read(h, config)).silentMinutes * 60
   self.wakeUntil = at + delaySeconds * 1000
   try {
-    await $.tool.call({ tool: 'ScheduleWakeup', delaySeconds, reason: 'pipeline: a subagent or a child session is running; the watchdog signals are checked at silentMinutes', prompt: WAKE_PROMPT, noop: true })
+    await h.tool.call({ tool: 'ScheduleWakeup', delaySeconds, reason: 'pipeline: a subagent or a child session is running; the watchdog signals are checked at silentMinutes', prompt: WAKE_PROMPT })
   } catch {}
 }
 
-export const register: Register = (on, options) => {
-  isAutoOpen = (options as Record<string, unknown> | undefined)?.autoOpen !== 'never'
-  isCompactBand = (options as Record<string, unknown> | undefined)?.band === 'compact'
-  isIdleStrip = (options as Record<string, unknown> | undefined)?.idleStrip !== 'hide'
-  isCompactTasks = (options as Record<string, unknown> | undefined)?.tasks === 'compact'
-  isTranscripts = (options as Record<string, unknown> | undefined)?.transcripts === 'on'
-
-  on('session.start', async ($, e, next) => {
-    const started = await next(e)
-    // Each step on its own, so a refused registration never keeps the files from loading.
-    try {
-      await $.command.register({ name: 'pipeline', description: DESCRIPTION, argumentHint: 'subcommand' })
-    } catch {}
-    // A host that takes the command but not the tool leaves the model with nothing to call: said once, never hidden.
-    if (!(await registerTool($))) {
-      try {
-        await $.ui.toast(`pipeline: ${NO_TOOL()}`)
-      } catch {}
-    }
-    let loaded: { found: string; config: Config | null; backlog: Backlog | null } | null = null
-    try {
-      const found = await resolveRoot($)
-      loaded = { found, ...(await loadAll($, found)) }
-    } catch {}
-    try {
-      self.sessionRoot = slashes(await $.session.root())
-    } catch {}
-    try {
-      await arrive($)
-    } catch {}
-    // A PR merged by hand since the last session: the person hears it once, in a toast; the status block says it too.
-    try {
-      if (loaded) for (const m of await checkMerged($, loaded.found, loaded.config, loaded.backlog)) $.ui.toast(`pipeline: ${mergedLine({ ...m, id: idLabel(m.id) })}`)
-    } catch {}
-    return started
-  })
-
-  on('session.end', async ($, e, next) => {
-    try {
-      const path = await liveFile($)
-      const current = parseLive((await readText($, path)) ?? '')
-      // The ending session's id is the event's: after a /clear or a resume `$.session.id()` may already answer
-      // the id the process goes on under, and the entry under the old one would stay in the file for a day.
-      const ending = typeof e.sessionId === 'string' && e.sessionId ? e.sessionId : await $.session.id()
-      await $.fs.write(path, serialize(withoutEntry(current, ending)))
-    } catch {}
-    await saveTranscript($, typeof e.sessionId === 'string' && e.sessionId ? e.sessionId : undefined)
-    return next(e)
-  })
-
-  // The session's permission mode, as the engine tells it on each prompt and each spawn: a child runs in it.
-  on('classic.UserPromptSubmit', async (_$, e, next) => {
-    try {
-      const mode = (e as { permission_mode?: unknown }).permission_mode
-      if (typeof mode === 'string' && mode) self.permissionMode = mode
-    } catch {}
-    return next(e)
-  })
-
-  on('agent.spawn', async ($, e, next) => {
-    try {
-      if (typeof e.permissionMode === 'string' && e.permissionMode) self.permissionMode = e.permissionMode
-    } catch {}
-    const started = await next(e)
-    try {
-      if (started && started.deny === undefined && typeof started.model === 'string') {
-        const at = await $.clock.now()
-        await update($, agents, list => onSpawn(list, { id: started.agentId ?? e.tool_use_id, ...(started.agentId ? { agentId: started.agentId } : {}), name: e.description, model: started.model, at }))
-        await heartbeat($, true)
-        await autoOpen($, 'agents')
-      }
-    } catch {}
-    return started
-  })
-
-  on('turn.step', async function* ($, e, next) {
-    const result = yield* next(e)
-    const agentId = e.agentId
-    if (agentId) {
-      try {
-        const at = await $.clock.now()
-        await update($, agents, list => onStep(list, agentId, result.usage, at))
-      } catch {}
-    } else {
-      // The lead's own use: re-reading the conversation on every turn is most of an item's cost.
-      const u = (result.usage ?? {}) as Record<string, number | undefined>
-      self.lead.tokens += (u['input_tokens'] ?? 0) + (u['output_tokens'] ?? 0) + (u['cache_creation_input_tokens'] ?? 0)
-      self.lead.cached += u['cache_read_input_tokens'] ?? 0
-    }
-    return result
-  })
-
-  // A subagent's call: a protected path is refused before it runs; otherwise its
-  // activity line, and for a shell command whether it failed. The main session's passes.
-  on('tool.call', async ($, e, next) => {
-    const agentId = e.agentId
-    const call = e as unknown as Call
-    // The files only the tool writes: an edit or a shell write by anyone, the lead included, is refused and pointed
-    // at the action that does it, so every write is checked, locked and followed by the generated view.
-    try {
-      if (await read($, config)) {
-        const file = EDIT_TOOLS.has(e.tool) ? toolFileOf(pathOf(call) ?? '') : e.tool === 'Bash' ? toolFileWrittenBy(String((call as Record<string, unknown>)['command'] ?? '')) : undefined
-        if (file) return { deny: toolFileNote(file) }
-      }
-    } catch {}
-    // A background command is listed in the panel by its description: one without is sent back for it, the lead's
-    // and a subagent's alike, in a project with a pipeline.
-    try {
-      const input = call as unknown as Record<string, unknown>
-      if (SHELL_TOOLS.has(e.tool) && input['run_in_background'] === true && !isDescribed(input['description'], input['command']) && (await read($, config))) return { deny: NEEDS_DESCRIPTION }
-    } catch {}
-    if (!agentId) {
-      const result = await next(e)
-      await noteBackground($, e.tool, call, result, undefined)
-      return result
-    }
-    try {
-      if (EDIT_TOOLS.has(e.tool)) {
-        const path = pathOf(call)
-        // The session's root is read now, not at session.start: the lead may have entered a worktree since.
-        let sessionRoot = self.sessionRoot
-        try {
-          sessionRoot = slashes(await $.session.root())
-          self.sessionRoot = sessionRoot
-        } catch {}
-        if (path && isProtected(path, protectedOf(await read($, config)), [sessionRoot, await read($, root)])) {
-          return { deny: `pipeline: ${path} is protected by ${CONFIG_FILE} protectedPaths` }
-        }
-      }
-      // A command that already failed three times in a row, unchanged, is not run a fourth time: the agent is told
-      // so directly, which costs the lead no turn.
-      if (e.tool === 'Bash') {
-        const own = (await read($, agents)).find(a => a.agentId === agentId || a.id === agentId)
-        const cmd = normalizeCommand(String((call as Record<string, unknown>)['command'] ?? ''))
-        if (own && cmd && own.lastCommands.length >= 3 && own.lastCommands.slice(-3).every(x => x === cmd)) {
-          return { deny: `pipeline: this exact command failed three times in a row. Running it again will not change the result. Read the error, change the approach, or stop and answer BLOCKED with what you tried.` }
-        }
-      }
-      const at = await $.clock.now()
-      await update($, agents, list => onCall(list, agentId, call, at))
-      void heartbeat($)
-    } catch {}
-    const result = await next(e)
-    try {
-      // The call came back: a sign of life, so one long shell command is not flagged silent.
-      const at = await $.clock.now()
-      await update($, agents, list => onTouch(list, agentId, at))
-      if (e.tool === 'Bash') {
-        const isError = Boolean(result && typeof result === 'object' && 'isError' in result && result.isError)
-        await update($, agents, list => onResult(list, agentId, call, isError))
-      }
-    } catch {}
-    await noteBackground($, e.tool, call, result, agentId)
-    return result
-  })
-
-  // A background task's notification is how the engine says it ended: it leaves the panel's list.
-  on('prompt.submit', async ($, e, next) => {
-    try {
-      const told = (e as { origin?: { kind?: string } }).origin?.kind === 'task-notification' ? notificationOf(e.text) : null
-      if (told && !isLive(told.status)) await update($, background, list => bgEnd(list, told.id))
-    } catch {}
-    return next(e)
-  })
-
-  // A turn's end and a subagent's end name what is still in flight: the list is set against it, so a command that
-  // ended without a notification this session saw does not stay listed.
-  on('classic.Stop', async ($, e, next) => {
-    await reconcileBackground($, (e as { background_tasks?: unknown }).background_tasks)
-    return next(e)
-  })
-  on('classic.SubagentStop', async ($, e, next) => {
-    await reconcileBackground($, (e as { background_tasks?: unknown }).background_tasks)
-    return next(e)
-  })
-
-  on('turn.complete', async ($, e, next) => {
-    try {
-      const at = await $.clock.now()
-      const agentId = e.agentId
-      if (agentId) await update($, agents, list => onComplete(list, agentId, e.reason, at))
-      await heartbeat($, true)
-      if (!agentId) await scheduleWake($, at)
-    } catch {}
-    if (!e.agentId) await renameNow($)
-    // Not waited on: a large transcript must not hold the turn's end.
-    if (!e.agentId) void saveTranscript($)
-    return next(e)
-  })
-
-  on('tool.call', { tool: TOOL }, async ($, e) => {
-    if (e.agentId) return { result: 'ignored: subagents do not write the pipeline' }
-    try {
-      const input = e as unknown as ToolInput
-      const result = await runTool($, input)
-      // The lead's own work on an item makes it this session's: the panel, the band and `get` follow it.
-      const worked = ['ledger', 'plan', 'brief', 'begin', 'accept', 'gate', 'pr', 'ship'].includes(input.action) ? (typeof input.item === 'string' ? input.item : input.item?.id ?? input.id) : input.action === 'update' && ['planning', 'building'].includes(String((input.set as Partial<Item> | undefined)?.status)) ? input.id : undefined
-      if (worked && !(await read($, children)).some(ch => ch.item === worked)) self.item = worked
-      // A block the lead sets goes into the item's record too, so one call does both. Only for the lead's own
-      // call: a migration that carries a blocked item over writes its record itself.
-      const set = input.action === 'update' ? (input.set as Record<string, unknown> | undefined) : undefined
-      if (input.id && set?.['status'] === 'blocked' && typeof set['note'] === 'string' && set['note'].trim() && !String(result).startsWith('refused')) {
-        try {
-          const root = await resolveRoot($)
-          if (await loadLedger($, root, input.id)) await runTool($, { action: 'ledger', item: input.id, set: { blockers: [set['note'].trim()] } })
-        } catch {}
-      }
-      return { result }
-    } catch (err) {
-      return { result: `refused: ${err instanceof Error ? err.message : String(err)}` }
-    }
-  })
-
-  on('command.run', { command: 'pipeline' }, async ($, e) => {
-    try {
-      return await runCommand($, e.args)
-    } catch (err) {
-      return { text: `pipeline: ${err instanceof Error ? err.message : String(err)}` }
-    }
-  })
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const ui = $.ui.resolve(e)
-    try {
-      return await drawPane($, ui, e)
-    } catch (err) {
-      const { Text } = ui as unknown as { Text: (p: Record<string, unknown>) => RenderElement }
-      return <Text color={BLOCKED}>{`pipeline: ${err instanceof Error ? err.message : String(err)}`}</Text>
-    }
-  })
-
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    let band: Band | null = null
-    try {
-      if (!e.props.hasSurvey) band = await bandNow($, e.props.isWorking)
-    } catch {}
-    const strip = band ? '' : await idleText($, e.props.hasSurvey)
-    if (!band && !strip) return next(e)
-    // The engine's own placeholder ({ type: 'engine' }) is never nested: the desktop drops a band that nests it.
-    const drawn = await Promise.resolve(next(e)).catch(() => null)
-    const other = drawn && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
-    const ui = $.ui.resolve(e)
-    const { Box, Text, Button } = ui
-    const cols = e.props.bodyColumns || 100
-    if (!band) {
-      // Nothing active: one slim line with the Open panel button, so the panel is a press away.
-      const button = <Button key="band-panel" plain dimColor hotkey="p" label="Open panel" onPress={() => void showPane($)} />
-      if (e.surface !== 'terminal' && 'Svg' in ui) {
-        const { Svg } = ui
-        const width = Math.max(180, Math.min(1600, cols * 8 - 40)) - 24
-        return (
-          <Box flexDirection="column">
-            <Box flexDirection="row" alignItems="flex-start">
-              <Svg source={idleStripSvg(strip, width)} alt={strip} width={width} height={BAND_COMPACT_H} />
-              {button}
-            </Box>
-            {other}
-          </Box>
-        )
-      }
-      // The row, the gap and the button's `[ Open panel ]` share the columns.
-      return (
-        <Box flexDirection="column">
-          <Box flexDirection="row" gap={1}>
-            <Text dimColor>{idleStripText(strip, Math.max(10, cols - 4 - 'Open panel'.length - 5))}</Text>
-            {button}
-          </Box>
-          {other}
-        </Box>
-      )
-    }
-    const panelButton = <Button key="band-panel" plain dimColor hotkey="p" label={(await isPaneOpen($)) ? 'Panel ↗' : 'Panel'} onPress={() => void showPane($)} />
-    let isOpen = false
-    try {
-      isOpen = (await read($, panel)).isBandOpen
-    } catch {}
-    const toggle = () => void update($, panel, prev => ({ ...prev, isBandOpen: !prev.isBandOpen }))
-    const chevron = <Button key="band-expand" plain dimColor label={isOpen ? '⌃' : '⌄'} onPress={toggle} />
-    const details = isOpen ? (
-      <Box flexDirection="column" paddingLeft={2}>
-        <Text dimColor>{`Execution tasks · ${band.summary}`}</Text>
-        {band.tasks.map((t, i) => (
-          <Text key={`band-task-${i}`} color={t.segment === 'accepted' ? SEGMENT_COLORS.accepted : t.segment === 'current' ? band!.color : t.segment === 'blocked' ? SEGMENT_COLORS.blocked : undefined} dimColor={t.segment === 'pending'}>
-            {`${t.segment === 'accepted' ? '✓' : t.segment === 'current' ? '•' : t.segment === 'blocked' ? '✕' : '○'} ${t.title}`}
-          </Text>
-        ))}
-        {!band.tasks.length ? <Text dimColor>No ledger yet.</Text> : null}
-      </Box>
-    ) : null
-    if (e.surface !== 'terminal' && 'Svg' in ui) {
-      const { Svg } = ui
-      const width = Math.max(180, Math.min(1600, cols * 8 - 40)) - 24
-      const height = isCompactBand ? BAND_COMPACT_H : BAND_H
-      return (
-        <Box flexDirection="column">
-          <Box flexDirection="row" alignItems="flex-start">
-            <Svg source={bandSvg(band, width, isCompactBand)} alt={`${band.id} ${band.state}: ${band.title}, ${band.count}, ${band.activity}`} width={width} height={height} />
-            {chevron}
-            {panelButton}
-          </Box>
-          {details}
-          {other}
-        </Box>
-      )
-    }
-    const row = bandText(band, Math.max(10, cols - 4))
-    return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" gap={1}>
-          <Text color={band.color} bold>
-            {row.head}
-          </Text>
-          {row.segments ? (
-            <Text>
-              <Text dimColor>· </Text>
-              {band.segments.map((seg, i) => (
-                <Text key={`seg-${i}`} color={seg === 'pending' ? undefined : seg === 'current' ? band!.color : SEGMENT_COLORS[seg]} dimColor={seg === 'pending'}>
-                  {row.segments.charAt(i)}
-                </Text>
-              ))}
-              {!band.segments.length ? <Text dimColor>▱</Text> : null}
-            </Text>
-          ) : null}
-          {row.tail ? <Text dimColor>{`· ${row.tail}`}</Text> : null}
-          {chevron}
-          {panelButton}
-        </Box>
-        {details}
-        {other}
-      </Box>
-    )
-  })
-
-}
-
-// ---------- the commands ----------
-
-/** Gives the model the tool; false, with the reason kept, when this host refuses it. */
-async function registerTool($: EngineInterface): Promise<boolean> {
-  try {
-    // In a project without a pipeline the tool is listed by name only, so it costs no context there.
-    let hasPipeline = false
-    try {
-      hasPipeline = await $.fs.exists(paths(await resolveRoot($)).config)
-    } catch {}
-    await $.tool.register({ name: 'pipeline', description: TOOL_DESCRIPTION, isDeferred: !hasPipeline, inputSchema: TOOL_SCHEMA })
-    self.toolError = ''
-    return true
-  } catch (err) {
-    self.toolError = (err instanceof Error ? err.message : String(err)) || 'no reason given'
-    return false
-  }
-}
-
-const NO_TOOL = () => `the pipeline tool could not be registered in this session (${self.toolError}), so the model cannot call it here: commands that only show or set things still work, building does not. Start the session in a terminal or the desktop app on the machine itself.`
+export const NO_TOOL = () => `the pipeline tool could not be registered in this session (${self.toolError}), so the model cannot call it here: commands that only show or set things still work, building does not. Start the session in a terminal or the desktop app on the machine itself.`
 /** The subcommands that hand the work to the model, which needs the tool. */
-const NEEDS_TOOL = ['add', 'discuss', 'next', 'run', 'init', 'migrate']
+export const NEEDS_TOOL = ['add', 'discuss', 'next', 'run', 'init', 'migrate']
 
-type CommandAnswer = { text?: string; context?: readonly string[] }
+export type CommandAnswer = { text?: string; context?: readonly string[] }
 
 /** What the command says at once when it began an item: the id and its title, before the model's first word. */
-const begunText = (b: { id: string; title: string }) => `pipeline: ${b.id}${b.title ? ` · ${b.title}` : ''} begun…`
+export const begunText = (b: { id: string; title: string }) => `pipeline: ${b.id}${b.title ? ` · ${b.title}` : ''} begun…`
 
-const ID = /^(?:[a-z][a-z0-9-]*|#?\d+)$/i
+export const ID = /^(?:[a-z][a-z0-9-]*|#?\d+)$/i
 /** An id as the tool takes it: `#12` is issue 12. */
-const idArg = (id: string) => id.replace(/^#(?=\d+$)/, '')
-
-/** `/pipeline <sub> ...`: text for what the mod answers itself, a prompt for what the model does. */
-async function runCommand($: EngineInterface, args: string): Promise<CommandAnswer> {
-  const [sub = '', ...rest] = args.trim().split(/\s+/).filter(Boolean)
-  // An id argument may be written as #12: the subcommands that take an id read it without the #.
-  const arg = ['status', 'run', 'stop', 'log', 'park', 'unpark'].includes(sub) ? idArg(rest.join(' ')) : rest.join(' ')
-  // The engine refuses a submit from inside the command's own hook (it would wait on
-  // the turn the hook holds), so the submit goes out from a timer once this hook is done.
-  const prompt = (text: string, instruction: string): CommandAnswer => {
-    $.clock.after(50, async () => {
-      // An item begun by the command is named now, while no turn runs: at the turn's end would be after the whole build.
-      // Never waited on for long: a surface that holds the rename back must not hold the prompt back.
-      try {
-        await Promise.race([renameNow($), new Promise<void>(done => $.clock.after(1500, () => done()))])
-      } catch {}
-      try {
-        await $.prompt.submit({ text: instruction })
-      } catch (err) {
-        $.ui.toast(`pipeline: could not start the step: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    })
-    return { text }
-  }
-  // Without the tool the model would be sent into a dead end: one more try, then said plainly before anything is claimed.
-  if (self.toolError && NEEDS_TOOL.includes(sub) && !(await registerTool($))) return { text: `pipeline: ${NO_TOOL()}` }
-  switch (sub) {
-    case 'status':
-      return { text: `${await runTool($, { action: 'status', ...(arg ? { id: arg } : {}) })}${self.toolError ? `\n\n${NO_TOOL()}` : ''}` }
-    case 'panel': {
-      const isOpen = await togglePane($)
-      return { text: isOpen ? 'Pipeline panel opened.' : 'Pipeline panel closed.' }
-    }
-    case 'config':
-      return { text: await configCommand($, arg) }
-    case 'init':
-      return prompt('pipeline: setting up…', INIT_PROMPT)
-    case 'migrate':
-      // `migrate github`: a project already on a file backlog moves onto issues; the plain form is for a project with no pipeline yet.
-      if (/^(github|issues)$/i.test(arg.trim())) return prompt('pipeline: moving the backlog onto GitHub issues…', MIGRATE_GITHUB_PROMPT)
-      return prompt('pipeline: migrating…', MIGRATE_PROMPT)
-    case 'add':
-      if (!arg) return { text: 'pipeline: add needs the request, as /pipeline add <text>' }
-      return prompt(`pipeline: intake of "${arg}"…`, INTAKE_PROMPT(arg))
-    case 'adopt':
-      if (!/^#?\d+$/.test(arg)) return { text: 'pipeline: adopt needs a pull request number, as /pipeline adopt 114' }
-      return { text: await runTool($, { action: 'adopt', pr: `#${arg.replace('#', '')}` }) }
-    case 'discuss':
-      if (!arg) return { text: 'pipeline: discuss needs a request or an item, as /pipeline discuss <text or id>' }
-      return prompt(`pipeline: discussing "${arg}"…`, DISCUSS_PROMPT(arg))
-    case 'next': {
-      const begun = await beginInCode($, '')
-      if (begun) return 'refused' in begun ? { text: `pipeline: ${begun.refused}` } : prompt(begunText(begun), (begun.isDirect ? DIRECT_PROMPT : BEGUN_PROMPT)(begun.answer, begun.id, false))
-      return prompt('pipeline: running the first ready item…', (await isSessionRunner($)) ? SESSION_RUN_PROMPT('') : RUN_PROMPT(''))
-    }
-    case 'run': {
-      if (!arg || (arg !== 'all' && !ID.test(arg))) return { text: 'pipeline: run needs an id or all, as /pipeline run p12' }
-      const begun = await beginInCode($, arg === 'all' ? '' : arg)
-      if (begun) return 'refused' in begun ? { text: `pipeline: ${begun.refused}` } : prompt(begunText(begun), (begun.isDirect ? DIRECT_PROMPT : BEGUN_PROMPT)(begun.answer, begun.id, arg === 'all'))
-      return prompt(arg === 'all' ? 'pipeline: running until nothing is ready…' : `pipeline: running ${arg}…`, (await isSessionRunner($)) ? SESSION_RUN_PROMPT(arg) : RUN_PROMPT(arg))
-    }
-    case 'stop':
-      if (arg && ID.test(arg)) return { text: await runTool($, { action: 'stop', item: arg }) }
-      return prompt('pipeline: stopping after the running task…', STOP_PROMPT)
-    case 'log':
-      if (!ID.test(arg)) return { text: 'pipeline: log needs an id, as /pipeline log p12' }
-      return { text: await runTool($, { action: 'log', item: arg }) }
-    case 'clean':
-      return prompt('pipeline: cleaning…', CLEAN_PROMPT)
-    case 'move': {
-      if (await isIssueQueue($)) return { text: `refused: ${notWithIssues('move')}` }
-      const [id = '', where = '', after = ''] = rest.map(idArg)
-      const to = where === 'top' ? 'top' : where === 'after' && ID.test(after) ? { after } : null
-      if (!ID.test(id) || !to) return { text: 'pipeline: move needs an id and a place, as /pipeline move p12 top or /pipeline move p12 after p9' }
-      return prompt(`pipeline: moving ${id}…`, QUEUE_PROMPT({ action: 'move', id, to }))
-    }
-    case 'park':
-    case 'unpark':
-      if (!ID.test(arg)) return { text: `pipeline: ${sub} needs an id, as /pipeline ${sub} p12` }
-      return prompt(`pipeline: ${sub === 'park' ? 'parking' : 'unparking'} ${arg}…`, QUEUE_PROMPT({ action: sub, id: arg }))
-    default:
-      return { text: USAGE }
-  }
-}
+export const idArg = (id: string) => id.replace(/^#(?=\d+$)/, '')
 
 /** Whether the config on disk says `queue: github`. */
-async function isIssueQueue($: EngineInterface): Promise<boolean> {
+export async function isIssueQueue(h: Host): Promise<boolean> {
   try {
-    const found = (await read($, root)) || (await resolveRoot($))
-    return isGithub((await loadConfig($, found)).value)
+    const found = (await read(h, root)) || (await resolveRoot(h))
+    return isGithub((await loadConfig(h, found)).value)
   } catch {
     return false
   }
@@ -3721,18 +3254,18 @@ async function isIssueQueue($: EngineInterface): Promise<boolean> {
  * Answers null when the skill should drive from its own `get` (the session runner, an item whose ledger already
  * has tasks), and the refusal when nothing can be begun.
  */
-async function beginInCode($: EngineInterface, target: string): Promise<{ id: string; title: string; answer: string; isDirect: boolean } | { refused: string } | null> {
+export async function beginInCode(h: Host, target: string): Promise<{ id: string; title: string; answer: string; isDirect: boolean } | { refused: string } | null> {
   try {
-    const found = (await read($, root)) || (await resolveRoot($))
-    const { config: c, backlog: b } = await loadAll($, found)
+    const found = (await read(h, root)) || (await resolveRoot(h))
+    const { config: c, backlog: b } = await loadAll(h, found)
     const cfg = normalizeConfig(c ?? DEFAULTS).config
     if (!c || cfg.runner === 'session') return null
     // An item this session already runs is resumed, not passed over for the next ready one.
-    const id = target || (await activeItem($, b))?.id || ''
-    if (id && ((await loadLedger($, found, id))?.tasks.length ?? 0) > 0) return null
-    const answer = await runTool($, { action: 'begin', ...(id ? { item: id } : {}) })
+    const id = target || (await activeItem(h, b))?.id || ''
+    if (id && ((await loadLedger(h, found, id))?.tasks.length ?? 0) > 0) return null
+    const answer = await runTool(h, { action: 'begin', ...(id ? { item: id } : {}) })
     const begun = answer.split(' · ')[0] ?? id
-    const title = (await loadAll($, found)).backlog?.items.find(i => i.id === begun)?.title ?? ''
+    const title = (await loadAll(h, found)).backlog?.items.find(i => i.id === begun)?.title ?? ''
     return { id: begun, title, answer, isDirect: cfg.mode === 'direct' }
   } catch (err) {
     const said = err instanceof Error ? err.message : String(err)
@@ -3742,10 +3275,10 @@ async function beginInCode($: EngineInterface, target: string): Promise<{ id: st
   }
 }
 
-async function isSessionRunner($: EngineInterface): Promise<boolean> {
+export async function isSessionRunner(h: Host): Promise<boolean> {
   try {
-    const found = (await read($, root)) || (await resolveRoot($))
-    return (await loadConfig($, found)).value?.runner === 'session'
+    const found = (await read(h, root)) || (await resolveRoot(h))
+    return (await loadConfig(h, found)).value?.runner === 'session'
   } catch {
     return false
   }
@@ -3775,10 +3308,10 @@ export function setPath(obj: Record<string, unknown>, key: string, value: unknow
 }
 
 /** `/pipeline config`: the config file as text; `key=value` sets one key once `normalizeConfig` accepts the result. */
-async function configCommand($: EngineInterface, arg: string): Promise<string> {
-  const found = await resolveRoot($)
+export async function configCommand(h: Host, arg: string): Promise<string> {
+  const found = await resolveRoot(h)
   const p = paths(found)
-  const text = await readText($, p.config)
+  const text = await readText(h, p.config)
   if (text === null) return 'pipeline: no config (run /pipeline init)'
   const parsed = parseJson<Record<string, unknown>>(text, CONFIG_FILE)
   if (!parsed.ok) return `pipeline: ${parsed.error}`
@@ -3794,34 +3327,34 @@ async function configCommand($: EngineInterface, arg: string): Promise<string> {
   const next = setPath(current, key, value)
   const { problems } = normalizeConfig(next)
   if (problems.length) return `refused: ${problems.join('; ')}`
-  await $.fs.write(p.config, serialize(next))
-  await loadConfig($, found)
-  await update($, fileError, () => null)
+  await h.fs.write(p.config, serialize(next))
+  await loadConfig(h, found)
+  await update(h, fileError, () => null)
   return `${key} = ${JSON.stringify(value)}`
 }
 
 /** The first line of the active item's spec, for the running hero; nothing without a spec file. With queue: github, the spec cache in the item's worktree. */
-async function specLine($: EngineInterface, found: string, item: Item | null): Promise<string> {
+export async function specLine(h: Host, found: string, item: Item | null): Promise<string> {
   if (!item) return ''
-  const c = await read($, config)
+  const c = await read(h, config)
   if (isGithub(c)) {
-    const ledger = await loadLedger($, found, item.id)
-    const text = ledger?.worktree ? await readText($, `${worktreePath(found, ledger)}/${placesOf(found, c).specRel(item.id)}`) : null
+    const ledger = await loadLedger(h, found, item.id)
+    const text = ledger?.worktree ? await readText(h, `${worktreePath(found, ledger)}/${placesOf(found, c).specRel(item.id)}`) : null
     return text ? specWhat(text) : ''
   }
   if (typeof item.spec !== 'string' || !item.spec) return ''
-  const text = await readText($, `${found}/${item.spec.replace(/^\/+/, '')}`)
+  const text = await readText(h, `${found}/${item.spec.replace(/^\/+/, '')}`)
   return text ? specWhat(text) : ''
 }
 
-const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
+export const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
 
 /** The list set against what the engine says is still in flight; nothing when it does not say. Never throws. */
-async function reconcileBackground($: EngineInterface, inFlight: unknown): Promise<void> {
+export async function reconcileBackground(h: Host, inFlight: unknown): Promise<void> {
   try {
     if (!Array.isArray(inFlight)) return
-    const at = await $.clock.now()
-    await update($, background, list => bgReconcile(list, inFlight as BgSummary[], at))
+    const at = await h.clock.now()
+    await update(h, background, list => bgReconcile(list, inFlight as BgSummary[], at))
   } catch {}
 }
 
@@ -3829,31 +3362,31 @@ async function reconcileBackground($: EngineInterface, inFlight: unknown): Promi
  * After a tool call came back: a shell command that went to the background joins the panel's list with the
  * description its caller gave it, and a task the model stopped itself leaves it. Never throws.
  */
-async function noteBackground($: EngineInterface, tool: string, call: Call, result: unknown, agentId: string | undefined): Promise<void> {
+export async function noteBackground(h: Host, tool: string, call: Call, result: unknown, agentId: string | undefined): Promise<void> {
   try {
     const input = call as unknown as Record<string, unknown>
     const out = (result as { result?: unknown } | undefined)?.result
     if (SHELL_TOOLS.has(tool)) {
       const id = out && typeof out === 'object' ? (out as { backgroundTaskId?: unknown }).backgroundTaskId : undefined
       if (typeof id !== 'string' || !id) return
-      const owner = agentId ? (await read($, agents)).find(a => a.agentId === agentId || a.id === agentId)?.name : undefined
-      const at = await $.clock.now()
-      await update($, background, list =>
+      const owner = agentId ? (await read(h, agents)).find(a => a.agentId === agentId || a.id === agentId)?.name : undefined
+      const at = await h.clock.now()
+      await update(h, background, list =>
         bgStart(list, { id, description: typeof input['description'] === 'string' ? input['description'] : '', command: String(input['command'] ?? ''), ...(owner ? { owner } : agentId ? { owner: 'a subagent' } : {}), ...(agentId ? { agentId } : {}), at }),
       )
     } else if (tool === 'TaskStop') {
       const id = input['task_id'] ?? input['shell_id']
-      if (typeof id === 'string' && id && !(result && typeof result === 'object' && 'deny' in result && (result as { deny?: unknown }).deny !== undefined)) await update($, background, list => bgEnd(list, id))
+      if (typeof id === 'string' && id && !(result && typeof result === 'object' && 'deny' in result && (result as { deny?: unknown }).deny !== undefined)) await update(h, background, list => bgEnd(list, id))
     }
   } catch {}
 }
 
 /** Stop pressed on a background command: the engine's own stop, its answer as a toast, and the row goes. */
-async function stopBackground($: EngineInterface, id: string): Promise<void> {
+export async function stopBackground(h: Host, id: string): Promise<void> {
   let said: string
   let isGone = false
   try {
-    const r = (await $.tool.call({ tool: 'TaskStop', task_id: id } as never)) as { deny?: string; result?: unknown }
+    const r = (await h.tool.call({ tool: 'TaskStop', task_id: id })) as { deny?: string; result?: unknown }
     if (r.deny !== undefined) said = `could not stop ${id}: ${r.deny}`
     else {
       isGone = true
@@ -3868,102 +3401,61 @@ async function stopBackground($: EngineInterface, id: string): Promise<void> {
     said = `${id} had already ended`
   }
   try {
-    if (isGone) await update($, background, list => bgEnd(list, id))
-    await $.ui.toast(`pipeline: ${said}`)
+    if (isGone) await update(h, background, list => bgEnd(list, id))
+    await h.ui.toast(`pipeline: ${said}`)
   } catch {}
 }
 
 /** Check pressed on a background command: the session is asked where it stands and to stop it when it is stuck. */
-async function checkBackground($: EngineInterface, id: string): Promise<void> {
+export async function checkBackground(h: Host, id: string): Promise<void> {
   try {
-    const task = (await read($, background)).find(t => t.id === id)
+    const task = (await read(h, background)).find(t => t.id === id)
     if (!task) return
-    await $.prompt.submit({ text: checkPrompt(task, await $.clock.now()) })
-    await $.ui.toast(`pipeline: asked the session to check "${task.what}"; it answers when its current turn ends`)
+    await h.prompt.submit({ text: checkPrompt(task, await h.clock.now()) })
+    await h.ui.toast(`pipeline: asked the session to check "${task.what}"; it answers when its current turn ends`)
   } catch (err) {
     try {
-      await $.ui.toast(`pipeline: could not ask about ${id}: ${err instanceof Error ? err.message : String(err)}`)
+      await h.ui.toast(`pipeline: could not ask about ${id}: ${err instanceof Error ? err.message : String(err)}`)
     } catch {}
   }
 }
 
 /** A tool action pressed from the panel: its one-line answer as a toast, so the person sees what happened. */
-async function pressTool($: EngineInterface, input: ToolInput): Promise<void> {
+export async function pressTool(h: Host, input: ToolInput): Promise<void> {
   let text: string
   try {
-    text = await runTool($, input)
+    text = await runTool(h, input)
   } catch (err) {
     text = `refused: ${err instanceof Error ? err.message : String(err)}`
   }
   try {
-    await $.ui.toast(`pipeline: ${text.split('\n')[0] ?? ''}`)
+    await h.ui.toast(`pipeline: ${text.split('\n')[0] ?? ''}`)
   } catch {}
-}
-
-async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']['resolve']>, e: { surface: string; props: { bodyColumns?: number } }): Promise<RenderElement> {
-  const found = (await read($, root)) || (await resolveRoot($))
-  const c = await read($, config)
-  const b = await read($, backlog)
-  const d = await gather($, found, c, b, await read($, fileError), true)
-  const p = await read($, panel)
-  const kids = await read($, children)
-  const ledgers: Record<string, Ledger | null> = {}
-  for (const k of kids) ledgers[k.item] = await drawnLedger($, found, k.item)
-  const set = (patch: Partial<Panel>) => void update($, panel, prev => ({ ...prev, ...patch }))
-  return renderPanel(ui, {
-    ...d,
-    now: Math.max(d.now, await read($, now)),
-    surface: e.surface,
-    hasSvg: 'Svg' in ui,
-    bodyColumns: e.props.bodyColumns ?? 40,
-    project: found.split('/').pop() || 'project',
-    branch: (await branchOf($)) ?? '',
-    panel: p,
-    children: kids,
-    siblings: await read($, siblings),
-    background: await read($, background),
-    ledgers,
-    activeLine: await memo($, `what:${d.activeId ?? ''}`, b, 10_000, async () => specLine($, found, await activeItem($, b))),
-    limitMs: limitsOf(c).taskMinutes * 60_000,
-    fixRounds: limitsOf(c).fixRounds,
-    taskReview: c ? normalizeConfig(c).config.taskReview : DEFAULTS.taskReview,
-    tasksMode: isCompactTasks ? 'compact' : 'expanded',
-    onView: (view: View) => set({ view }),
-    onActivity: () => void update($, panel, prev => ({ ...prev, isActivityOpen: !prev.isActivityOpen })),
-    onFilter: (filter: QueueFilter) => set({ filter, expanded: null }),
-    onSearch: (search: string) => set({ search, expanded: null }),
-    onExpand: (expanded: string | null) => set({ expanded }),
-    onMore: () => void update($, panel, prev => ({ ...prev, isMoreShown: !prev.isMoreShown })),
-    onStop: (item: string) => void pressTool($, { action: 'stop', item }),
-    onLog: (item: string) => void pressTool($, { action: 'log', item }),
-    onBgStop: (id: string) => void stopBackground($, id),
-    onBgCheck: (id: string) => void checkBackground($, id),
-  })
 }
 
 /**
  * The idle strip's line when nothing is active in a project with a pipeline (`pipeline · idle · 28 inbox · next: p2
  * Brand logos`); nothing without a config, during a survey, or with `idleStrip: hide`.
  */
-async function idleText($: EngineInterface, hasSurvey: boolean | undefined): Promise<string> {
+export async function idleText(h: Host, hasSurvey: boolean | undefined): Promise<string> {
   try {
-    if (!isIdleStrip || hasSurvey || !(await read($, config))) return ''
-    return `pipeline · ${idleLine((await read($, backlog))?.items ?? [])}`
+    if (!opts.isIdleStrip || hasSurvey || !(await read(h, config))) return ''
+    return `pipeline · ${idleLine((await read(h, backlog))?.items ?? [])}`
   } catch {
     return ''
   }
 }
 
 // The item the band keeps showing after it left the active statuses (blocked, or just merged), until the next turn starts.
-const bandHold = { item: '', sawIdle: false }
+export const bandHold = { item: '', sawIdle: false }
 
 /**
  * The band's data while an item is planning, building or in review, and for a blocked or just-merged item until the
  * model's next turn starts (`isWorking` false once, then true again); nothing when idle.
  */
-async function bandNow($: EngineInterface, isWorking: boolean): Promise<Band | null> {
-  const b = await read($, backlog)
-  let item = await activeItem($, b)
+export async function bandNow(h: Host, isWorking: boolean): Promise<Band | null> {
+  const b = await read(h, backlog)
+  let item = await activeItem(h, b)
   if (item) {
     bandHold.item = item.id
     bandHold.sawIdle = false
@@ -3976,9 +3468,9 @@ async function bandNow($: EngineInterface, isWorking: boolean): Promise<Band | n
     } else bandHold.item = ''
   }
   if (!item) return null
-  const found = (await read($, root)) || (await resolveRoot($))
-  const ledger = await drawnLedger($, found, item.id)
-  const at = Math.max(await read($, now), await $.clock.now())
-  const agent = (await read($, agents)).find(a => a.status === 'running')
+  const found = (await read(h, root)) || (await resolveRoot(h))
+  const ledger = await drawnLedger(h, found, item.id)
+  const at = Math.max(await read(h, now), await h.clock.now())
+  const agent = (await read(h, agents)).find(a => a.status === 'running')
   return bandOf(item, ledger, agent, at)
 }

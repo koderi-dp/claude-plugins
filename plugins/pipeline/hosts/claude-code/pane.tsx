@@ -4,13 +4,13 @@
 // PRs). Every other surface gets the text block of spec §9, with the view's name. Nothing is only in the panel.
 import type { EngineInterface, RenderElement } from 'claude-code'
 
-import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, TaskReview, TasksMode, View } from '../types'
-import { ACCENT, AGENT_CARD_H, BLOCKED, CAPTION_H, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TAB_UNDERLINE_H, TASK_BAR_H, agentCardSvg, captionSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, separatorSvg, sessionRowSvg, tabUnderlineSvg, tabWidth, taskBarSvg, taskRowSvg, totals } from './draw'
-import type { AgentCard, Hero, Metric } from './draw'
-import type { StatusInput, TagKind } from './status'
-import { bgClock, shortPaths } from './background'
-import type { BgTask } from './background'
-import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, idLabel, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from './status'
+import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilter, Sibling, Signal, TaskReview, TasksMode, View } from '../../types'
+import { ACCENT, AGENT_CARD_H, BLOCKED, CAPTION_H, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TAB_UNDERLINE_H, TASK_BAR_H, agentCardSvg, captionSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, separatorSvg, sessionRowSvg, tabUnderlineSvg, tabWidth, taskBarSvg, taskRowSvg, totals } from '../../core/draw'
+import type { AgentCard, Hero, Metric } from '../../core/draw'
+import type { StatusInput, TagKind } from '../../core/status'
+import { bgClock, shortPaths } from '../../core/background'
+import type { BgTask } from '../../core/background'
+import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, idLabel, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from '../../core/status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
 type Element = RenderElement
