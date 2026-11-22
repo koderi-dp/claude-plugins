@@ -102,7 +102,7 @@ With `transcripts` set to `on`, the plugin copies each session's transcript into
 | `subagents/` | The same two files for each subagent the session started |
 | `info.json` | The project, the folder it ran in, the session id, the name the pipeline gave the session, the items it ran and the plugin's version |
 
-`index.md` in the project's folder lists its saved sessions, the newest first. Nothing is sent anywhere, and nothing is deleted: remove the folders you no longer need.
+A session keeps its folder across a plugin update or a resume, and a session the model never answered in is not saved. `index.md` in the project's folder lists its saved sessions, the newest first. Nothing is sent anywhere, and nothing is deleted: remove the folders you no longer need.
 
 ## The files in a project
 
@@ -221,7 +221,7 @@ Only the tool writes `backlog.json`, `BACKLOG.md`, `facts.md` and the ledgers. A
 
 ## The watchdog
 
-The mod follows every subagent of the session and keeps a live file (`.git/pipeline-live.json`, never committed). It cannot stop an agent itself: a signal reaches the lead through the tool's `signals` (or `get`) on its next turn, and as a push notification per `notify`. Between items under `run all` it schedules a wake-up every `silentMinutes` where the host offers one.
+The mod follows every subagent of the session and keeps a live file (`.git/pipeline-live.json`, never committed). It cannot stop an agent itself: a signal reaches the lead through the tool's `signals` (or `get`) on its next turn, and as a push notification per `notify`. Between items under `run all` it schedules a wake-up every `silentMinutes` where the host offers one. A wake-up that finds no open signal is dropped before it reaches the model, and the next one is scheduled in its place, so waiting on a healthy subagent costs no turn.
 
 | Signal | Detection | Action |
 | --- | --- | --- |

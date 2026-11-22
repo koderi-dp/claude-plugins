@@ -87,6 +87,8 @@ import {
   runTool,
   saveTranscript,
   scheduleWake,
+  tick,
+  WAKE_PROMPT,
   self,
   signals,
   siblings,
@@ -423,6 +425,18 @@ export const register: Register = (on, options) => {
     try {
       const told = (e as { origin?: { kind?: string } }).origin?.kind === 'task-notification' ? notificationOf(e.text) : null
       if (told && !isLive(told.status)) await update(hostOf($), background, list => bgEnd(list, told.id))
+    } catch {}
+    // The wake-up asks the model to read the signals. With none open that turn says "no signals" and costs a read of
+    // the whole conversation, so the prompt is dropped here and the next wake-up is asked for in its place.
+    try {
+      if (e.text.trim() === WAKE_PROMPT) {
+        await tick(hostOf($))
+        if (!(await read(hostOf($), signals)).some(s => !s.delivered)) {
+          self.wakeUntil = -Infinity
+          await scheduleWake(hostOf($), await $.clock.now())
+          return { drop: 'pipeline: no watchdog signal is open' }
+        }
+      }
     } catch {}
     return next(e)
   })

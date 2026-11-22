@@ -26,6 +26,9 @@ export function stamp(ms: number): string {
 export const sessionFolder = (dataDir: string, project: string, sessionId: string, startedAt: number): string =>
   `${dataDir.replace(/\\/g, '/').replace(/\/+$/, '')}/transcripts/${safeName(project)}/${stamp(startedAt)}_${safeName(sessionId).slice(0, 8)}`
 
+/** Whether the model said anything in this transcript: a line of the assistant's. */
+export const hasAnswer = (jsonl: string): boolean => /"type"\s*:\s*"assistant"/.test(jsonl)
+
 export type SessionRecord = {
   folder: string
   project: string

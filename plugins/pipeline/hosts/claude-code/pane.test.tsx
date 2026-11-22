@@ -1042,7 +1042,7 @@ test('0.7.0: Stop ends the command through the engine and removes the row; Check
 
 const DATA = '/data/pipeline'
 const TRANSCRIPT = '/home/.claude/projects/p/abc12345-0000.jsonl'
-const TURN = JSON.stringify({ type: 'user', message: { role: 'user', content: 'Run the first ready item.' } })
+const TURN = [JSON.stringify({ type: 'user', message: { role: 'user', content: 'Run the first ready item.' } }), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Running it.' }] } })].join('\n')
 
 /** A world with a session transcript on disk, one subagent's beside it, and the plugin's data folder named. */
 function transcriptWorld(on: On) {
@@ -1078,6 +1078,29 @@ test('0.7.0: transcripts on: each turn end copies the session and its subagents 
   for (let i = 0; i < 4000; i++) await Promise.resolve()
   expect(files.get(`${folder}/session.jsonl`)).toBe(`${TURN}\n${TURN}\n`)
   expect([...files.keys()].filter(p => p.endsWith('/info.json'))).toHaveLength(1)
+})
+
+test('0.8.1: a session saved before keeps its folder, and a session the model never answered in is not saved', { options: { transcripts: 'on' } }, async ($, on) => {
+  const { files } = transcriptWorld(on)
+  const DIR_ = `${DATA}/transcripts/main`
+  // An earlier life of the plugin saved this session at 14:36: after a reload the next save goes to the same folder.
+  const earlier = { folder: '2026-11-22_1436_self', project: 'main', cwd: '/p/main', sessionId: 'self', name: '#62 · Editor hardening', items: ['62'], pluginVersion: '0.7.1', startedAt: '2026-11-22T14:36:07.000Z', updatedAt: '2026-11-22T14:43:42.000Z', source: TRANSCRIPT, subagents: 0 }
+  files.set(`${DIR_}/index.json`, JSON.stringify({ [earlier.folder]: earlier }))
+  await start($ as never)
+  await complete($ as never, {})
+  for (let i = 0; i < 4000; i++) await Promise.resolve()
+  expect([...files.keys()].filter(p => p.endsWith('/info.json'))).toEqual([`${DIR_}/2026-11-22_1436_self/info.json`])
+  expect(JSON.parse(files.get(`${DIR_}/2026-11-22_1436_self/info.json`)!)).toMatchObject({ name: '#62 · Editor hardening', items: ['62'], startedAt: '2026-11-22T14:36:07.000Z' })
+  expect(Object.keys(JSON.parse(files.get(`${DIR_}/index.json`)!))).toEqual(['2026-11-22_1436_self'])
+})
+
+test('0.8.1: a transcript with no answer of the model in it is not saved', { options: { transcripts: 'on' } }, async ($, on) => {
+  const { files } = transcriptWorld(on)
+  files.set(TRANSCRIPT, `${TURN.split('\n')[0]}\n`)
+  await start($ as never)
+  await complete($ as never, {})
+  for (let i = 0; i < 4000; i++) await Promise.resolve()
+  expect([...files.keys()].filter(p => p.startsWith(`${DATA}/`))).toEqual([])
 })
 
 test('0.7.0: transcripts off, the default: nothing is saved', async ($, on) => {

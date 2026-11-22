@@ -246,6 +246,28 @@ test('wake-up: one ScheduleWakeup while an agent runs, never two pending, none w
   expect(wakeups).toHaveLength(2)
 })
 
+test('0.8.1: a wake-up with no signal open is dropped and the next one asked for; with a signal open it reaches the model', async ($, on) => {
+  const { clock, wakeups } = world(on, { [CONFIG]: config() }, { wakeup: true })
+  on('prompt.submit', (_$, e) => ({ text: e.text }) as never)
+  const WAKE = 'pipeline: check the watchdog signals with the pipeline tool: mcp__pipeline__pipeline {"action":"signals"}'
+  await start($)
+  await spawn($, 'Implement Task 1')
+  await complete($, {})
+  expect(wakeups).toHaveLength(1)
+  // The agent keeps working, so it is not silent when the wake-up fires.
+  await clock.advance(6 * MIN)
+  await step($, 'agent-t1')
+  await clock.advance(4 * MIN + 1000)
+  expect(await $.prompt.submit({ text: WAKE } as never)).toEqual({ drop: 'pipeline: no watchdog signal is open' })
+  expect(wakeups).toHaveLength(2)
+  // Any other prompt passes.
+  expect(await $.prompt.submit({ text: 'hello' } as never)).toMatchObject({ text: 'hello' })
+  // Now the agent goes silent: the signal is open and the wake-up is let through.
+  await clock.advance(11 * MIN)
+  expect(await $.prompt.submit({ text: WAKE } as never)).toMatchObject({ text: WAKE })
+  expect(wakeups).toHaveLength(2)
+})
+
 test('without the tool no wake-up is asked for', async ($, on) => {
   const { wakeups } = world(on, { [CONFIG]: config() })
   await start($)

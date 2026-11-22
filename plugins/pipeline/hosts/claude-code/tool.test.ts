@@ -1176,6 +1176,24 @@ test('ship commits what is uncommitted, runs the gate, opens the PR and leaves t
   expect(ledgerP1(files).final).toMatchObject({ gate: 'green' })
 })
 
+test('0.8.1: ship with an approving verdict accepts a task that a fix after the final review reopened; a task never accepted still refuses', async ($, on) => {
+  const { files } = world(on, DIRECT_SEED)
+  shipWorld(on)
+  await call($, { action: 'begin' })
+  const LEDGER = `${DIR}/ledgers/p1.json`
+  const base = JSON.parse(files.get(LEDGER)!) as Record<string, unknown>
+  const reopened = { n: 1, title: 'A', status: 'fix', dispatches: [], commits: 'base..aaa1111', review: { kind: 'lead-diff', verdict: 'approved' } }
+  files.set(LEDGER, JSON.stringify({ ...base, tasks: [reopened, { n: 2, title: 'B', status: 'running', dispatches: [] }], resume: { task: 1, state: 'fix round 1 dispatched', lastVerified: 'aaa1111' } }))
+  // Task 2 was never accepted: ship does not accept it for the lead.
+  expect(text(await call($, { action: 'ship', item: 'p1', verdict: 'approved after fixes' }))).toContain('is not accepted')
+  expect(ledgerP1(files).tasks[0]).toMatchObject({ status: 'fix' })
+  files.set(LEDGER, JSON.stringify({ ...base, tasks: [reopened, { n: 2, title: 'B', status: 'accepted', dispatches: [] }], resume: { task: 1, state: 'fix round 1 dispatched', lastVerified: 'aaa1111' } }))
+  // Without an approving verdict the reopened task stays the lead's to accept.
+  expect(text(await call($, { action: 'ship', item: 'p1' }))).toContain('task 1 is not accepted')
+  expect(text(await call($, { action: 'ship', item: 'p1', verdict: 'approved after fixes' }))).toBe('p1 review · PR #31 · next: the user merges it; close runs on a later get')
+  expect(ledgerP1(files).tasks[0]).toMatchObject({ status: 'accepted', review: { verdict: 'approved after fixes' } })
+})
+
 test('ship writes the trailer into the commit once and the other attribution line into the pull request only', async ($, on) => {
   world(on, DIRECT_SEED)
   const runs = shipWorld(on, { dirty: 'M src/route.ts' })

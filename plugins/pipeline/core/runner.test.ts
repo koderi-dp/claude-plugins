@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Backlog, ChildSession, Item, LiveEntry } from '../types'
-import { ALLOWED_MODES, CHILD_SYSTEM, LOG_CAP, LOG_KEEP, appendOutput, branchOf, childArgv, childPrompt, childSignals, exitNote, parseChildLine, runningOf, startable, tail, withExit, withStopped, worktreeOf } from './runner'
+import { redOutput, ALLOWED_MODES, CHILD_SYSTEM, LOG_CAP, LOG_KEEP, appendOutput, branchOf, childArgv, childPrompt, childSignals, exitNote, parseChildLine, runningOf, startable, tail, withExit, withStopped, worktreeOf } from './runner'
 import { STALE_MS } from './watch'
 
 const T0 = Date.parse('2026-11-09T10:00:00Z')
@@ -133,4 +133,17 @@ test('0.3.2: a child is told in its system prompt to write nothing between tool 
   const argv = childArgv({ prompt: 'x', permissionMode: 'auto' })
   expect(argv[argv.indexOf('--append-system-prompt') + 1]).toBe(CHILD_SYSTEM)
   expect(CHILD_SYSTEM).toContain('Write no text between tool calls')
+})
+
+test('0.8.1: redOutput puts the lines that look like the failure before the last lines when the last lines hold none', () => {
+  const pass = Array.from({ length: 30 }, (_, i) => `> pkg${i} format:check\nAll matched files use Prettier code style!`).join('\n')
+  const out = `Checking formatting...\n[warn] src/.playwright-cli/page-1.yml\n[warn] src/.playwright-cli/page-2.yml\n[warn] Code style issues found in 2 files.\n${pass}`
+  const said = redOutput(out, 4).split('\n')
+  expect(said.slice(0, 5)).toEqual(['lines that look like the failure (3):', '[warn] src/.playwright-cli/page-1.yml', '[warn] src/.playwright-cli/page-2.yml', '[warn] Code style issues found in 2 files.', 'last lines:'])
+  expect(said).toHaveLength(9)
+  // The failure is in the last lines already: they are the answer as before.
+  expect(redOutput('ok 1\nnot ok 3 - clamp\n# fail 1', 20)).toBe('ok 1\nnot ok 3 - clamp\n# fail 1')
+  // A summary of nothing failing is not a failure line; with none found the last lines stand alone.
+  expect(redOutput('0 errors, 0 warnings\na\nb', 2)).toBe('a\nb')
+  expect(redOutput(Array.from({ length: 20 }, (_, i) => `x.ts: error TS${i}`).join('\n') + '\nok\nok', 2).split('\n')[13]).toBe('… and 8 more')
 })

@@ -13,7 +13,7 @@ import type { Places } from './files'
 import * as tracker from './tracker'
 import { bgEnd, bgReconcile, bgStart, checkPrompt } from './background'
 import type { BgSummary, BgTask } from './background'
-import { digest, indexMd, sessionFolder } from './transcripts'
+import { digest, hasAnswer, indexMd, sessionFolder } from './transcripts'
 import type { SessionRecord } from './transcripts'
 import { DECLINED_MARK, QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
@@ -32,7 +32,7 @@ import type { ActiveItem, Increment, MigrateRule } from './migrate'
 import { bandOf, idleLine, sessionName, specWhat, statusText } from './status'
 import type { Band } from './status'
 import type { StatusInput } from './status'
-import { ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
+import { redOutput, ALLOWED_MODES, appendOutput, branchOf as itemBranchOf, childArgv, childPrompt, childSignals, exitNote, runningOf, tail, withExit, withStopped, worktreeOf } from './runner'
 import { STALE_MS, deadAgents, mergeSignals, signals as raiseSignals } from './watch'
 import type { Call } from './watch'
 
@@ -235,7 +235,7 @@ const newSelf = () => ({
   // What the pipeline last called this session, for the saved transcript's record.
   sessionName: '',
   // The saved transcript of this session: its folder, fixed at the first save, and what was copied already.
-  log: { id: '', folder: '', startedAt: 0, version: '', hasFailed: false, sizes: new Map<string, number>() },
+  log: { id: '', folder: '', startedAt: 0, version: '', hasFailed: false, sizes: new Map<string, number>(), earlier: { name: '', items: [] as string[] } },
   // The running child processes by item: the stream whose end kills the child, the unread tail of a line, the log throttle.
   procs: new Map<string, { stream: AsyncGenerator<{ stream: string; text: string }, { code: number | null; signal: string | null }> | null; partial: string; lastWrite: number }>(),
   // queue: github. The gh user, asked once per session; the readiness and the queue of the last load; the GitHub
@@ -575,7 +575,10 @@ export async function addIssue(h: Host, found: string, c: Config | null, e: Tool
   // Who asked and when goes on the issue too: it is the only record the item has.
   const note = typeof e.item === 'string' ? '' : (e.item?.note ?? '').trim()
   const source = typeof e.item === 'string' ? '' : (e.item?.source ?? '').trim()
-  const body = withNeeds([note, source ? `Source: ${source}` : ''].filter(Boolean).join('\n\n'), needs)
+  // A spec given with the request is the issue's description too, so the issue reads as the request on its own
+  // page; the spec comment under it stays what the tool reads and rewrites.
+  const spec = typeof e.text === 'string' && e.text.trim() ? e.text : null
+  const body = withNeeds(issueBodyOf(spec, [note, source ? `Source: ${source}` : ''].filter(Boolean).join('\n\n')), needs)
   const r = await tracker.create(ghRun(h, found), { title, body, labels: [labelOf(c)] })
   if (!r.ok) throw new Refused(r.error)
   const n = r.value
@@ -1283,7 +1286,11 @@ export async function runToolNow(h: Host, e: ToolInput): Promise<string> {
   }
   switch (e.action) {
     case 'ledger': {
-      const id = need(typeof e.item === 'string' ? e.item : e.item?.id)
+      const named = typeof e.item === 'string' ? e.item : e.item?.id
+      // With the issues as the queue a merged item's issue is closed and no longer listed, but its ledger is still
+      // on disk: a record written after the merge (what was deployed, what was checked) goes into it.
+      const isClosed = Boolean(named) && isGithub(c) && /^\d+$/.test(named!) && !current.items.some(i => i.id === named) && Boolean((await readLedger(h, found, named!)).value)
+      const id = isClosed ? named! : need(named)
       const set = e.set as LedgerSet | undefined
       if (!set || typeof set !== 'object' || Array.isArray(set)) throw new Refused('ledger needs set')
       const ledgerPath = placesOf(found, c).ledger(id)
@@ -1304,6 +1311,7 @@ export async function runToolNow(h: Host, e: ToolInput): Promise<string> {
       const merged = mergeLedger({ ...base, ...(base.resume ? { resume: repairResume(base.resume, Math.max(1, base.tasks?.length ?? 1))! } : {}) }, shaped.set, now)
       await h.fs.write(ledgerPath, serialize(merged))
       self.memo.delete(`ledger:${id}`)
+      if (isClosed) return `${ledgerLine(merged)} · the issue is closed: kept in the ledger only`
       // The item points at its ledger, and carries the branch, PR and plan the ledger names.
       const item = current.items.find(i => i.id === id)!
       const mirror: Partial<Item> = {}
@@ -1665,7 +1673,7 @@ export async function acceptAction(h: Host, found: string, c: Config | null, id:
     const current = (await loadBacklog(h, found)).value
     if (current) return `${line} · ${withoutId(id, await briefAction(h, found, c, current, id, next ? { action: 'brief', kind: 'implementer', task: next, ...(carried ? { carried: carried[0]! } : {}) } : { action: 'brief', kind: 'final' }))}`
   } catch {}
-  return `${line} · next: ${next ? `brief task ${next}` : 'brief final'}`
+  return `${line} · next: ${next ? `brief task ${next}` : ledger.final ? 'ship with the final verdict (brief final with findings for another review)' : 'brief final'}`
 }
 
 /**
@@ -1701,7 +1709,7 @@ export async function runLong(h: Host, argv: string[], cwd: string): Promise<{ c
   for (;;) {
     const r = await stream.next()
     if (r.done) return { code: r.value?.code ?? null, out }
-    out = (out + r.value.text).slice(-20_000)
+    out = (out + r.value.text).slice(-400_000)
   }
 }
 
@@ -1792,7 +1800,7 @@ export async function gateAction(h: Host, found: string, c: Config | null, id: s
     try {
       const r = await runShell(h, command, wt)
       gate = r.code === 0 ? 'green' : `red (exit ${r.code ?? 'signal'})`
-      if (r.code !== 0) output = tail(r.out.trim(), 20)
+      if (r.code !== 0) output = redOutput(r.out.trim(), 20)
     } catch (err) {
       throw new Refused(`the gate could not be run here (${err instanceof Error ? err.message : String(err)}): run \`${command}\` yourself and record it with ledger { final: { verdict, gate } }`)
     }
@@ -1815,11 +1823,21 @@ export async function gateAction(h: Host, found: string, c: Config | null, id: s
  */
 export async function shipAction(h: Host, found: string, c: Config | null, current: Backlog, id: string, e: ToolInput): Promise<string> {
   const cfg = normalizeConfig(c ?? DEFAULTS).config
-  const ledger = await loadLedger(h, found, id)
+  let ledger = await loadLedger(h, found, id)
   if (!ledger?.branch) throw new Refused(`${id} has no branch on record: begin it first`)
   // The full loop: the tasks are the implementers' commits, so nothing is committed here; ship is the gate with
   // the final verdict (unless it already ran green), the pull request and the merge.
   const isFull = ledger.tasks.length > 0
+  // A fix after the final review reopens a task that was accepted before. The approving verdict of the re-review
+  // is its acceptance too, so ship accepts it here; a task never accepted stays the lead's to accept.
+  const isReopened = (t: Ledger['tasks'][number]) => t.status === 'fix' && Boolean(t.review)
+  if (/approved/i.test(e.verdict ?? '') && ledger.tasks.some(isReopened) && ledger.tasks.every(t => t.status === 'accepted' || isReopened(t))) {
+    for (const t of ledger.tasks.filter(isReopened)) {
+      const said = await runTool(h, { action: 'accept', item: id, task: t.n, verdict: e.verdict! })
+      if (said.startsWith('refused')) throw new Refused(said.replace(/^refused:\s*/, ''))
+    }
+    ledger = (await loadLedger(h, found, id)) ?? ledger
+  }
   const open = ledger.tasks.find(t => t.status !== 'accepted')
   if (open) throw new Refused(`${id} runs on the full loop and task ${open.n} is not accepted: accept its tasks, then ship with the final verdict`)
   const isGated = isFull && ledger.final?.gate === 'green' && /approved/i.test(ledger.final?.verdict ?? '') && !e.verdict
@@ -2247,16 +2265,31 @@ export async function saveTranscript(h: Host, endingId?: string): Promise<void> 
     if (!source || !data) return
     const text = await readText(h, source)
     if (text === null) return
+    // A session the model never answered in (opened and closed, or waiting for a sign-in) is not worth a folder.
+    if (!hasAnswer(text)) return
     const found = (await read(h, root)) || (await resolveRoot(h))
     const project = found.split('/').pop() || 'project'
     const id = endingId || (await h.session.id())
     const at = await h.clock.now()
     const log = self.log
+    let earlier: SessionRecord | undefined
     if (log.id !== id) {
       log.id = id
       log.startedAt = at
       log.folder = sessionFolder(data, project, id, at)
       log.sizes = new Map()
+      // The same session saved before (the plugin was reloaded or updated, or the session was resumed): its folder
+      // is kept, so one session is one folder.
+      try {
+        const projectDir = log.folder.slice(0, log.folder.lastIndexOf('/'))
+        const all = JSON.parse((await readText(h, `${projectDir}/index.json`)) ?? '{}') as Record<string, SessionRecord>
+        earlier = Object.values(all).find(r => r.sessionId === id && r.folder)
+        if (earlier) {
+          log.folder = `${projectDir}/${earlier.folder}`
+          log.startedAt = Date.parse(earlier.startedAt) || at
+          log.earlier = { name: earlier.name ?? '', items: earlier.items ?? [] }
+        }
+      } catch {}
     }
     if (!log.version) {
       try {
@@ -2264,7 +2297,7 @@ export async function saveTranscript(h: Host, endingId?: string): Promise<void> 
         log.version = String((JSON.parse((await readText(h, `${slashes(root ?? '')}/.claude-plugin/plugin.json`)) ?? '{}') as { version?: unknown }).version ?? '')
       } catch {}
     }
-    const name = self.sessionName || self.pendingRename
+    const name = self.sessionName || self.pendingRename || log.earlier.name
     const title = `${project} · ${name || id}`
     await h.fs.write(`${log.folder}/session.jsonl`, text)
     await h.fs.write(`${log.folder}/session.md`, digest(text, title))
@@ -2294,7 +2327,7 @@ export async function saveTranscript(h: Host, endingId?: string): Promise<void> 
       cwd: found,
       sessionId: id,
       name,
-      items: [...self.renamed],
+      items: [...new Set([...log.earlier.items, ...self.renamed])],
       pluginVersion: log.version,
       startedAt: new Date(log.startedAt).toISOString(),
       updatedAt: new Date(at).toISOString(),

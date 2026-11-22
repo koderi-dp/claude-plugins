@@ -133,6 +133,25 @@ export function tail(log: string, n = TAIL_LINES): string {
   return lines.slice(Math.max(0, lines.length - n)).join('\n')
 }
 
+const FAILING = /\[(?:warn|error)\]|\b(?:errors?|failed|failures?|fail|not ok|panic|exception)\b|ERR!|✖|✗/i
+const NONE_FAILING = /\b(?:0|no) (?:errors?|warnings?|failed|failures?|fail)\b/i
+const FAILING_SHOWN = 12
+
+/**
+ * What a failed command's output says, for an answer: the last lines, and before them the lines that look like the
+ * failure when the last lines hold none (a long run of passing lines after the one that failed).
+ */
+export function redOutput(out: string, n = TAIL_LINES): string {
+  const lines = out.replace(/\n$/, '').split('\n')
+  const last = lines.slice(Math.max(0, lines.length - n))
+  const isFailing = (l: string) => FAILING.test(l) && !NONE_FAILING.test(l)
+  if (last.some(isFailing)) return last.join('\n')
+  const marks = lines.slice(0, Math.max(0, lines.length - n)).filter(isFailing)
+  if (!marks.length) return last.join('\n')
+  const more = marks.length - FAILING_SHOWN
+  return [`lines that look like the failure (${marks.length}):`, ...marks.slice(0, FAILING_SHOWN), ...(more > 0 ? [`… and ${more} more`] : []), 'last lines:', ...last].join('\n')
+}
+
 /** The note a non-zero exit leaves on the item: the code and the last three lines of the log. */
 export function exitNote(child: ChildSession, end: { code: number | null; signal: string | null }): string {
   const last = tail(child.log, 3).split('\n').filter(Boolean).join(' · ')

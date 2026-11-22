@@ -150,6 +150,20 @@ test('add creates a labelled issue; spec posts the comment and the item is ready
   expect(writes).not.toContain(BACKLOG)
 })
 
+test('0.8.1: add with a spec writes the spec into the issue body too, with the note and the source under it', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH })
+  const runs = ghWorld(on, { me: 'me', issues: [issueOf(1, 'Login')] })
+  expect(text(await call($, { action: 'add', item: { title: 'CSV export', note: 'Counts on main: 63 files', source: 'alice, 2026-11-22: "save"', needs: ['1'] }, text: SPEC }))).toContain('added 2 · ')
+  const created = runs.find(r => isCall(r, 'POST', 'issues') && !isComment(r))!
+  const body = fieldOf(created, 'body')!
+  expect(body.startsWith('### What\n\n')).toBe(true)
+  expect(body).toContain('### Acceptance')
+  expect(body).toContain('### Note\n\nCounts on main: 63 files\n\nSource: alice, 2026-11-22: "save"')
+  expect(body).toContain('Needs: #1')
+  // The spec comment is still posted: it is what the tool reads back.
+  expect(runs.some(isComment)).toBe(true)
+})
+
 test('spec on an issue that has one edits that comment and keeps its state', async ($, on) => {
   world(on, { [CONFIG]: CONFIG_GH, [ITEMS]: JSON.stringify({ items: { '2': { status: 'building', branch: 'feat/2' } }, pending: [] }) })
   const runs = ghWorld(on, { me: 'me', issues: [issueOf(2, 'Export', { labels: ['pipeline', 'pipeline:building'], comments: [specComment('200', 'building · task 2/5')] })] })
@@ -578,6 +592,10 @@ test('close after the PR merged: labels gone, issue closed, worktree removed, no
   expect(runs.some(r => r[0] === 'git' && r.includes('push'))).toBe(false)
   expect(JSON.parse(files.get(ITEMS)!).items['2']).toBeUndefined()
   expect(JSON.parse(files.get(LEDGER2)!).resume.state).toBe('closed')
+  // 0.8.1: a record written after the merge goes into the ledger that is still on disk; an id with no ledger is refused.
+  expect(text(await call($, { action: 'ledger', item: '2', set: { reviewStack: 'deployed 7fed7a8' } }))).toContain('the issue is closed: kept in the ledger only')
+  expect(JSON.parse(files.get(LEDGER2)!).reviewStack).toBe('deployed 7fed7a8')
+  expect(text(await call($, { action: 'ledger', item: '3', set: { reviewStack: 'x' } }))).toBe('refused: no item 3')
 })
 
 /** The item 2 in review with PR #5, as the close test seeds it; the waits between polls (`sleep`) are recorded with the runs. */
