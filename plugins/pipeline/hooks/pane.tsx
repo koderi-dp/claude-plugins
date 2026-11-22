@@ -8,6 +8,8 @@ import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilt
 import { ACCENT, AGENT_CARD_H, BLOCKED, CAPTION_H, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TAB_UNDERLINE_H, TASK_BAR_H, agentCardSvg, captionSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, separatorSvg, sessionRowSvg, tabUnderlineSvg, tabWidth, taskBarSvg, taskRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
+import { bgClock } from './background'
+import type { BgTask } from './background'
 import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, idLabel, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from './status'
 
 export type Ui = ReturnType<EngineInterface['ui']['resolve']>
@@ -50,6 +52,8 @@ export type PanelInput = StatusInput & {
   /** The children of the session runner and the other sessions on this repository. */
   children: ChildSession[]
   siblings: Sibling[]
+  /** The background shell commands still running in this session. */
+  background?: BgTask[]
   /** The ledgers of the children's items, by item id. */
   ledgers: Record<string, Ledger | null>
   /** The first line of the active item's spec, its What. */
@@ -71,6 +75,9 @@ export type PanelInput = StatusInput & {
   onMore: () => void
   onStop: (item: string) => void
   onLog: (item: string) => void
+  /** Stop and Check on a background command, by its task id. */
+  onBgStop?: (id: string) => void
+  onBgCheck?: (id: string) => void
 }
 
 const minutes = (from: number, to: number) => Math.max(0, Math.round((to - from) / 60000))
@@ -416,6 +423,7 @@ function renderIdle(u: Desk, d: PanelInput, W: number): Element {
       <Box marginTop={1}>
         <Svg source={metricsSvg(W, metrics)} alt={metrics.map(m => `${m.value} ${m.alt ?? m.label}`).join(', ')} width={W} height={METRICS_H} />
       </Box>
+      {backgroundRows(u, d, d.now)}
       {heading(u, ready.length ? 'Up next' : 'Needs specification', undefined, { key: 'goto-queue', label: 'View queue →', onPress: toQueue(null) })}
       {rows.length ? card(u, [...rows, ...(list.length > OVERVIEW_ROWS ? [<Text key="more-items" dimColor>{`and ${list.length - OVERVIEW_ROWS} more in the queue`}</Text>] : [])]) : <Text dimColor>Nothing waiting. Add work with /pipeline add.</Text>}
       {heading(u, 'Recently merged', undefined, { key: 'goto-history', label: 'View history →', onPress: () => d.onView('history') })}
@@ -486,6 +494,7 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
         </Box>
       )}
       {childRows(u, d)}
+      {backgroundRows(u, d, at)}
       {!isCompact && activity.length ? (
         <Box flexDirection="column" marginTop={1}>
           <Box flexDirection="row">
@@ -512,6 +521,39 @@ function renderRunning(u: Desk, d: PanelInput, W: number, active: Item): Element
           ])
         : <Text dimColor>Nothing else waiting.</Text>}
       {siblingRows(u, d, W)}
+    </Box>
+  )
+}
+
+/**
+ * The background commands still running: what each does, who started it and for how long, the command under it,
+ * and Check (asks the session where it stands) and Stop. A command that ended is not listed.
+ */
+function backgroundRows(u: Desk, d: PanelInput, at: number): Element | null {
+  const { Box, Text, Button } = u
+  const list = d.background ?? []
+  if (!list.length) return null
+  const rows = [...list]
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .map(t => (
+      <Box key={`bg-${t.id}`} flexDirection="row" justifyContent="space-between" gap={1}>
+        <Box flexDirection="column" flexShrink={1}>
+          <Text>
+            {t.what}
+            <Text dimColor>{`  ${line([bgClock(at - t.startedAt), t.owner])}`}</Text>
+          </Text>
+          {t.command && t.command !== t.what ? <Text dimColor>{t.command.length > 120 ? `${t.command.slice(0, 120)}…` : t.command}</Text> : null}
+        </Box>
+        <Box flexDirection="row" gap={1} flexShrink={0}>
+          <Button key={`bg-check-${t.id}`} label="Check" onPress={() => d.onBgCheck?.(t.id)} />
+          <Button key={`bg-stop-${t.id}`} label="Stop" onPress={() => d.onBgStop?.(t.id)} />
+        </Box>
+      </Box>
+    ))
+  return (
+    <Box flexDirection="column">
+      {heading(u, 'Background', `${list.length} running`)}
+      {card(u, rows)}
     </Box>
   )
 }

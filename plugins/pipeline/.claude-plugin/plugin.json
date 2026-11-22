@@ -1,6 +1,6 @@
 {
   "name": "pipeline",
-  "version": "0.6.5",
+  "version": "0.7.0",
   "description": "Owns a project's workflow: a backlog in docs/pipeline or in GitHub issues, skills that take a request to a merged PR, a watchdog over subagents, a session runner that runs each item in a headless child session, and a status block as text and as a dashboard panel.",
   "author": {
     "name": "Danijel Peric"
@@ -45,6 +45,16 @@
       "options": [
         "expanded",
         "compact"
+      ]
+    },
+    "transcripts": {
+      "type": "string",
+      "title": "Save session transcripts",
+      "description": "on: after every turn, this session's transcript and those of its subagents are copied into the plugin's data folder, one folder per session under transcripts/<project>/, each as the .jsonl and as a page to read, for looking at how the pipeline behaved; off: nothing is saved",
+      "default": "off",
+      "options": [
+        "off",
+        "on"
       ]
     }
   },

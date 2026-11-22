@@ -947,3 +947,140 @@ test('review 0.2 C1: a ledger file without a tasks array (valid JSON) draws the 
   expect((await bar.find({ type: 'Svg' }))?.props['alt']).toMatch(/^p2 BUILDING: Export, , Implementer/)
   await bar.unmount()
 })
+
+// ---------- background commands ----------
+
+/** A world whose shell calls go to the background, with TaskStop and the prompt box mocked. */
+function backgroundWorld(on: On) {
+  const base = world(on, SEED)
+  const stopped: string[] = []
+  const submitted: string[] = []
+  let n = 0
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `bash_${++n}` } }) as never)
+  on('tool.call', { tool: 'TaskStop' }, (_$, e) => {
+    const id = String((e as { task_id?: string }).task_id)
+    stopped.push(id)
+    return { result: { message: 'stopped', task_id: id, task_type: 'shell' } } as never
+  })
+  on('prompt.submit', (_$, e) => {
+    submitted.push(e.text)
+    return { text: e.text } as never
+  })
+  on('classic.Stop', () => ({}) as never)
+  on('classic.SubagentStop', () => ({}) as never)
+  return { ...base, stopped, submitted }
+}
+const settle = async () => {
+  for (let i = 0; i < 8; i++) await Promise.resolve()
+}
+
+test('0.7.0: a background command is listed with what it does, who started it and for how long; a finished one is removed', async ($, on) => {
+  const { clock } = backgroundWorld(on)
+  await start($ as never)
+  await spawn($ as never, 'Final review of item 2', 1)
+  await $.tool.call({ tool: 'Bash', command: 'env DOCKLET_SERVER_URL=http://localhost:9000 PORT=9000 npm run dev', description: 'Start the dev server', run_in_background: true, agentId: 'agent-t1' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'cd web && npx playwright test', description: 'Run the browser tests', run_in_background: true } as never)
+  await clock.advance(7 * MIN)
+  const ui = await mount($ as never, 'desktop')
+  expect(await ui.find({ type: 'Text', text: /^Background/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /2 running/ })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /^Start the dev server/ }))?.text).toBe('Start the dev server  7m 00s · Final review of item 2')
+  // The command under it starts at the program, not at the environment.
+  expect(await ui.find({ type: 'Text', text: 'npm run dev' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /^Run the browser tests/ }))?.text).toBe('Run the browser tests  7m 00s · Lead')
+  expect(await ui.find({ type: 'Text', text: 'npx playwright test' })).toBeDefined()
+
+  // The notification that one ended takes it off the list.
+  await ($.prompt.submit as (e: unknown) => Promise<unknown>)({ text: '<task-notification>\n<task-id>bash_2</task-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>', wait: false, origin: { kind: 'task-notification' } })
+  await settle()
+  expect(await ui.find({ type: 'Text', text: /^Run the browser tests/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /1 running/ })).toBeDefined()
+
+  // The end of a turn names what is still in flight: a command no longer listed goes too, and the section with it.
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] } as never)
+  await settle()
+  expect(await ui.find({ type: 'Text', text: /^Start the dev server/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^Background/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('0.7.0: Stop ends the command through the engine and removes the row; Check asks the session about it', async ($, on) => {
+  const { clock, stopped, submitted, toasts } = backgroundWorld(on)
+  await start($ as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', description: 'Start the dev server', run_in_background: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run watch', description: 'Watch the build', run_in_background: true } as never)
+  await clock.advance(3 * 60 * MIN + 12 * MIN)
+  const ui = await mount($ as never, 'desktop')
+
+  await ui.press({ key: 'bg-check-bash_1' })
+  await settle()
+  expect(submitted).toHaveLength(1)
+  expect(submitted[0]).toContain('Check background task bash_1 now. It has been running for 3h 12m: "Start the dev server" (`npm run dev`), started by Lead.')
+  expect(submitted[0]).toContain('stop it with TaskStop')
+  expect(toasts.at(-1)).toContain('asked the session to check "Start the dev server"')
+  // Asking changes nothing by itself.
+  expect(await ui.find({ type: 'Text', text: /^Start the dev server/ })).toBeDefined()
+
+  await ui.press({ key: 'bg-stop-bash_1' })
+  await settle()
+  expect(stopped).toEqual(['bash_1'])
+  expect(toasts.at(-1)).toBe('pipeline: stopped bash_1')
+  expect(await ui.find({ type: 'Text', text: /^Start the dev server/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^Watch the build/ })).toBeDefined()
+
+  // The model stopping a task itself takes it off the list as well.
+  await $.tool.call({ tool: 'TaskStop', task_id: 'bash_2' } as never)
+  await settle()
+  expect(await ui.find({ type: 'Text', text: /^Background/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+// ---------- saved transcripts ----------
+
+const DATA = '/data/pipeline'
+const TRANSCRIPT = '/home/.claude/projects/p/abc12345-0000.jsonl'
+const TURN = JSON.stringify({ type: 'user', message: { role: 'user', content: 'Run the first ready item.' } })
+
+/** A world with a session transcript on disk, one subagent's beside it, and the plugin's data folder named. */
+function transcriptWorld(on: On) {
+  const base = world(on, { ...SEED, [TRANSCRIPT]: `${TURN}\n`, ['/home/.claude/projects/p/abc12345-0000/subagents/agent-a1.jsonl']: `${TURN}\n` })
+  on('session.info', () => ({ value: { transcriptPath: TRANSCRIPT, platform: 'linux' } }) as never)
+  on('process.hookEnv', () => ({ value: { CLAUDE_PLUGIN_DATA: DATA, CLAUDE_PLUGIN_ROOT: '/plugin' } }) as never)
+  on('fs.list', (_$, e) => {
+    // The engine hands a path in the machine's own form: a drive letter and backslashes on Windows.
+    const dir = `${e.path.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '').replace(/\/+$/, '')}/`
+    return { value: [...base.files.keys()].filter(p => p.startsWith(dir) && !p.slice(dir.length).includes('/')).map(p => ({ name: p.slice(dir.length), kind: 'file', size: base.files.get(p)!.length })) } as never
+  })
+  return base
+}
+
+test('0.7.0: transcripts on: each turn end copies the session and its subagents into one folder per session, with a readable page, a record and the index', { options: { transcripts: 'on' } }, async ($, on) => {
+  const { files, toasts } = transcriptWorld(on)
+  await start($ as never)
+  await complete($ as never, {})
+  for (let i = 0; i < 4000; i++) await Promise.resolve()
+  expect(toasts).toEqual([])
+  const saved = [...files.keys()].filter(p => p.startsWith(`${DATA}/`)).sort()
+  const folder = saved.find(p => p.endsWith('/info.json'))!.replace('/info.json', '')
+  expect(folder).toMatch(new RegExp(`^${DATA}/transcripts/main/\\d{4}-\\d\\d-\\d\\d_\\d{4}_self$`))
+  expect(saved).toEqual([`${DATA}/transcripts/main/index.json`, `${DATA}/transcripts/main/index.md`, `${folder}/info.json`, `${folder}/session.jsonl`, `${folder}/session.md`, `${folder}/subagents/agent-a1.jsonl`, `${folder}/subagents/agent-a1.md`].sort())
+  expect(files.get(`${folder}/session.jsonl`)).toBe(`${TURN}\n`)
+  expect(files.get(`${folder}/session.md`)).toContain('## Prompt\n\nRun the first ready item.')
+  expect(JSON.parse(files.get(`${folder}/info.json`)!)).toMatchObject({ project: 'main', sessionId: 'self', subagents: 1, source: TRANSCRIPT })
+  expect(files.get(`${DATA}/transcripts/main/index.md`)).toContain(`[${folder.split('/').pop()}]`)
+
+  // The next turn rewrites the same folder: the transcript has grown, the folder has not moved.
+  files.set(TRANSCRIPT, `${TURN}\n${TURN}\n`)
+  await complete($ as never, {})
+  for (let i = 0; i < 4000; i++) await Promise.resolve()
+  expect(files.get(`${folder}/session.jsonl`)).toBe(`${TURN}\n${TURN}\n`)
+  expect([...files.keys()].filter(p => p.endsWith('/info.json'))).toHaveLength(1)
+})
+
+test('0.7.0: transcripts off, the default: nothing is saved', async ($, on) => {
+  const { files } = transcriptWorld(on)
+  await start($ as never)
+  await complete($ as never, {})
+  for (let i = 0; i < 4000; i++) await Promise.resolve()
+  expect([...files.keys()].filter(p => p.startsWith(`${DATA}/`))).toEqual([])
+})

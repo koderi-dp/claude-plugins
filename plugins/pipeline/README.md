@@ -80,6 +80,29 @@ Everything below is reference detail.
 | `band` | `two-line` | The bar above the prompt: `two-line` or `compact` (one line) |
 | `idleStrip` | `show` | One idle status line above the prompt when nothing is active; `hide` removes it |
 | `tasks` | `expanded` | The panel's task list: `expanded` with details per task, or `compact` with titles and badges only |
+| `transcripts` | `off` | `on` saves every session's transcript on this computer, for looking at how the pipeline behaved (below) |
+
+### Background commands in the panel
+
+The panel's Overview lists the shell commands that still run in the background of the session, under Background: what each one does (the description its caller gave it), who started it (the lead or a subagent, by name), for how long it has run, and the command itself without its leading environment variables. A command that ended is taken off the list. Each row has two buttons:
+
+- **Check** asks the session to look at the command's output now and say whether it still does useful work, has finished or is stuck, and to stop it when it is stuck or no longer needed. The session answers when its current turn ends.
+- **Stop** stops the command at once.
+
+A command a subagent started is taken off the list when that subagent or the turn ends, not at the moment it finishes; Stop on a row whose command has already ended says so and removes the row.
+
+### Saved transcripts
+
+With `transcripts` set to `on`, the plugin copies each session's transcript into its data folder after every turn and at the end of the session: `~/.claude/plugins/data/<plugin>/transcripts/<project>/<date>_<time>_<session id>/`. One folder per session, holding:
+
+| File | Holds |
+| --- | --- |
+| `session.md` | The session as a page to read: each prompt, what the model said, each tool call with its input and result; long results are clipped |
+| `session.jsonl` | The whole transcript, as Claude Code wrote it |
+| `subagents/` | The same two files for each subagent the session started |
+| `info.json` | The project, the folder it ran in, the session id, the name the pipeline gave the session, the items it ran and the plugin's version |
+
+`index.md` in the project's folder lists its saved sessions, the newest first. Nothing is sent anywhere, and nothing is deleted: remove the folders you no longer need.
 
 ## The files in a project
 

@@ -13,6 +13,8 @@ export type Final = { verdict: string; gate?: string; tokens?: number; findings?
 export type Resume = { task: number; state: string; lastVerified?: string; at: string }
 export type Ledger = { item: string; plan?: string; branch?: string; worktree?: string; base?: string; pr?: string | null; resume?: Resume; tasks: TaskRecord[]; rulings: Ruling[]; blockers: string[]; final?: Final | null; tokens: number; [k: string]: unknown }
 export type SignalKind = 'silent' | 'dead' | 'looping' | 'budget'
+/** A background shell command still running in the session: its task id, what it does, the command without leading environment words, who started it. */
+export type BgTask = { id: string; what: string; command: string; owner: string; agentId?: string; startedAt: number }
 export type Signal = { kind: SignalKind; agent: string; agentId?: string; detail: string; at: number; delivered: boolean }
 export type AgentRun = { id: string; agentId?: string; name: string; model: string; status: 'running' | 'done' | 'failed'; startedAt: number; lastStepAt: number; endedAt?: number; calls: number; tokens: number; activity: string; lastCommands: string[]; failures: number }
 export type LiveEntry = { title: string; cwd: string; branch?: string; item?: string; startedAt: string; seenAt: string; agents: AgentRun[]; signals: Signal[]; [k: string]: unknown }
@@ -26,6 +28,6 @@ export type TasksMode = 'expanded' | 'compact'
 export type Panel = { view: View; filter: QueueFilter; search: string; expanded: string | null; isMoreShown: boolean; autoOpenedFor: string; isBandOpen: boolean; isActivityOpen: boolean }
 declare module 'claude-code' {
   interface PluginState {
-    pipeline: { root: string; config: Config | null; backlog: Backlog | null; fileError: string | null; agents: AgentRun[]; signals: Signal[]; children: ChildSession[]; siblings: Sibling[]; panel: Panel; now: number }
+    pipeline: { root: string; background: BgTask[]; config: Config | null; backlog: Backlog | null; fileError: string | null; agents: AgentRun[]; signals: Signal[]; children: ChildSession[]; siblings: Sibling[]; panel: Panel; now: number }
   }
 }

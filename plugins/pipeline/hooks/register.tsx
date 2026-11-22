@@ -10,6 +10,10 @@ import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, places, serialize } from './files'
 import type { Places } from './files'
 import * as tracker from './tracker'
+import { bgEnd, bgReconcile, bgStart, checkPrompt, isLive, notificationOf } from './background'
+import type { BgSummary, BgTask } from './background'
+import { digest, indexMd, sessionFolder } from './transcripts'
+import type { SessionRecord } from './transcripts'
 import { DECLINED_MARK, QUESTION_MARK } from './tracker'
 import type { Issue, Run } from './tracker'
 import { EMPTY_EXTRAS, applyOps, extrasOf, isAnswered, isTrusted, issueBodyOf, labelsOf, needsOf, specFromIssue, withNeeds, migrationOf, openQuestionOf, opsFor, parseSpecComment, quoted, renderSpecComment, specCommentOf, toBacklog } from './queue'
@@ -123,6 +127,8 @@ const backlog = atom({ plugin: 'pipeline', key: 'backlog' } as const, null as Ba
 const fileError = atom({ plugin: 'pipeline', key: 'fileError' } as const, null as string | null)
 const agents = atom({ plugin: 'pipeline', key: 'agents' } as const, [] as AgentRun[])
 const signals = atom({ plugin: 'pipeline', key: 'signals' } as const, [] as Signal[])
+// The background shell commands still running in this session, as the panel lists them.
+const background = atom({ plugin: 'pipeline', key: 'background' } as const, [] as BgTask[])
 // The session runner's children and the other sessions on this repository, as the panel draws them; the runner keeps them.
 const children = atom({ plugin: 'pipeline', key: 'children' } as const, [] as ChildSession[])
 const siblings = atom({ plugin: 'pipeline', key: 'siblings' } as const, [] as Sibling[])
@@ -139,6 +145,8 @@ let isAutoOpen = true
 let isCompactBand = false
 let isIdleStrip = true
 let isCompactTasks = false
+// The `transcripts` setting: each session's transcript is copied into the plugin's data folder.
+let isTranscripts = false
 
 async function openPane($: EngineInterface, focus = false): Promise<void> {
   const at = await $.clock.now()
@@ -275,6 +283,10 @@ const self = {
   memo: new Map<string, { at: number; ref: unknown; value: unknown }>(),
   renamed: new Set<string>(),
   pendingRename: '',
+  // What the pipeline last called this session, for the saved transcript's record.
+  sessionName: '',
+  // The saved transcript of this session: its folder, fixed at the first save, and what was copied already.
+  log: { id: '', folder: '', startedAt: 0, version: '', hasFailed: false, sizes: new Map<string, number>() },
   // The running child processes by item: the stream whose end kills the child, the unread tail of a line, the log throttle.
   procs: new Map<string, { stream: AsyncGenerator<{ stream: string; text: string }, { code: number | null; signal: string | null }> | null; partial: string; lastWrite: number }>(),
   // queue: github. The gh user, asked once per session; the readiness and the queue of the last load; the GitHub
@@ -2209,9 +2221,96 @@ async function renameNow($: EngineInterface): Promise<void> {
   const name = self.pendingRename
   if (!name) return
   self.pendingRename = ''
+  self.sessionName = name
   try {
     await $.command.run({ command: 'rename', args: name })
   } catch {}
+}
+
+/**
+ * The `transcripts` setting: this session's transcript and those of its subagents are copied into the plugin's
+ * data folder, `transcripts/<project>/<date>_<time>_<session>/`, each as the .jsonl and as a page to read, with an
+ * `info.json` and the project's `index.md`. Runs at the end of each turn and of the session; a subagent file that
+ * did not grow is not copied again. A failure is said once and never stops the session.
+ */
+async function saveTranscript($: EngineInterface, endingId?: string): Promise<void> {
+  if (!isTranscripts) return
+  try {
+    const source = slashes((await $.session.info()).transcriptPath ?? '')
+    const data = (await $.process.hookEnv())['CLAUDE_PLUGIN_DATA']
+    if (!source || !data) return
+    const text = await readText($, source)
+    if (text === null) return
+    const found = (await read($, root)) || (await resolveRoot($))
+    const project = found.split('/').pop() || 'project'
+    const id = endingId || (await $.session.id())
+    const at = await $.clock.now()
+    const log = self.log
+    if (log.id !== id) {
+      log.id = id
+      log.startedAt = at
+      log.folder = sessionFolder(data, project, id, at)
+      log.sizes = new Map()
+    }
+    if (!log.version) {
+      try {
+        const root = (await $.process.hookEnv())['CLAUDE_PLUGIN_ROOT']
+        log.version = String((JSON.parse((await readText($, `${slashes(root ?? '')}/.claude-plugin/plugin.json`)) ?? '{}') as { version?: unknown }).version ?? '')
+      } catch {}
+    }
+    const name = self.sessionName || self.pendingRename
+    const title = `${project} · ${name || id}`
+    await $.fs.write(`${log.folder}/session.jsonl`, text)
+    await $.fs.write(`${log.folder}/session.md`, digest(text, title))
+    // The subagents' transcripts lie beside the session's, under a folder of its name.
+    const dir = `${source.replace(/\.jsonl$/, '')}/subagents`
+    let subagents = 0
+    try {
+      // A session that started no subagent has no such folder: the listing fails and nothing is copied.
+      {
+        for (const e of await $.fs.list(dir)) {
+          if (e.kind !== 'file' || !e.name.endsWith('.jsonl')) continue
+          subagents++
+          const size = (e as { size?: number }).size ?? -1
+          if (size >= 0 && log.sizes.get(e.name) === size) continue
+          const t = await readText($, `${dir}/${e.name}`)
+          if (t === null) continue
+          await $.fs.write(`${log.folder}/subagents/${e.name}`, t)
+          await $.fs.write(`${log.folder}/subagents/${e.name.replace(/\.jsonl$/, '.md')}`, digest(t, `${title} · ${e.name.replace(/\.jsonl$/, '')}`))
+          log.sizes.set(e.name, size)
+        }
+      }
+    } catch {}
+    const folder = log.folder.split('/').pop() ?? ''
+    const record: SessionRecord = {
+      folder,
+      project,
+      cwd: found,
+      sessionId: id,
+      name,
+      items: [...self.renamed],
+      pluginVersion: log.version,
+      startedAt: new Date(log.startedAt).toISOString(),
+      updatedAt: new Date(at).toISOString(),
+      source,
+      subagents,
+    }
+    await $.fs.write(`${log.folder}/info.json`, `${JSON.stringify(record, null, 2)}\n`)
+    const projectDir = log.folder.slice(0, log.folder.lastIndexOf('/'))
+    let all: Record<string, SessionRecord> = {}
+    try {
+      all = JSON.parse((await readText($, `${projectDir}/index.json`)) ?? '{}') as Record<string, SessionRecord>
+    } catch {}
+    all[folder] = record
+    await $.fs.write(`${projectDir}/index.json`, `${JSON.stringify(all, null, 2)}\n`)
+    await $.fs.write(`${projectDir}/index.md`, indexMd(project, Object.values(all)))
+  } catch (err) {
+    if (self.log.hasFailed) return
+    self.log.hasFailed = true
+    try {
+      await $.ui.toast(`pipeline: could not save the transcript: ${err instanceof Error ? err.message : String(err)}`)
+    } catch {}
+  }
 }
 
 // ---------- the session runner ----------
@@ -3124,6 +3223,7 @@ export const register: Register = (on, options) => {
   isCompactBand = (options as Record<string, unknown> | undefined)?.band === 'compact'
   isIdleStrip = (options as Record<string, unknown> | undefined)?.idleStrip !== 'hide'
   isCompactTasks = (options as Record<string, unknown> | undefined)?.tasks === 'compact'
+  isTranscripts = (options as Record<string, unknown> | undefined)?.transcripts === 'on'
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -3164,6 +3264,7 @@ export const register: Register = (on, options) => {
       const ending = typeof e.sessionId === 'string' && e.sessionId ? e.sessionId : await $.session.id()
       await $.fs.write(path, serialize(withoutEntry(current, ending)))
     } catch {}
+    await saveTranscript($, typeof e.sessionId === 'string' && e.sessionId ? e.sessionId : undefined)
     return next(e)
   })
 
@@ -3222,7 +3323,11 @@ export const register: Register = (on, options) => {
         if (file) return { deny: toolFileNote(file) }
       }
     } catch {}
-    if (!agentId) return next(e)
+    if (!agentId) {
+      const result = await next(e)
+      await noteBackground($, e.tool, call, result, undefined)
+      return result
+    }
     try {
       if (EDIT_TOOLS.has(e.tool)) {
         const path = pathOf(call)
@@ -3259,7 +3364,28 @@ export const register: Register = (on, options) => {
         await update($, agents, list => onResult(list, agentId, call, isError))
       }
     } catch {}
+    await noteBackground($, e.tool, call, result, agentId)
     return result
+  })
+
+  // A background task's notification is how the engine says it ended: it leaves the panel's list.
+  on('prompt.submit', async ($, e, next) => {
+    try {
+      const told = (e as { origin?: { kind?: string } }).origin?.kind === 'task-notification' ? notificationOf(e.text) : null
+      if (told && !isLive(told.status)) await update($, background, list => bgEnd(list, told.id))
+    } catch {}
+    return next(e)
+  })
+
+  // A turn's end and a subagent's end name what is still in flight: the list is set against it, so a command that
+  // ended without a notification this session saw does not stay listed.
+  on('classic.Stop', async ($, e, next) => {
+    await reconcileBackground($, (e as { background_tasks?: unknown }).background_tasks)
+    return next(e)
+  })
+  on('classic.SubagentStop', async ($, e, next) => {
+    await reconcileBackground($, (e as { background_tasks?: unknown }).background_tasks)
+    return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -3271,6 +3397,8 @@ export const register: Register = (on, options) => {
       if (!agentId) await scheduleWake($, at)
     } catch {}
     if (!e.agentId) await renameNow($)
+    // Not waited on: a large transcript must not hold the turn's end.
+    if (!e.agentId) void saveTranscript($)
     return next(e)
   })
 
@@ -3644,6 +3772,79 @@ async function specLine($: EngineInterface, found: string, item: Item | null): P
   return text ? specWhat(text) : ''
 }
 
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
+
+/** The list set against what the engine says is still in flight; nothing when it does not say. Never throws. */
+async function reconcileBackground($: EngineInterface, inFlight: unknown): Promise<void> {
+  try {
+    if (!Array.isArray(inFlight)) return
+    const at = await $.clock.now()
+    await update($, background, list => bgReconcile(list, inFlight as BgSummary[], at))
+  } catch {}
+}
+
+/**
+ * After a tool call came back: a shell command that went to the background joins the panel's list with the
+ * description its caller gave it, and a task the model stopped itself leaves it. Never throws.
+ */
+async function noteBackground($: EngineInterface, tool: string, call: Call, result: unknown, agentId: string | undefined): Promise<void> {
+  try {
+    const input = call as unknown as Record<string, unknown>
+    const out = (result as { result?: unknown } | undefined)?.result
+    if (SHELL_TOOLS.has(tool)) {
+      const id = out && typeof out === 'object' ? (out as { backgroundTaskId?: unknown }).backgroundTaskId : undefined
+      if (typeof id !== 'string' || !id) return
+      const owner = agentId ? (await read($, agents)).find(a => a.agentId === agentId || a.id === agentId)?.name : undefined
+      const at = await $.clock.now()
+      await update($, background, list =>
+        bgStart(list, { id, description: typeof input['description'] === 'string' ? input['description'] : '', command: String(input['command'] ?? ''), ...(owner ? { owner } : agentId ? { owner: 'a subagent' } : {}), ...(agentId ? { agentId } : {}), at }),
+      )
+    } else if (tool === 'TaskStop') {
+      const id = input['task_id'] ?? input['shell_id']
+      if (typeof id === 'string' && id && !(result && typeof result === 'object' && 'deny' in result && (result as { deny?: unknown }).deny !== undefined)) await update($, background, list => bgEnd(list, id))
+    }
+  } catch {}
+}
+
+/** Stop pressed on a background command: the engine's own stop, its answer as a toast, and the row goes. */
+async function stopBackground($: EngineInterface, id: string): Promise<void> {
+  let said: string
+  let isGone = false
+  try {
+    const r = (await $.tool.call({ tool: 'TaskStop', task_id: id } as never)) as { deny?: string; result?: unknown }
+    if (r.deny !== undefined) said = `could not stop ${id}: ${r.deny}`
+    else {
+      isGone = true
+      said = `stopped ${id}`
+    }
+  } catch (err) {
+    said = `could not stop ${id}: ${err instanceof Error ? err.message : String(err)}`
+  }
+  // A task the engine no longer knows has ended already: the row was stale.
+  if (!isGone && /not found|no (?:such|running|background) |already|not running|unknown task/i.test(said)) {
+    isGone = true
+    said = `${id} had already ended`
+  }
+  try {
+    if (isGone) await update($, background, list => bgEnd(list, id))
+    await $.ui.toast(`pipeline: ${said}`)
+  } catch {}
+}
+
+/** Check pressed on a background command: the session is asked where it stands and to stop it when it is stuck. */
+async function checkBackground($: EngineInterface, id: string): Promise<void> {
+  try {
+    const task = (await read($, background)).find(t => t.id === id)
+    if (!task) return
+    await $.prompt.submit({ text: checkPrompt(task, await $.clock.now()) })
+    await $.ui.toast(`pipeline: asked the session to check "${task.what}"; it answers when its current turn ends`)
+  } catch (err) {
+    try {
+      await $.ui.toast(`pipeline: could not ask about ${id}: ${err instanceof Error ? err.message : String(err)}`)
+    } catch {}
+  }
+}
+
 /** A tool action pressed from the panel: its one-line answer as a toast, so the person sees what happened. */
 async function pressTool($: EngineInterface, input: ToolInput): Promise<void> {
   let text: string
@@ -3678,6 +3879,7 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
     panel: p,
     children: kids,
     siblings: await read($, siblings),
+    background: await read($, background),
     ledgers,
     activeLine: await memo($, `what:${d.activeId ?? ''}`, b, 10_000, async () => specLine($, found, await activeItem($, b))),
     limitMs: limitsOf(c).taskMinutes * 60_000,
@@ -3692,6 +3894,8 @@ async function drawPane($: EngineInterface, ui: ReturnType<EngineInterface['ui']
     onMore: () => void update($, panel, prev => ({ ...prev, isMoreShown: !prev.isMoreShown })),
     onStop: (item: string) => void pressTool($, { action: 'stop', item }),
     onLog: (item: string) => void pressTool($, { action: 'log', item }),
+    onBgStop: (id: string) => void stopBackground($, id),
+    onBgCheck: (id: string) => void checkBackground($, id),
   })
 }
 
