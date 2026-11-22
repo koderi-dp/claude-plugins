@@ -8,16 +8,19 @@
     {
       "name": "ssh-remote",
       "source": "./plugins/ssh-remote",
+      "author": { "name": "Danijel Peric" },
       "description": "Run commands and download files over SSH, with credentials read from files Claude never sees."
     },
     {
       "name": "superpowers-flow",
       "source": "./plugins/superpowers-flow",
+      "author": { "name": "Danijel Peric" },
       "description": "Speed profiles (thorough, balanced, fast) for superpowers plan runs, chosen at the plan's handoff with the models per role; parallel slices in git worktrees or headless sessions; a live progress bar and agents panel; tiered sp-* workers; and a handoff that builds an approved EGM design."
     },
     {
       "name": "pipeline",
       "source": "./plugins/pipeline",
+      "author": { "name": "Danijel Peric" },
       "description": "Owns a project's workflow: a backlog in docs/pipeline or in GitHub issues, skills that take a request to a merged PR, a watchdog over subagents, and a status block as text and as a panel."
     }
   ]
