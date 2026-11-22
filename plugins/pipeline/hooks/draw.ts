@@ -142,8 +142,14 @@ export const heroSvg = (W: number, h: Hero): Drawing => {
   let bottom = y - 18 + 5
   if (h.progress) {
     const { done, total } = h.progress
-    const value = total ? Math.min(done, total) / total : 0
     y = bottom + 20
+    // The bar measures the item, not the tasks alone: it ends under the current step, and the accepted tasks carry
+    // it across the Build step. All tasks accepted with the review and the merge still ahead is not 100%.
+    const tasksDone = total ? Math.min(done, total) / total : 0
+    const count = h.steps?.length ?? 0
+    const at = h.steps?.findIndex(s => s.state === 'current') ?? -1
+    const isAllDone = count > 0 && h.steps!.every(s => s.state === 'done')
+    const value = count < 2 ? tasksDone : isAllDone ? 1 : at < 0 ? 0 : (at + (h.steps![at]!.name === 'Build' ? tasksDone : 0)) / (count - 1)
     parts.push(text(PAD, y, `${done} of ${total} task${total === 1 ? '' : 's'} accepted`, { size: SIZE.sm, role: 'mutedForeground' }))
     parts.push(text(W - PAD, y, `${Math.round(value * 100)}%`, { size: SIZE.sm, weight: WEIGHT.semibold, anchor: 'end', isTabular: true }))
     parts.push(progress(PAD, y + 8, inner, value, 'primary'))

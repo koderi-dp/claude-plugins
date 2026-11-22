@@ -375,7 +375,8 @@ test('desktop running Overview: the hero with the item, progress and steps, the 
   const hero = await svgOf(ui, /^BUILDING · P2/)
   expect(hero).toContain('A CSV export of every catalog, streamed to the browser.')
   expect(hero).toContain('1 of 3 tasks accepted')
-  expect(hero).toContain('>33%<')
+  // Build is the current step and one task of three is accepted: a third for the plan, a ninth for the task.
+  expect(hero).toContain('>44%<')
   // The steps: an icon and the name, done in green, the current one in purple, the rest in the subtle grey.
   expect(hero).toMatch(/class="f-success"[^>]*>Plan</)
   expect(hero).toMatch(/class="f-primary"[^>]*>Build</)
