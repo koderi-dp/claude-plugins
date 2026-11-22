@@ -28,8 +28,9 @@ type Called = { ok: true; value: string } | { ok: false; error: string; said: st
  * what gh said (stderr and the response body) for the caller that treats one refusal as success. `{owner}/{repo}` in
  * the endpoint is literal: gh fills it from the checkout. Fields are raw strings (-f), sent as the JSON body.
  */
-async function api(run: Run, method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', endpoint: string, fields: Field[] = []): Promise<Called> {
-  const r = await run(['gh', 'api', ...(method === 'GET' ? [] : ['-X', method]), endpoint, ...fields.flatMap(([k, v]) => ['-f', `${k}=${v}`])])
+async function api(run: Run, method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', endpoint: string, fields: Field[] = [], typed: Field[] = []): Promise<Called> {
+  // `-f` sends text; `-F` sends a number or null as such, which a milestone needs.
+  const r = await run(['gh', 'api', ...(method === 'GET' ? [] : ['-X', method]), endpoint, ...fields.flatMap(([k, v]) => ['-f', `${k}=${v}`]), ...typed.flatMap(([k, v]) => ['-F', `${k}=${v}`])])
   if (r === null) return { ok: false, error: NO_GH, said: '' }
   if (r.exitCode !== 0) {
     const said = `${r.stderr}\n${r.stdout}`
@@ -212,6 +213,23 @@ export async function setTitle(run: Run, number: number, title: string): Promise
 /** Replaces an issue's body: a migrated item's dependencies, and `update` with a body or needs. */
 export async function setBody(run: Run, number: number, body: string): Promise<Result<true>> {
   return done(await api(run, 'PATCH', `${REPO}/issues/${number}`, [['body', body]]))
+}
+
+export type Milestone = { number: number; title: string }
+
+/** The repository's open milestones. */
+export async function milestones(run: Run): Promise<Result<Milestone[]>> {
+  const endpoint = `${REPO}/milestones?state=open&per_page=100`
+  const r = await api(run, 'GET', endpoint)
+  if (!r.ok) return fail(r)
+  const rows = parse(r.value)
+  if (!Array.isArray(rows)) return unexpected('GET', endpoint)
+  return { ok: true, value: rows.map(obj).filter(o => typeof o['number'] === 'number').map(o => ({ number: o['number'] as number, title: str(o['title']) })) }
+}
+
+/** Puts an issue in a milestone, by the milestone's number, or takes it out of its milestone with null. */
+export async function setMilestone(run: Run, number: number, milestone: number | null): Promise<Result<true>> {
+  return done(await api(run, 'PATCH', `${REPO}/issues/${number}`, [], [['milestone', milestone === null ? 'null' : String(milestone)]]))
 }
 
 /** Closes an issue: as completed, or as not planned when `notPlanned` says so. */

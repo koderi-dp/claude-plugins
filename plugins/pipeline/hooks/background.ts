@@ -33,11 +33,40 @@ export function tidyCommand(command: string): string {
   return s.length > CLIP ? `${s.slice(0, CLIP)}…` : s
 }
 
+/** A path of three or more parts as its last part (`…/bbx5qjixx.output`), so a line is not mostly folders. */
+export const shortPaths = (s: string): string => s.replace(/(?:[A-Za-z]:)?(?:[\\/][^\\/\s"';|&]+){3,}/g, m => `…/${m.split(/[\\/]/).pop()}`)
+
+const LABEL = 90
+
+/**
+ * What a command does, said from the command itself, for a call that gave no description: a waiting loop is named
+ * as one with what it waits for, anything else is the command with its paths shortened; one line, clipped.
+ */
+export function labelOf(command: string): string {
+  const s = shortPaths(tidyCommand(command))
+  const loop = /^(until|while)\s+(.+?)\s*;\s*do\b/.exec(s)
+  const text = loop ? `Waits in a loop ${loop[1] === 'until' ? 'until' : 'while'}: ${loop[2]}` : s
+  return text.length > LABEL ? `${text.slice(0, LABEL)}…` : text
+}
+
+/**
+ * Whether a shell call says what it does in words a person can read: a description of two words or more that is
+ * not the command itself.
+ */
+export function isDescribed(description: unknown, command: unknown): boolean {
+  const d = typeof description === 'string' ? description.replace(/\s+/g, ' ').trim() : ''
+  return d.split(' ').length >= 2 && d !== String(command ?? '').replace(/\s+/g, ' ').trim()
+}
+
+/** What a background call without a description is told: the same call again, with one. */
+export const NEEDS_DESCRIPTION =
+  'pipeline: a background command needs a description, because the panel lists it by that. Send the same call again with `description`: one short sentence a person can read, saying what it does and what ends it (for example "Wait for the frontend build to finish; ends when the build log shows its result").'
+
 /** A new task joins the list; one already there under the same id keeps its start. */
 export function bgStart(list: BgTask[], t: { id: string; description?: string; command?: string; owner?: string; agentId?: string; at: number }): BgTask[] {
   if (!t.id || list.some(x => x.id === t.id)) return list
   const command = tidyCommand(t.command ?? '')
-  const what = (t.description ?? '').replace(/\s+/g, ' ').trim() || command || 'a background command'
+  const what = (t.description ?? '').replace(/\s+/g, ' ').trim() || labelOf(command) || 'a background command'
   return [...list, { id: t.id, what, command, owner: t.owner?.trim() || 'Lead', ...(t.agentId ? { agentId: t.agentId } : {}), startedAt: t.at }]
 }
 

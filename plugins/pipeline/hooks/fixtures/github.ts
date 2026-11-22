@@ -15,6 +15,9 @@ export type RestState = {
   workflowRuns?: number
   /** The labels the repository has, in the order they were created. */
   labels?: string[]
+  /** The repository's open milestones, and the milestone number each issue is in, by issue number. */
+  milestones?: { number: number; title: string }[]
+  milestoneOf?: Record<number, number | null>
   /** Called after a call changed an issue's labels, assignees, title or body. */
   onEdit?: (i: Issue) => void
   /** The number the next opened pull request gets; 31 when not given. */
@@ -42,7 +45,8 @@ export function parseApi(argv: readonly string[]): ApiCall | null {
   const fields: [string, string][] = []
   for (; at < argv.length; at += 2) {
     const pair = argv[at + 1]
-    if (argv[at] !== '-f' || pair === undefined || !pair.includes('=')) return null
+    // `-F` is a typed field (a number, null): the fixture reads it as its text.
+    if ((argv[at] !== '-f' && argv[at] !== '-F') || pair === undefined || !pair.includes('=')) return null
     fields.push([pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)])
   }
   const [whole = '', search = ''] = endpoint.split('?')
@@ -97,6 +101,8 @@ export function restGithub(state: RestState, now: number): (argv: readonly strin
 
     if (method === 'GET' && path === 'user') return ok({ login: state.me })
 
+    if (on('GET', /^milestones$/)) return paged(state.milestones ?? [], query)
+
     if (on('GET', /^issues$/)) {
       const label = query.get('labels') ?? ''
       const wanted = query.get('state') ?? 'open'
@@ -129,6 +135,11 @@ export function restGithub(state: RestState, now: number): (argv: readonly strin
         if (title !== undefined) i.title = title
         if (body !== undefined) i.body = body
         if (one(c, 'state') === 'closed') i.state = 'closed'
+        const milestone = one(c, 'milestone')
+        if (milestone !== undefined) {
+          if (milestone !== 'null' && !(state.milestones ?? []).some(x => String(x.number) === milestone)) return refuse(422, 'Validation Failed')
+          state.milestoneOf = { ...(state.milestoneOf ?? {}), [i.number]: milestone === 'null' ? null : Number(milestone) }
+        }
         if (title !== undefined || body !== undefined) state.onEdit?.(i)
         return ok(restIssue(i))
       }

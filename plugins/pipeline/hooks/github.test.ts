@@ -1028,3 +1028,26 @@ test('0.5.4: a ledger written for an issue not yet begun is the item\'s own on t
   expect(again).not.toContain('refused')
   expect(JSON.parse(files.get(LEDGER2)!)).toMatchObject({ branch: 'fix/1-follow-up', pr: '#5', blockers: ['waits for CI'] })
 })
+
+test('0.7.1: update with milestone puts the issue in the open milestone of that title, null takes it out; add takes item.milestone', async ($, on) => {
+  world(on, { [CONFIG]: CONFIG_GH })
+  const gh: GhState = { me: 'me', issues: [issueOf(2, 'Export', { comments: [specComment('200')] })], milestones: [{ number: 3, title: 'MVP' }, { number: 4, title: 'Later' }] }
+  const runs = ghWorld(on, gh)
+  // By title, whatever the case of the letters; the number goes to GitHub as a number.
+  expect(text(await call($, { action: 'update', id: '2', set: { milestone: 'mvp' } }))).toBe('2 · ready · set milestone MVP')
+  expect(gh.milestoneOf).toEqual({ 2: 3 })
+  expect(runs.some(r => r.join(' ').endsWith('issues/2 -F milestone=3'))).toBe(true)
+  // Together with the text of the issue, in one call.
+  expect(text(await call($, { action: 'update', id: '2', set: { title: 'Export v2', milestone: 'Later' } }))).toBe('2 · ready · set title, milestone Later')
+  expect(gh.milestoneOf).toEqual({ 2: 4 })
+  expect(text(await call($, { action: 'update', id: '2', set: { milestone: null } }))).toBe('2 · ready · set milestone none')
+  expect(gh.milestoneOf).toEqual({ 2: null })
+  // A title no open milestone has is refused with the ones there are, and nothing is changed.
+  expect(text(await call($, { action: 'update', id: '2', set: { milestone: 'Beta' } }))).toBe('refused: no open milestone "Beta"; the open ones: MVP, Later')
+  expect(gh.milestoneOf).toEqual({ 2: null })
+
+  expect(text(await call($, { action: 'add', item: { title: 'Import', milestone: 'MVP' }, text: '## What\nImport.\n' }))).toBe('added 3 · ready · spec posted · milestone MVP')
+  expect(gh.milestoneOf).toEqual({ 2: null, 3: 3 })
+  // The issue is opened even when its milestone cannot be set, and the answer says so.
+  expect(text(await call($, { action: 'add', item: { title: 'Billing', milestone: 'Beta' } }))).toMatch(/^added 4 · .* · milestone not set: no open milestone "Beta"/)
+})

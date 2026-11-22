@@ -8,9 +8,11 @@ const END = `No model identifier goes into commits, PR text or comments.`
 const END_COMMIT = `No model identifier goes into commits, PR text or comments, apart from the attribution lines below. End the commit message with these lines exactly:`
 /** Where the subagent must be: said with the path, so it does not depend on where the lead's shell happens to be. */
 const AT = `The item's worktree is \`{{worktree}}\`: run every command there (if \`pwd\` shows another folder, \`cd\` to it first, as a command of its own)`
-const WHERE = `${AT} and edit files by their path under it.`
+/** A background command is listed in the panel by its description, so it must have one a person can read. */
+const BACKGROUND = `A command you run in the background needs a \`description\`: one short sentence a person can read, saying what it does and what ends it (a call without one is refused); stop it when you no longer need it.`
+const WHERE = `${AT} and edit files by their path under it. ${BACKGROUND}`
 /** The same for a reviewer, who edits nothing: telling it how to edit beside "Read-only" reads as a contradiction. */
-const WHERE_READ = `${AT}.`
+const WHERE_READ = `${AT}. ${BACKGROUND}`
 
 const implementer = `# {{item}} · task {{n}} of {{total}}: {{title}}
 

@@ -956,7 +956,7 @@ function backgroundWorld(on: On) {
   const stopped: string[] = []
   const submitted: string[] = []
   let n = 0
-  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `bash_${++n}` } }) as never)
+  on('tool.call', { tool: 'Bash' }, (_$, e) => ({ result: { stdout: '', stderr: '', interrupted: false, ...((e as { run_in_background?: boolean }).run_in_background ? { backgroundTaskId: `bash_${++n}` } : {}) } }) as never)
   on('tool.call', { tool: 'TaskStop' }, (_$, e) => {
     const id = String((e as { task_id?: string }).task_id)
     stopped.push(id)
@@ -984,10 +984,13 @@ test('0.7.0: a background command is listed with what it does, who started it an
   const ui = await mount($ as never, 'desktop')
   expect(await ui.find({ type: 'Text', text: /^Background/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /2 running/ })).toBeDefined()
-  expect((await ui.find({ type: 'Text', text: /^Start the dev server/ }))?.text).toBe('Start the dev server  7m 00s · Final review of item 2')
+  expect((await ui.find({ type: 'Text', text: /^Start the dev server/ }))?.text).toBe('Start the dev server')
+  // How long and who, on a line of their own under it.
+  expect(await ui.find({ type: 'Text', text: '7m 00s · Final review of item 2' })).toBeDefined()
   // The command under it starts at the program, not at the environment.
   expect(await ui.find({ type: 'Text', text: 'npm run dev' })).toBeDefined()
-  expect((await ui.find({ type: 'Text', text: /^Run the browser tests/ }))?.text).toBe('Run the browser tests  7m 00s · Lead')
+  expect((await ui.find({ type: 'Text', text: /^Run the browser tests/ }))?.text).toBe('Run the browser tests')
+  expect(await ui.find({ type: 'Text', text: '7m 00s · Lead' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'npx playwright test' })).toBeDefined()
 
   // The notification that one ended takes it off the list.
@@ -1083,4 +1086,23 @@ test('0.7.0: transcripts off, the default: nothing is saved', async ($, on) => {
   await complete($ as never, {})
   for (let i = 0; i < 4000; i++) await Promise.resolve()
   expect([...files.keys()].filter(p => p.startsWith(`${DATA}/`))).toEqual([])
+})
+
+test('0.7.1: a background command without a description is sent back for one, from the lead and from a subagent; a foreground command is not', async ($, on) => {
+  backgroundWorld(on)
+  await start($ as never)
+  await spawn($ as never, 'Implement task 1', 1)
+  const loop = 'until grep -q done build.log; do sleep 5; done'
+  for (const agentId of [undefined, 'agent-t1']) {
+    const refused = (await $.tool.call({ tool: 'Bash', command: loop, run_in_background: true, ...(agentId ? { agentId } : {}) } as never)) as { deny?: string }
+    expect(refused.deny).toContain('a background command needs a description')
+    // One word, or the command again, says nothing either.
+    expect(((await $.tool.call({ tool: 'Bash', command: loop, description: 'wait', run_in_background: true, ...(agentId ? { agentId } : {}) } as never)) as { deny?: string }).deny).toBeDefined()
+    expect(((await $.tool.call({ tool: 'Bash', command: loop, description: 'Wait for the build to finish', run_in_background: true, ...(agentId ? { agentId } : {}) } as never)) as { deny?: string }).deny).toBeUndefined()
+    expect(((await $.tool.call({ tool: 'Bash', command: 'npm test', ...(agentId ? { agentId } : {}) } as never)) as { deny?: string }).deny).toBeUndefined()
+  }
+  const ui = await mount($ as never, 'desktop')
+  expect(await ui.find({ type: 'Text', text: /2 running/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Wait for the build to finish' })).toBeDefined()
+  await ui.unmount()
 })

@@ -10,7 +10,7 @@ import { DEFAULTS, draftConfig, normalizeConfig } from './config'
 import { hashRoot, livePath, parseJson, paths, places, serialize } from './files'
 import type { Places } from './files'
 import * as tracker from './tracker'
-import { bgEnd, bgReconcile, bgStart, checkPrompt, isLive, notificationOf } from './background'
+import { NEEDS_DESCRIPTION, bgEnd, bgReconcile, bgStart, checkPrompt, isDescribed, isLive, notificationOf } from './background'
 import type { BgSummary, BgTask } from './background'
 import { digest, indexMd, sessionFolder } from './transcripts'
 import type { SessionRecord } from './transcripts'
@@ -69,7 +69,7 @@ export const TOOL_DESCRIPTION =
   'Mode full (the default): `plan` { item, attribution? } checks docs/pipeline/plans/<id>.md, seeds the tasks and commits the plan, or answers the format or the problems. `brief` { item, kind: implementer | fix | review | final, task?, findings?, carried?, commits?, escalate?, close?: { tokens, minutes, result } } renders the brief, opens the dispatch and answers the Agent call to make; a review the config does not ask for answers `no review`. `accept` { item, task, tokens?, minutes?, verdict?, carried?, fact? } accepts the task, commits the records, pushes and answers the next Agent call. ' +
   '`ledger` { item, set: { tasks?: [{ n, status?, close?, dispatches?, review? }], rulings?: [{ task?, text, why, costIfWrong }], resume?: { task, state, lastVerified? }, final?: { verdict, gate? }, blockers?: [text], pr?, branch?, worktree?, base?, <other key>?: value | null } } merges into the ledger; a wrong shape is refused and nothing is written; null removes a key. ' +
   'Session runner: `start` { item } runs the item in a headless child session, `stop` { item }, `log` { item }. Setup: `init`, `migrate` { refresh? }, `migrate-apply` { config, items, rules, refresh? }, `clean` { item? } lists what config.retain lets go and deletes nothing. A file that does not parse is refused with its line and left alone. ' +
-  'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12); never edit an issue with gh yourself. `add` opens an issue, `spec` { id, text } posts or replaces its spec comment, `question` { id, text } asks on the issue and holds the item, `answer` { id, text } writes what the user answered there and ends the hold, `update` with set { title?, body?, needs? } rewrites the text of the issue and keeps its Needs: line unless needs is given, `remove` { id, text } closes it as not planned with the reason on it, `adopt` creates the issue and adds Closes #<issue> to the PR, `init` { queue: "github" } sets it up, `move` is refused. `migrate-github` { apply? } drafts, and with apply makes, the move of a file backlog onto issues.'
+  'With config.queue github the open issues with the queue label are the backlog and an issue number is the id (12); never edit an issue with gh yourself. `add` opens an issue, `spec` { id, text } posts or replaces its spec comment, `question` { id, text } asks on the issue and holds the item, `answer` { id, text } writes what the user answered there and ends the hold, `update` with set { title?, body?, needs?, milestone? } rewrites the text of the issue and keeps its Needs: line unless needs is given (milestone: a title, null: none), `remove` { id, text } closes it as not planned with the reason on it, `adopt` creates the issue and adds Closes #<issue> to the PR, `init` { queue: "github" } sets it up, `move` is refused. `migrate-github` { apply? } drafts, and with apply makes, the move of a file backlog onto issues.'
 
 const TOOL_SCHEMA = {
   type: 'object',
@@ -84,6 +84,7 @@ const TOOL_SCHEMA = {
         size: { type: 'string', enum: ['S', 'M', 'L'] },
         needs: { type: 'array', items: { type: 'string' } },
         source: { type: 'string', description: 'Who asked and when, quoting them.' },
+        milestone: { type: 'string', description: 'With queue: github: the title of an open milestone to put the issue in.' },
         note: { type: 'string' },
       },
       required: ['title'],
@@ -610,12 +611,44 @@ async function addIssue($: EngineInterface, found: string, c: Config | null, e: 
   const n = r.value
   const at = await nowIso($)
   await editCache($, found, issues => [...issues.filter(i => i.number !== n), { number: n, title, body, author: self.me, labels: [labelOf(c)], assignees: [], state: 'open', url: '', createdAt: at, comments: [] }])
-  return `added ${n} · ${await issueState($, found, String(n), 'inbox · no spec')}`
+  // A milestone named with the item: the issue exists either way, and a milestone that cannot be set is said.
+  const wanted = typeof e.item === 'string' ? undefined : (e.item as { milestone?: unknown } | undefined)?.milestone
+  let milestone = ''
+  if (typeof wanted === 'string' && wanted.trim()) {
+    try {
+      milestone = ` · milestone ${await putInMilestone($, found, n, wanted)}`
+    } catch (err) {
+      milestone = ` · milestone not set: ${err instanceof Error ? err.message : String(err)}`
+    }
+  }
+  return `added ${n} · ${await issueState($, found, String(n), 'inbox · no spec')}${milestone}`
 }
 
 /**
- * `update` with `title`, `body` or `needs` under queue github: the issue's own text, written through the tool so
- * the `Needs:` line is never lost. A new body that names no dependencies keeps the ones the issue had; `needs`
+ * Puts an issue in the open milestone of that title (the case of the letters does not matter), or takes it out of
+ * its milestone when the title is empty or null. Answers the milestone's title, or `none`; refuses a title no open
+ * milestone has, naming the ones there are.
+ */
+async function putInMilestone($: EngineInterface, found: string, issue: number, wanted: unknown): Promise<string> {
+  const run = ghRun($, found)
+  if (wanted === null || (typeof wanted === 'string' && !wanted.trim())) {
+    const r = await tracker.setMilestone(run, issue, null)
+    if (!r.ok) throw new Refused(r.error)
+    return 'none'
+  }
+  if (typeof wanted !== 'string') throw new Refused('update: milestone is the title of an open milestone, or null to take the issue out of its milestone')
+  const open = await tracker.milestones(run)
+  if (!open.ok) throw new Refused(open.error)
+  const hit = open.value.find(m => m.title.trim().toLowerCase() === wanted.trim().toLowerCase())
+  if (!hit) throw new Refused(`no open milestone "${wanted.trim()}"${open.value.length ? `; the open ones: ${open.value.map(m => m.title).join(', ')}` : '; the repository has no open milestone'}`)
+  const r = await tracker.setMilestone(run, issue, hit.number)
+  if (!r.ok) throw new Refused(r.error)
+  return hit.title
+}
+
+/**
+ * `update` with `title`, `body`, `needs` or `milestone` under queue github: the issue's own text and its milestone,
+ * written through the tool so the `Needs:` line is never lost and nobody edits an issue with gh. A new body that names no dependencies keeps the ones the issue had; `needs`
  * sets them, and an empty list removes them. Answers what it changed.
  */
 async function editIssueText($: EngineInterface, found: string, id: string, set: Record<string, unknown>): Promise<string[]> {
@@ -651,6 +684,7 @@ async function editIssueText($: EngineInterface, found: string, id: string, set:
     }
   }
   if (done.length) await editCache($, found, issues => issues.map(i => (i.number === issue.number ? { ...i, title, body } : i)))
+  if ('milestone' in set) done.push(`milestone ${await putInMilestone($, found, issue.number, set['milestone'])}`)
   return done.length ? [...new Set(done)] : ['nothing: the issue already reads so']
 }
 
@@ -1342,7 +1376,9 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
       if (isGithub(c)) {
         const added = await addIssue($, found, c, e)
         const n = /^added (\d+)/.exec(added)?.[1]
-        if (n && typeof e.text === 'string' && e.text.trim()) return `${added.split(' · ')[0]} · ${withoutId(n, await specIssue($, found, n, e))}`
+        // What add said about the milestone stays on the answer when the spec's line replaces the state.
+        const milestone = / · milestone .*$/.exec(added)?.[0] ?? ''
+        if (n && typeof e.text === 'string' && e.text.trim()) return `${added.split(' · ')[0]} · ${withoutId(n, await specIssue($, found, n, e))}${milestone}`
         return added
       }
       const title = typeof e.item === 'string' ? undefined : e.item?.title?.trim()
@@ -1360,8 +1396,8 @@ async function runToolNow($: EngineInterface, e: ToolInput): Promise<string> {
     case 'update': {
       const id = need(e.id)
       if (!e.set || typeof e.set !== 'object') throw new Refused('update needs set')
-      // Under queue github the title, the body and the dependencies are the issue's own text.
-      const TEXT = ['title', 'body', 'needs']
+      // Under queue github the title, the body, the dependencies and the milestone are the issue's own.
+      const TEXT = ['title', 'body', 'needs', 'milestone']
       let said: string[] = []
       let fields = e.set as Record<string, unknown>
       if (isGithub(c) && TEXT.some(k => k in fields)) {
@@ -3322,6 +3358,12 @@ export const register: Register = (on, options) => {
         const file = EDIT_TOOLS.has(e.tool) ? toolFileOf(pathOf(call) ?? '') : e.tool === 'Bash' ? toolFileWrittenBy(String((call as Record<string, unknown>)['command'] ?? '')) : undefined
         if (file) return { deny: toolFileNote(file) }
       }
+    } catch {}
+    // A background command is listed in the panel by its description: one without is sent back for it, the lead's
+    // and a subagent's alike, in a project with a pipeline.
+    try {
+      const input = call as unknown as Record<string, unknown>
+      if (SHELL_TOOLS.has(e.tool) && input['run_in_background'] === true && !isDescribed(input['description'], input['command']) && (await read($, config))) return { deny: NEEDS_DESCRIPTION }
     } catch {}
     if (!agentId) {
       const result = await next(e)

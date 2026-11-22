@@ -8,7 +8,7 @@ import type { AgentRun, ChildSession, Item, ItemStatus, Ledger, Panel, QueueFilt
 import { ACCENT, AGENT_CARD_H, BLOCKED, CAPTION_H, DONE, MERGED_ROW_H, METRICS_H, MUTED, ROW_H, SESSION_ROW_H, TAB_UNDERLINE_H, TASK_BAR_H, agentCardSvg, captionSvg, fmtCost, fmtTime, fmtTokens, heroSvg, itemRowSvg, mergedRowSvg, metricsSvg, modelName, separatorSvg, sessionRowSvg, tabUnderlineSvg, tabWidth, taskBarSvg, taskRowSvg, totals } from './draw'
 import type { AgentCard, Hero, Metric } from './draw'
 import type { StatusInput, TagKind } from './status'
-import { bgClock } from './background'
+import { bgClock, shortPaths } from './background'
 import type { BgTask } from './background'
 import { activityLines, currentTask, displayTitle, fmtDuration, groupCounts, heroSentence, idLabel, mergedItems, mergedThisWeek, prLabel, queueItems, roleOf, segmentLegend, siblingLabel, stepsOf, tagOf, taskCounter, taskRowsOf, taskSegment } from './status'
 
@@ -81,6 +81,7 @@ export type PanelInput = StatusInput & {
 }
 
 const minutes = (from: number, to: number) => Math.max(0, Math.round((to - from) / 60000))
+const clipped = (s: string, cap: number) => (s.length > cap ? `${s.slice(0, cap)}…` : s)
 const line = (parts: unknown[]) => parts.filter(p => p !== undefined && p !== null && p !== '').join(' · ')
 const itemText = (item: Item, extra?: string) => line([idLabel(item.id), displayTitle(item.title), item.size, extra])
 /** The item's source when it is a web address (an issue's URL), for a Link; empty otherwise. */
@@ -538,11 +539,9 @@ function backgroundRows(u: Desk, d: PanelInput, at: number): Element | null {
     .map(t => (
       <Box key={`bg-${t.id}`} flexDirection="row" justifyContent="space-between" gap={1}>
         <Box flexDirection="column" flexShrink={1}>
-          <Text>
-            {t.what}
-            <Text dimColor>{`  ${line([bgClock(at - t.startedAt), t.owner])}`}</Text>
-          </Text>
-          {t.command && t.command !== t.what ? <Text dimColor>{t.command.length > 120 ? `${t.command.slice(0, 120)}…` : t.command}</Text> : null}
+          <Text>{t.what}</Text>
+          <Text dimColor>{line([bgClock(at - t.startedAt), t.owner])}</Text>
+          {t.command && t.command !== t.what ? <Text dimColor>{clipped(shortPaths(t.command), 160)}</Text> : null}
         </Box>
         <Box flexDirection="row" gap={1} flexShrink={0}>
           <Button key={`bg-check-${t.id}`} label="Check" onPress={() => d.onBgCheck?.(t.id)} />
