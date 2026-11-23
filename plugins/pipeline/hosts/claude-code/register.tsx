@@ -220,10 +220,12 @@ function hostOf($: EngineInterface): Host {
   }
 }
 
-async function openPane($: EngineInterface, focus = false): Promise<void> {
+/** Opens the pane and answers why it is not drawn, or '' when it is. */
+async function openPane($: EngineInterface, focus = false): Promise<string> {
   const at = await $.clock.now()
   await update(hostOf($), now, () => at)
-  await $.ui.open({ id: PANE, title: 'Pipeline', ...(focus ? { focus: true } : {}) })
+  const r = await $.ui.open({ id: PANE, title: 'Pipeline', ...(focus ? { focus: true } : {}) })
+  return r && r.isPlaced === false ? r.reason || 'no surface draws it' : ''
 }
 
 /** The band's Panel button: opens the pane, or brings it forward with the keys when it is open. */
@@ -241,16 +243,27 @@ async function isPaneOpen($: EngineInterface): Promise<boolean> {
   }
 }
 
-async function togglePane($: EngineInterface): Promise<boolean> {
-  if (await isPaneOpen($)) {
+/** Whether the pane is open and a surface draws it: one opened unasked may wait undrawn. */
+async function isPaneDrawn($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced !== false)
+  } catch {
+    return false
+  }
+}
+
+/** The command's toggle: closes a pane that is drawn, opens any other. Answers what to say. */
+async function togglePane($: EngineInterface): Promise<string> {
+  if (await isPaneDrawn($)) {
     await $.ui.close({ id: PANE })
     // The band's Panel button reads the pane's state when drawn: the atom write redraws it.
     const at = await $.clock.now()
     await update(hostOf($), now, () => at)
-    return false
+    return 'Pipeline panel closed.'
   }
-  await openPane($)
-  return true
+  // A pane that is open but undrawn (opened unasked) is opened again: the person's command is the ask that seats it.
+  const why = await openPane($)
+  return why ? `Pipeline panel is open but not drawn here: ${why}` : 'Pipeline panel opened.'
 }
 
 /** Opens the panel by itself, once per reason, unless the setting says never. */
@@ -658,8 +671,7 @@ async function runCommand($: EngineInterface, args: string): Promise<CommandAnsw
     case 'status':
       return { text: `${await runTool(hostOf($), { action: 'status', ...(arg ? { id: arg } : {}) })}${self.toolError ? `\n\n${NO_TOOL()}` : ''}` }
     case 'panel': {
-      const isOpen = await togglePane($)
-      return { text: isOpen ? 'Pipeline panel opened.' : 'Pipeline panel closed.' }
+      return { text: await togglePane($) }
     }
     case 'config':
       return { text: await configCommand(hostOf($), arg) }

@@ -41,6 +41,7 @@ function world(on: On, seed: Record<string, string> = {}) {
   const files = new Map<string, string>([[HEAD, 'ref: refs/heads/main\n'], ...Object.entries(seed)])
   const panes: string[] = []
   const opened: string[] = []
+  const seat = { isPlaced: true, reason: '' }
   const toasts: string[] = []
   const key = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/^[A-Za-z]:/, '')
   on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
@@ -55,7 +56,7 @@ function world(on: On, seed: Record<string, string> = {}) {
   on('ui.open', (_$, e) => {
     opened.push(e.id)
     if (!panes.includes(e.id)) panes.push(e.id)
-    return { value: { isPlaced: true } }
+    return { value: seat.isPlaced ? { isPlaced: true } : { isPlaced: false, reason: seat.reason } }
   })
   on('ui.close', (_$, e) => {
     panes.splice(panes.indexOf(e.id), 1)
@@ -65,7 +66,7 @@ function world(on: On, seed: Record<string, string> = {}) {
     toasts.push(String((e as { text?: string }).text ?? (e as { message?: string }).message ?? ''))
     return { value: undefined } as never
   })
-  on('ui.panes', () => ({ value: panes.map(id => ({ id, title: 'Pipeline', isPlaced: true })) }) as never)
+  on('ui.panes', () => ({ value: panes.map(id => ({ id, title: 'Pipeline', isPlaced: seat.isPlaced })) }) as never)
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
@@ -81,7 +82,7 @@ function world(on: On, seed: Record<string, string> = {}) {
   on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
   on('agent.spawn', (_$, e) => ({ model: 'claude-sonnet-5-5', agentId: `agent-${e.tool_use_id}` }))
   on('turn.complete', () => ({ text: '' }) as never)
-  return { clock, files, panes, opened, toasts }
+  return { seat, clock, files, panes, opened, toasts }
 }
 
 const start = ($: Engine) => $.session.start({ cwd: MAIN, surface: 'terminal', isInteractive: true } as never)
@@ -240,6 +241,20 @@ test('a file error is drawn in the blocked colour', async ($, on) => {
   expect(row).toBeDefined()
   expect(row?.props['color']).toBe(BLOCKED)
   await ui.unmount()
+})
+
+test('0.8.2: /pipeline panel on a pane that is open but not drawn opens it instead of closing it, and says why when it stays undrawn', async ($, on) => {
+  const { panes, opened, seat } = world(on, SEED)
+  await start($ as never)
+  // The pane was opened unasked and waits undrawn: the person's command is the ask that seats it.
+  panes.push('pipeline')
+  seat.isPlaced = false
+  seat.reason = 'the attached surfaces place no panes'
+  expect(await run($ as never, 'panel')).toBe('Pipeline panel is open but not drawn here: the attached surfaces place no panes')
+  expect(panes).toEqual(['pipeline'])
+  expect(opened).toEqual(['pipeline'])
+  seat.isPlaced = true
+  expect(await run($ as never, 'panel')).toBe('Pipeline panel closed.')
 })
 
 test('/pipeline panel toggles the pane; the first agent opens it once', async ($, on) => {
