@@ -46,13 +46,13 @@ const INBOX_TITLES = [
   'Export settings per catalog',
 ]
 
-/** 71 items like catalo's queue: 27 inbox, 1 ready, 10 parked, 33 merged (the first 28 imported, 5 merged this week). */
-export function catalo(): Item[] {
+/** 71 items like a real queue: 27 inbox, 1 ready, 10 parked, 33 merged (the first 28 imported, 5 merged this week). */
+export function sampleQueue(): Item[] {
   const inbox = INBOX_TITLES.map((t, i) => item(`p${40 + i}`, t, 'inbox'))
   const ready = [item('p39', 'grid-track-sizes — Grid row and column sizes', 'ready', { spec: 'docs/pipeline/specs/p39.md', size: 'L' })]
   const parked = Array.from({ length: 10 }, (_, i) => item(`p${67 + i}`, ['Integrations', 'ERP connectors', 'AI layout suggestions', 'Public API', 'Webhooks', 'Multi-currency', 'Localization of the shell', 'Print shop hand-off', 'Analytics', 'Mobile preview'][i]!, 'parked', { size: 'L' }))
-  const imported = Array.from({ length: 28 }, (_, i) => item(`p${i + 1}`, ['Foundation plan, Tasks 1–9', 'Plan 1b: tenant isolation', 'Catalog UI fixes (Keraterm review)', 'Hybrid editor, Phase B: document v2'][i % 4] + (i > 3 ? ` · part ${Math.floor(i / 4) + 1}` : ''), 'merged', { pr: `https://github.com/koderi-dp/catalo/pull/${i + 1}`, updatedAt: iso(NOW - 10 * 24 * 60 * MIN), note: 'imported from docs/backlog.md' }))
-  const week = Array.from({ length: 5 }, (_, i) => item(`p${29 + i}`, ['AstroVista theme preset', 'Verification speedups', 'Category picker and article page', 'Page document v2: four margins', 'Slot styles and image fit'][i]!, 'merged', { pr: `https://github.com/koderi-dp/catalo/pull/${29 + i}`, updatedAt: iso(NOW - (5 - i) * 24 * 60 * MIN) }))
+  const imported = Array.from({ length: 28 }, (_, i) => item(`p${i + 1}`, ['Foundation plan, Tasks 1–9', 'Plan 1b: tenant isolation', 'Catalog UI fixes (Hearth review)', 'Hybrid editor, Phase B: document v2'][i % 4] + (i > 3 ? ` · part ${Math.floor(i / 4) + 1}` : ''), 'merged', { pr: `https://github.com/example-org/larder/pull/${i + 1}`, updatedAt: iso(NOW - 10 * 24 * 60 * MIN), note: 'imported from docs/backlog.md' }))
+  const week = Array.from({ length: 5 }, (_, i) => item(`p${29 + i}`, ['AstroVista theme preset', 'Verification speedups', 'Category picker and article page', 'Page document v2: four margins', 'Slot styles and image fit'][i]!, 'merged', { pr: `https://github.com/example-org/larder/pull/${29 + i}`, updatedAt: iso(NOW - (5 - i) * 24 * 60 * MIN) }))
   return [...imported, ...week, ...ready, ...inbox, ...parked]
 }
 
@@ -71,7 +71,7 @@ const base = (items: Item[], over: Partial<PanelInput> = {}): PanelInput => ({
   surface: 'desktop',
   hasSvg: true,
   bodyColumns: 65,
-  project: 'catalo',
+  project: 'larder',
   branch: 'main',
   panel: PANEL,
   children: [],
@@ -93,9 +93,9 @@ const base = (items: Item[], over: Partial<PanelInput> = {}): PanelInput => ({
   ...over,
 })
 
-const staleSibling: Sibling = { sessionId: 'other', title: 'catalo', cwd: '/home/user/catalo-2', branch: 'main', seenAt: iso(NOW - 12 * MIN), agents: [], signals: [], isStale: true }
+const staleSibling: Sibling = { sessionId: 'other', title: 'larder', cwd: '/home/user/larder-2', branch: 'main', seenAt: iso(NOW - 12 * MIN), agents: [], signals: [], isStale: true }
 
-export const idle = (): PanelInput => base(catalo(), { siblings: [staleSibling] })
+export const idle = (): PanelInput => base(sampleQueue(), { siblings: [staleSibling] })
 
 const P72 = item('p72', 'Grid track interaction', 'building', { spec: 'docs/pipeline/specs/p72.md', branch: 'feat/p72', size: 'L', updatedAt: iso(NOW - 15 * MIN) })
 const TASKS: Ledger['tasks'] = [
@@ -106,7 +106,7 @@ const TASKS: Ledger['tasks'] = [
 const ledgerOf = (tasks: Ledger['tasks'], resume: Ledger['resume']): Ledger => ({ item: 'p72', plan: 'docs/pipeline/plans/p72.md', branch: 'feat/p72', worktree: '.claude/worktrees/p72', resume, tasks, rulings: [], blockers: [], final: null, tokens: 2_500_000 })
 
 /** The building queue: p72 in flight before the same 27 inbox items and the parked ones, the ready one taken. */
-const building = (): Item[] => [...catalo().filter(i => i.status !== 'ready'), P72].sort((a, b) => (a.status === 'merged' ? 0 : 1) - (b.status === 'merged' ? 0 : 1))
+const building = (): Item[] => [...sampleQueue().filter(i => i.status !== 'ready'), P72].sort((a, b) => (a.status === 'merged' ? 0 : 1) - (b.status === 'merged' ? 0 : 1))
 
 export const running = (): PanelInput => {
   const started = NOW - 2 * MIN - 36_000
@@ -148,14 +148,14 @@ export const fixRound = (): PanelInput => {
   })
 }
 
-export const queue = (): PanelInput => base(catalo(), { panel: { ...PANEL, view: 'queue', filter: 'inbox', search: 'grid', expanded: 'p44' } })
+export const queue = (): PanelInput => base(sampleQueue(), { panel: { ...PANEL, view: 'queue', filter: 'inbox', search: 'grid', expanded: 'p44' } })
 
-export const history = (): PanelInput => base(catalo(), { panel: { ...PANEL, view: 'history' } })
+export const history = (): PanelInput => base(sampleQueue(), { panel: { ...PANEL, view: 'history' } })
 
 /** The running state with the Recent activity list open. */
 export const runningOpen = (): PanelInput => {
   const d = running()
-  const busy: Sibling = { sessionId: 'busy', title: 'p12 · App themes per user', cwd: '/home/user/catalo-3', branch: 'feat/p12', item: 'p12', seenAt: iso(NOW - 5000), agents: [], signals: [], isStale: false }
+  const busy: Sibling = { sessionId: 'busy', title: 'p12 · App themes per user', cwd: '/home/user/larder-3', branch: 'feat/p12', item: 'p12', seenAt: iso(NOW - 5000), agents: [], signals: [], isStale: false }
   const idleOne: Sibling = { ...staleSibling, sessionId: 'i1', isStale: false, seenAt: iso(NOW - 5000) }
   return { ...d, siblings: [busy, idleOne, { ...idleOne, sessionId: 'i2' }], panel: { ...d.panel, isActivityOpen: true } }
 }

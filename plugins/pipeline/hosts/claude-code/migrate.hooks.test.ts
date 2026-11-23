@@ -63,7 +63,7 @@ type Draft = {
 }
 
 const CLAUDE_MD = [
-  '# catalo-like',
+  '# Larder',
   '',
   'The work queue is [docs/backlog.md](docs/backlog.md); the dispatch rules follow.',
   '',
@@ -114,7 +114,7 @@ const SDD = `${MAIN}/.superpowers/sdd`
 const TOP_LEDGER = '# Progress ledger\n\nCurrent entries are in the increment folders; the archive holds the rest.\n'
 const ARCHIVE = '# Progress archive\n\n## Historical status — catalog builder core merged — 2026-11-01\n'
 
-/** The catalo-like tree: CLAUDE.md links the queue, package.json has scripts, one merged and one open increment, two branches. */
+/** The project tree: CLAUDE.md links the queue, package.json has scripts, one merged and one open increment, two branches. */
 const TREE: Record<string, string> = {
   [`${MAIN}/CLAUDE.md`]: CLAUDE_MD,
   [`${MAIN}/package.json`]: JSON.stringify({ name: 'app', scripts: { 'check:fast': 'tsc', test: 'vitest run', check: 'npm run lint && npm run test' } }, null, 2),

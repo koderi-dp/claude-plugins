@@ -127,7 +127,7 @@ export function findSources(listing: string[], claudeMd: string): string[] {
   return out
 }
 
-// ---------- the catalo backlog shape ----------
+// ---------- a backlog kept in tables and checkboxes ----------
 
 const PR_LINK = /https?:\/\/\S+?\/pull\/\d+/
 const DEFERRED = /\b(later|V1|phase 2)\b/i
@@ -312,7 +312,7 @@ export function decisionsFromBacklogMd(text: string, file: string): MigrateRule[
   return out
 }
 
-// ---------- the openhuddle MVP queue shape ----------
+// ---------- an MVP queue kept in prose, in waves ----------
 
 /** The top-level parenthesised groups of a text, as [start, end) offsets. */
 function parenGroups(s: string): [number, number][] {

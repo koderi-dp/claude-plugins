@@ -164,7 +164,7 @@ export const kitSheet = (W: number): string => {
 
   out.push(label('Session rows · live, idle, stale'))
   out.push(block(W, SESSION_ROW_H, sessionRowSvg(W, { title: 'p12 · App themes per user', meta: 'p12 · 2 agents', isLive: true, isStale: false })))
-  out.push(block(W, SESSION_ROW_H, sessionRowSvg(W, { title: 'catalo', meta: 'idle', isLive: false, isStale: false, isDim: true })))
+  out.push(block(W, SESSION_ROW_H, sessionRowSvg(W, { title: 'larder', meta: 'idle', isLive: false, isStale: false, isDim: true })))
   out.push(block(W, SESSION_ROW_H, sessionRowSvg(W, { title: 'p14 · Export', meta: 'p14 · stale', isLive: true, isStale: true, isLast: true })))
 
   out.push(label('Task rows · done, current with an agent, current in a fix round, blocked, a second one in progress, pending'))

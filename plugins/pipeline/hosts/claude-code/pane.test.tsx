@@ -634,7 +634,7 @@ test('desktop Overview: other sessions are drawn rows with the title cut, the it
   const sessions = {
     'old-self': { title: 'p1 · grid-track-sizes — Grid row and column sizes', cwd: MAIN, item: 'p1', startedAt: new Date(NOW - 20 * MIN).toISOString(), seenAt: new Date(NOW - 30_000).toISOString(), agents: [], signals: [] },
     busy: { title: 'p12 · A very long title of a session that will not fit in the row of the panel at this width', cwd: '/p/other', item: 'p12', startedAt: new Date(NOW - 20 * MIN).toISOString(), seenAt: new Date(NOW - 20_000).toISOString(), agents: [agent], signals: [] },
-    gone: { title: 'catalo', cwd: '/p/third', startedAt: new Date(NOW - 60 * MIN).toISOString(), seenAt: new Date(NOW - 10 * MIN).toISOString(), agents: [], signals: [] },
+    gone: { title: 'larder', cwd: '/p/third', startedAt: new Date(NOW - 60 * MIN).toISOString(), seenAt: new Date(NOW - 10 * MIN).toISOString(), agents: [], signals: [] },
   }
   world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE, [`${MAIN}/.git/pipeline-live.json`]: JSON.stringify({ sessions }) })
   await start($ as never)
@@ -656,7 +656,7 @@ test('desktop Overview: other sessions are drawn rows with the title cut, the it
 })
 
 test('desktop Overview: an idle sibling that is not stale is dim too, and the text block names it the same way', async ($, on) => {
-  const sessions = { other: { title: 'openhuddle', cwd: '/p/other', startedAt: new Date(NOW - 20 * MIN).toISOString(), seenAt: new Date(NOW - 20_000).toISOString(), agents: [], signals: [] } }
+  const sessions = { other: { title: 'trellis', cwd: '/p/other', startedAt: new Date(NOW - 20 * MIN).toISOString(), seenAt: new Date(NOW - 20_000).toISOString(), agents: [], signals: [] } }
   world(on, { [CONFIG]: VALID_CONFIG, [BACKLOG]: IDLE, [`${MAIN}/.git/pipeline-live.json`]: JSON.stringify({ sessions }) })
   await start($ as never)
   const ui = await mount($ as never, 'desktop', 40)
@@ -665,7 +665,7 @@ test('desktop Overview: an idle sibling that is not stale is dim too, and the te
   expect((await alts(ui)).some(t => t.startsWith('idle session'))).toBe(false)
   await ui.unmount()
   const text = await mount($ as never, 'terminal')
-  const line = await text.find({ type: 'Text', text: 'idle session · openhuddle' })
+  const line = await text.find({ type: 'Text', text: 'idle session · trellis' })
   expect(line?.props['dimColor']).toBe(true)
   await text.unmount()
 })

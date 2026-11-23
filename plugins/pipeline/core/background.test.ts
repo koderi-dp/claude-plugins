@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { bgClock, bgEnd, bgReconcile, bgStart, checkPrompt, isDescribed, isLive, labelOf, notificationOf, shortPaths, tidyCommand } from './background'
 
 test('0.7.1: a call without a description gets a short label from its command: a waiting loop is named, paths are shortened', () => {
-  const loop = 'until grep -qE "Error|entry chunk|gzip" /tmp/claude-1000/-home-ubuntu-openhuddle/c1313393-1f20/tasks/bbx5qjixx.output; do sleep 5; done; tail -c 1200 /tmp/claude-1000/-home-ubuntu-openhuddle/c1313393-1f20/tasks/bbx5qjixx.output'
+  const loop = 'until grep -qE "Error|entry chunk|gzip" /tmp/claude-1000/-home-ubuntu-trellis/c1313393-1f20/tasks/bbx5qjixx.output; do sleep 5; done; tail -c 1200 /tmp/claude-1000/-home-ubuntu-trellis/c1313393-1f20/tasks/bbx5qjixx.output'
   expect(labelOf(loop)).toBe('Waits in a loop until: grep -qE "Error|entry chunk|gzip" …/bbx5qjixx.output')
   expect(labelOf('while ! curl -s localhost:3000 > /dev/null; do sleep 1; done')).toBe('Waits in a loop while: ! curl -s localhost:3000 > /dev/null')
   expect(labelOf('env PORT=1 node C:/Source/projects/app/dist/server.js --watch')).toBe('node …/server.js --watch')

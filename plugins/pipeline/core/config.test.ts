@@ -72,7 +72,7 @@ test('normalizeConfig on something that is not an object answers the defaults an
   expect(normalizeConfig(null).problems).toEqual(['config: expected an object, got null'])
 })
 
-const CATALO = {
+const NPM_PROJECT = {
   scripts: {
     build: 'turbo run build',
     typecheck: 'turbo run typecheck',
@@ -92,8 +92,8 @@ const CATALO = {
   ],
 }
 
-test('draftConfig maps catalo-like scripts and prose to the three tiers, risky paths and stop', () => {
-  const { config, sources } = draftConfig(CATALO)
+test('draftConfig maps npm scripts and prose to the three tiers, risky paths and stop', () => {
+  const { config, sources } = draftConfig(NPM_PROJECT)
   expect(config.checks.fast).toBe('npm run check:fast')
   expect(config.checks.task).toBe('npm run test')
   expect(config.checks.gate).toBe('npm run build && npm run typecheck && npm run test && npm run lint')
@@ -111,7 +111,7 @@ test('draftConfig maps catalo-like scripts and prose to the three tiers, risky p
   expect(sources['mainBranch']).toBe('default')
 })
 
-const OPENHUDDLE = {
+const MAKE_PROJECT = {
   scripts: {},
   makeTargets: ['build', 'test', 'check', 'gen-check', 'lint'],
   ci: 'jobs:\n  check:\n    steps:\n      - run: make check\n',
@@ -124,8 +124,8 @@ const OPENHUDDLE = {
   ],
 }
 
-test('draftConfig maps openhuddle-like make targets, auto-merge and the stop list', () => {
-  const { config, sources } = draftConfig(OPENHUDDLE)
+test('draftConfig maps make targets, auto-merge and the stop list', () => {
+  const { config, sources } = draftConfig(MAKE_PROJECT)
   expect(config.checks.fast).toBeUndefined()
   expect(config.checks.task).toBe('make test')
   expect(config.checks.gate).toBe('make check')
@@ -164,7 +164,7 @@ test('draftConfig prefers a script named check over the combination and reads a 
   expect(config.stop).toEqual(['a destructive data change is needed'])
 })
 
-// The catalo dry run (docs/superpowers/specs/2026-11-05-pipeline-dry-run.md): one test per mismatch.
+// A dry run on a real project's documents: one test per mismatch found.
 
 test('mismatch 7: riskyPaths keeps only tokens whose first segment is a top-level directory, with a file segment dropped', () => {
   const { config, sources } = draftConfig({

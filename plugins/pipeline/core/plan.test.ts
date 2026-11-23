@@ -17,7 +17,7 @@ The XLSX format.
 - Files: \`apps/web/migrations/0042_export.sql\`, apps/web/src/server/export/job.server.ts
 - Pinned: \`createExportJob(db, organizationId, input): Promise<ExportJob>\`
 - Needs: none
-- Check: npm test -w @catalo/web -- export
+- Check: npm test -w @larder/web -- export
 - Commit: feat(export): job schema
 - Focus: the organization filter on every read
 
@@ -69,7 +69,7 @@ test('parsePlan reads the title, the sections and each task with its fields, bol
   expect(plan.constraints).toBe('Kysely only. Every query filters by organization.')
   expect(plan.parked).toBe('The XLSX format.')
   expect(plan.tasks.map(t => [t.n, t.title])).toEqual([[1, 'Export job schema'], [2, 'Export route']])
-  expect(plan.tasks[0]).toMatchObject({ files: ['apps/web/migrations/0042_export.sql', 'apps/web/src/server/export/job.server.ts'], needs: [], check: 'npm test -w @catalo/web -- export', commit: 'feat(export): job schema', focus: 'the organization filter on every read' })
+  expect(plan.tasks[0]).toMatchObject({ files: ['apps/web/migrations/0042_export.sql', 'apps/web/src/server/export/job.server.ts'], needs: [], check: 'npm test -w @larder/web -- export', commit: 'feat(export): job schema', focus: 'the organization filter on every read' })
   expect(plan.tasks[0]!.pinned).toContain('createExportJob')
   expect(plan.tasks[0]!.body).toContain('Write the failing test')
   expect(plan.tasks[0]!.body).not.toContain('Task 2')
@@ -132,7 +132,7 @@ test('an implementer brief carries the task, the boundaries, the task check, the
   expect(b.text).toContain('- You own: apps/web/migrations/0042_export.sql, apps/web/src/server/export/job.server.ts')
   // A file both tasks own is not forbidden to the first.
   expect(b.text).toContain('- Not yours: apps/web/src/routes/export.tsx\n')
-  expect(b.text).toContain('`npm test -w @catalo/web -- export` once')
+  expect(b.text).toContain('`npm test -w @larder/web -- export` once')
   expect(b.text).toContain('message `feat(export): job schema`')
   expect(b.text).toContain('2. No raw SQL in TypeScript.')
   expect(b.text).toContain('minor: log wording')

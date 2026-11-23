@@ -348,14 +348,14 @@ test('finishedOfTask: only the finished agents of the current task, named for it
 })
 
 test('siblingLabel: a session with an item or agents by its title, item and agents; one with neither reads idle session · <title>, the folder name when the title is empty', () => {
-  const sib = (over: Partial<Sibling>): Sibling => ({ sessionId: 's', title: 'catalo', cwd: '/p/catalo', seenAt: '2026-11-05T11:00:00Z', agents: [], signals: [], isStale: false, ...over })
+  const sib = (over: Partial<Sibling>): Sibling => ({ sessionId: 's', title: 'larder', cwd: '/p/larder', seenAt: '2026-11-05T11:00:00Z', agents: [], signals: [], isStale: false, ...over })
   const running = agentRun('Implement task 2', NOW, 'running')
   expect(siblingLabel(sib({ title: 'p12 · Export', item: 'p12', agents: [running, agentRun('Review task 1', NOW)] }))).toEqual({ title: 'p12 · Export', meta: 'p12 · 1 agent', isIdle: false })
-  expect(siblingLabel(sib({ item: 'p3', isStale: true }))).toEqual({ title: 'catalo', meta: 'p3 · 0 agents · stale', isIdle: false })
-  expect(siblingLabel(sib({ agents: [agentRun('Explore', NOW)] }))).toEqual({ title: 'catalo', meta: '0 agents', isIdle: false })
-  expect(siblingLabel(sib({}))).toEqual({ title: 'idle session · catalo', meta: '', isIdle: true })
-  expect(siblingLabel(sib({ isStale: true }))).toEqual({ title: 'idle session · catalo', meta: 'stale', isIdle: true })
-  expect(siblingLabel(sib({ title: '', cwd: 'C:\\work\\openhuddle\\' }))).toEqual({ title: 'idle session · openhuddle', meta: '', isIdle: true })
+  expect(siblingLabel(sib({ item: 'p3', isStale: true }))).toEqual({ title: 'larder', meta: 'p3 · 0 agents · stale', isIdle: false })
+  expect(siblingLabel(sib({ agents: [agentRun('Explore', NOW)] }))).toEqual({ title: 'larder', meta: '0 agents', isIdle: false })
+  expect(siblingLabel(sib({}))).toEqual({ title: 'idle session · larder', meta: '', isIdle: true })
+  expect(siblingLabel(sib({ isStale: true }))).toEqual({ title: 'idle session · larder', meta: 'stale', isIdle: true })
+  expect(siblingLabel(sib({ title: '', cwd: 'C:\\work\\trellis\\' }))).toEqual({ title: 'idle session · trellis', meta: '', isIdle: true })
 })
 
 import type { TaskRecord } from '../types'

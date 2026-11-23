@@ -417,7 +417,7 @@ test('I4: get names a planning item as active, with resume null until its ledger
 
 // ---------- 0.2.2: a lean get ----------
 
-/** A backlog the size of catalo's at its first run: 71 items with real-length titles, sources and notes. */
+/** A backlog the size of a real project at its first run: 71 items with real-length titles, sources and notes. */
 function bigBacklog(): { backlog: string; files: Record<string, string> } {
   const statuses = ['merged', 'merged', 'merged', 'building', ...Array(14).fill('ready'), ...Array(45).fill('inbox'), 'blocked', 'blocked', ...Array(6).fill('parked')] as string[]
   const files: Record<string, string> = {}
@@ -427,16 +427,16 @@ function bigBacklog(): { backlog: string; files: Record<string, string> } {
     if (spec) files[`${MAIN}/${spec}`] = `## What\n\n${'x '.repeat(200)}\n\n## Open\n\n_Nothing._\n`
     return {
       id,
-      title: `${id}-slug — A catalog feature with a title as long as catalo's (${n})`,
+      title: `${id}-slug — A feature with a title as long as a real one (${n})`,
       status,
       size: (['S', 'M', 'L'] as const)[n % 3],
       needs: n > 20 && n % 5 === 0 ? [`p${n - 1}`] : [],
       source: `user, 2026-11-0${(n % 9) + 1}: "${'the person asked for this in a long sentence that the queue quoted verbatim '.repeat(2)}"`,
-      note: `${'A scope note as catalo writes them: what changes, which files, what stays the same, and why it matters. '.repeat(5)}`,
+      note: `${'A scope note as a project writes them: what changes, which files, what stays the same, and why it matters. '.repeat(5)}`,
       spec,
       plan: status === 'building' || status === 'merged' ? `docs/pipeline/plans/${id}.md` : null,
       branch: status === 'building' || status === 'merged' ? `feat/${id}` : null,
-      pr: status === 'merged' ? `https://github.com/koderi-dp/catalo/pull/${n}` : null,
+      pr: status === 'merged' ? `https://github.com/example-org/larder/pull/${n}` : null,
       ledger: status === 'building' ? `docs/pipeline/ledgers/${id}.json` : null,
       updatedAt: '2026-11-05T09:00:00.000Z',
     }
