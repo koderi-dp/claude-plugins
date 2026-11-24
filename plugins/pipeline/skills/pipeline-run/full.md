@@ -49,6 +49,7 @@ Every turn of yours re-reads this whole conversation, so the number of turns is 
 - Files: <path>, <path>
 - Pinned: <names and signatures other tasks rely on, or none>
 - Needs: <earlier task numbers, or none>
+- Covers: <the numbers of the spec's acceptance items this task delivers, counted from 1>
 - Check: <the command that proves this task; default checks.task>
 - Commit: <the commit message>
 - Focus: <what a reviewer should doubt>
@@ -56,4 +57,4 @@ Every turn of yours re-reads this whole conversation, so the number of turns is 
 <the steps: the failing test first, then what to build, exact names, the done line>
 ```
 
-`Files` is required and is the task's boundary. A project file `docs/pipeline/templates/<implementer|fix|review|final>.md` replaces a built-in brief. What you write by hand (the plan, a spec) goes in the worktree; the tool's files live in the main checkout and are committed on `mainBranch` at Close. No model identifier goes into commits, PR text or comments.
+`Files` is required and is the task's boundary. `Covers` ties the plan to the spec: every line of the spec's Acceptance list is covered by a task or named under `## Parked` as `Acceptance <n>` with the reason, else `plan` refuses the plan and says which line is left; the tool gives each implementer and reviewer the lines its task covers. A manual check the spec asks for (in the running app, on a device) is a line like any other: give it to the task that can do it. A project file `docs/pipeline/templates/<implementer|fix|review|final>.md` replaces a built-in brief. What you write by hand (the plan, a spec) goes in the worktree; the tool's files live in the main checkout and are committed on `mainBranch` at Close. No model identifier goes into commits, PR text or comments.

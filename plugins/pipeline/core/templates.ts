@@ -22,6 +22,11 @@ You are the implementer, on the item's branch. ${WHERE} Never switch branches, n
 
 {{task}}
 
+## Delivers
+
+The acceptance items of the spec this task must make true:
+{{covers}}
+
 ## Boundaries
 
 - You own: {{owned}}
@@ -41,6 +46,11 @@ You are the implementer, on the item's branch. ${WHERE} Never switch branches, n
 ## Project rules
 
 {{rules}}
+
+## Project principles
+
+How this project wants its code; keep to each:
+{{principles}}
 
 Known about working in this repository:
 {{facts}}
@@ -91,6 +101,8 @@ You are the independent reviewer. ${WHERE_READ} Read-only: no edit and no commit
 - The implementer's brief \`{{brief}}\` and report \`{{implReport}}\`. Assume the report is optimistic.
 - Risky paths this diff touches: {{risky}}
 - Scope of this review: {{findings}}
+- Acceptance items this task claims to deliver; hold the diff to each:
+{{covers}}
 
 ## Focus
 
@@ -109,6 +121,11 @@ Run the ones that apply and say "not applicable: <reason>" for the rest. Stop pr
 ## Project rules
 
 {{rules}}
+
+## Project principles
+
+A finding that breaks one names it:
+{{principles}}
 
 ## Hand back
 
@@ -140,6 +157,8 @@ Parked on purpose: {{parked}}
 
 {{acceptance}}
 
+Which task claims each line: {{coverage}}
+
 2. **Worst case, traced.** Name the worst thing this change can do in production (lost data, a wrong amount, an open door, a stuck job) and follow it from input to effect; say what stops it, or that nothing does.
 3. **Seams.** Tasks were built one at a time: check a name one task produces and another consumes, a migration and its reader, an error one layer throws and the next swallows.
 4. **Gate.** Run \`{{checkGate}}\` in the scratch copy.
@@ -147,6 +166,11 @@ Parked on purpose: {{parked}}
 ## Project rules
 
 {{rules}}
+
+## Project principles
+
+A finding that breaks one names it:
+{{principles}}
 
 ## Hand back
 
@@ -171,6 +195,7 @@ export const PLAN_FORMAT = `# <id>: <title>
 - Files: <path>, <path>            (the files this task owns; required)
 - Pinned: <names and signatures other tasks rely on, or none>
 - Needs: <earlier task numbers, or none>
+- Covers: <the numbers of the acceptance items of the spec this task delivers, counted from 1>
 - Check: <the command that proves this task; default checks.task>
 - Commit: <the commit message>
 - Focus: <what a reviewer should doubt>

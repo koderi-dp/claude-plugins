@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { DEFAULTS } from './config'
 import { emptyLedger, mergeLedger } from './ledger'
-import { briefPaths, checkPlan, commitArgs, fill, parsePlan, renderBrief, riskyMatches, rulesGroup, section, splitAttribution } from './plan'
+import { acceptanceItems, briefPaths, checkCoverage, checkPlan, commitArgs, fill, parsePlan, principlesOf, renderBrief, riskyMatches, rulesGroup, section, splitAttribution } from './plan'
 import { PLAN_FORMAT, TEMPLATES } from './templates'
 
 const PLAN = `# p12: CSV export
@@ -182,7 +182,7 @@ test('renderBrief refuses what it cannot fill', () => {
 test('briefPaths takes the folder; a brief rendered with places names those paths and not docs/pipeline', () => {
   expect(briefPaths('12', 'implementer', 2, 1, '.pipeline/12')).toEqual({ brief: '.pipeline/12/task-2-brief.md', report: '.pipeline/12/task-2-report.md' })
   expect(briefPaths('p1', 'final', 1, 1)).toEqual({ brief: 'docs/pipeline/ledgers/p1/final-brief.md', report: 'docs/pipeline/ledgers/p1/final-report.md' })
-  const out = renderBrief({ ...base(), kind: 'implementer', task: 1, item: '12', places: { specRel: '.pipeline/12/spec.md', planRel: '.pipeline/12/plan.md', recordsDir: '.pipeline', briefDir: '.pipeline/12' } })
+  const out = renderBrief({ ...base(), principlesMd: '- Keep it small.', kind: 'implementer', task: 1, item: '12', places: { specRel: '.pipeline/12/spec.md', planRel: '.pipeline/12/plan.md', recordsDir: '.pipeline', briefDir: '.pipeline/12' } })
   expect(out.brief).toBe('.pipeline/12/task-1-brief.md')
   expect(out.text).toContain('.pipeline/12/plan.md')
   expect(out.text).not.toContain('docs/pipeline')
@@ -229,4 +229,89 @@ test('attribution given as a sentence about the lines never reaches a commit as 
   // A label with a colon is not a git trailer: a trailer's key has a hyphen (Co-Authored-By, Signed-off-by).
   expect(splitAttribution('Note: built by hand').trailers).toEqual([])
   expect(splitAttribution('Signed-off-by: A B <a@b.c>').trailers).toEqual(['Signed-off-by: A B <a@b.c>'])
+})
+
+// ---------- 0.9.0: acceptance coverage and project principles ----------
+
+const COVERED = PLAN.replace('- Needs: none\n', '- Needs: none\n- Covers: 1\n').replace('- Needs: 1\n', '- Needs: 1\n- **Covers:** 1, 2\n')
+
+test('0.9.0: acceptanceItems numbers the lines of the Acceptance section, with a wrapped line joined to its item', () => {
+  expect(acceptanceItems(SPEC)).toEqual(['An admin downloads a CSV of the catalog.', "Another organization's rows never appear."])
+  expect(acceptanceItems('## Acceptance\n\n1. First,\n   on two lines.\n- [x] Second.\n* Third\n\nA closing sentence.\n\n## Open\n- not one')).toEqual(['First, on two lines.', 'Second.', 'Third'])
+  expect(acceptanceItems('## What\n\nNo list here.')).toEqual([])
+})
+
+test('0.9.0: a task names the acceptance items it delivers on a Covers line', () => {
+  expect(parsePlan(COVERED).tasks.map(t => t.covers)).toEqual([[1], [1, 2]])
+  expect(parsePlan(PLAN).tasks.map(t => t.covers)).toEqual([[], []])
+})
+
+test('0.9.0: checkCoverage names each acceptance item no task covers, unless the plan parks it, and a number the spec does not have', () => {
+  const items = acceptanceItems(SPEC)
+  expect(checkCoverage(parsePlan(COVERED), items)).toEqual([])
+  // No Covers line at all: every item is uncovered.
+  expect(checkCoverage(parsePlan(PLAN), items)).toEqual([
+    'acceptance 1 is covered by no task: "An admin downloads a CSV of the catalog."',
+    'acceptance 2 is covered by no task: "Another organization\'s rows never appear."',
+  ])
+  // An item the plan leaves out on purpose is named under Parked.
+  const parked = PLAN.replace('The XLSX format.', 'The XLSX format. Acceptance 2: waits for the tenant work.').replace('- Needs: none\n', '- Needs: none\n- Covers: 1\n')
+  expect(checkCoverage(parsePlan(parked), items)).toEqual([])
+  expect(checkCoverage(parsePlan(COVERED.replace('- Covers: 1\n', '- Covers: 1, 5\n')), items)).toEqual(['task 1 covers acceptance 5, and the spec has 2'])
+  // A spec with no acceptance list has nothing to cover.
+  expect(checkCoverage(parsePlan(PLAN), [])).toEqual([])
+  // A long item is cut in the message.
+  expect(checkCoverage(parsePlan(PLAN), ['x'.repeat(200)])[0]!.length).toBeLessThan(140)
+})
+
+test('0.9.0: the implementer and the reviewer read the acceptance items their task delivers; the final review reads which task claims each', () => {
+  const plan = parsePlan(COVERED)
+  const impl = renderBrief({ ...base(), plan, kind: 'implementer', task: 2 }).text
+  expect(impl).toContain("## Delivers\n\nThe acceptance items of the spec this task must make true:\n1. An admin downloads a CSV of the catalog.\n2. Another organization's rows never appear.\n")
+  const review = renderBrief({ ...base(), plan, kind: 'review', task: 1, commits: 'a1..b2' }).text
+  expect(review).toContain('- Acceptance items this task claims to deliver; hold the diff to each:\n1. An admin downloads a CSV of the catalog.\n')
+  expect(review).not.toContain("2. Another organization's rows")
+  const final = renderBrief({ ...base(), plan, kind: 'final', task: 2 }).text
+  expect(final).toContain('Which task claims each line: 1 → tasks 1, 2 · 2 → task 2')
+  // A plan written before Covers lines says so, and nothing is invented.
+  expect(renderBrief({ ...base(), kind: 'implementer', task: 1 }).text).toContain('must make true:\nnone named in the plan\n')
+  expect(renderBrief({ ...base(), kind: 'final', task: 2 }).text).toContain('Which task claims each line: the plan names none')
+  expect(renderBrief({ ...base(), plan: parsePlan(COVERED.replace('The XLSX format.', 'Acceptance 2, for now.').replace('- **Covers:** 1, 2\n', '')), kind: 'final', task: 2 }).text).toContain('Which task claims each line: 1 → task 1 · 2 → parked')
+})
+
+const PRINCIPLES = `# Principles
+
+How this project wants its code.
+
+<!-- Examples:
+- An example that is not a principle.
+-->
+
+- No new dependency without asking.
+1. Every calculation with money has a test.
+`
+
+test('0.9.0: principlesOf keeps the list lines, drops comments and prose, and cuts a long list with a pointer to the file', () => {
+  expect(principlesOf(PRINCIPLES)).toBe('- No new dependency without asking.\n1. Every calculation with money has a test.')
+  expect(principlesOf('')).toBe('none written (docs/pipeline/principles.md)')
+  expect(principlesOf('# Principles\n\n<!--\n- only an example\n-->\n')).toBe('none written (docs/pipeline/principles.md)')
+  const long = Array.from({ length: 20 }, (_, i) => `- Principle ${i + 1}.`).join('\n')
+  const cut = principlesOf(long).split('\n')
+  expect(cut).toHaveLength(16)
+  expect(cut[14]).toBe('- Principle 15.')
+  expect(cut[15]).toBe('… and 5 more in docs/pipeline/principles.md')
+})
+
+test('0.9.0: the implementer, the reviewer and the final reviewer read the principles; a fix round does not', () => {
+  const withP = { ...base(), principlesMd: PRINCIPLES }
+  const list = '- No new dependency without asking.\n1. Every calculation with money has a test.'
+  expect(renderBrief({ ...withP, kind: 'implementer', task: 1 }).text).toContain(`## Project principles\n\nHow this project wants its code; keep to each:\n${list}\n`)
+  expect(renderBrief({ ...withP, kind: 'review', task: 1, commits: 'a1..b2' }).text).toContain(`## Project principles\n\nA finding that breaks one names it:\n${list}\n`)
+  expect(renderBrief({ ...withP, kind: 'final', task: 2 }).text).toContain(`## Project principles\n\nA finding that breaks one names it:\n${list}\n`)
+  expect(renderBrief({ ...withP, kind: 'fix', task: 1, findings: '- x' }).text).not.toContain('Project principles')
+  expect(renderBrief({ ...base(), kind: 'implementer', task: 1 }).text).toContain('keep to each:\nnone written (docs/pipeline/principles.md)\n')
+})
+
+test('0.9.0: the plan format names the Covers line', () => {
+  expect(PLAN_FORMAT).toContain('- Covers: <the numbers of the acceptance items of the spec this task delivers, counted from 1>')
 })

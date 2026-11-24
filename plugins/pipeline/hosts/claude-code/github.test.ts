@@ -306,12 +306,12 @@ test('init with queue github writes the config, creates the labels, ignores .pip
   const { files, writes } = world(on, { [EXCLUDE]: '# git ls-files --others --exclude-from=.git/info/exclude\n' })
   const gh: GhState = { me: 'me', issues: [] }
   ghWorld(on, gh)
-  expect(text(await call($, { action: 'init', queue: 'github' }))).toBe('wrote docs/pipeline/config.json · labels pipeline, pipeline:building, pipeline:blocked, pipeline:needs-info · commit docs/pipeline/config.json on main')
+  expect(text(await call($, { action: 'init', queue: 'github' }))).toBe('wrote docs/pipeline/config.json, docs/pipeline/principles.md · labels pipeline, pipeline:building, pipeline:blocked, pipeline:needs-info · commit docs/pipeline/config.json and docs/pipeline/principles.md on main')
   expect(JSON.parse(files.get(CONFIG)!)).toMatchObject({ queue: 'github', queueLabel: 'pipeline', mainBranch: 'main' })
   expect(gh.labels).toEqual(['pipeline', 'pipeline:building', 'pipeline:blocked', 'pipeline:needs-info'])
   expect(files.get(EXCLUDE)!.split('\n')).toContain('.pipeline/')
   expect(files.get(`${MAIN}/.gitignore`)).toBe('.claude/worktrees/\n')
-  expect(writes.filter(w => w.includes('/docs/pipeline/'))).toEqual([CONFIG])
+  expect(writes.filter(w => w.includes('/docs/pipeline/'))).toEqual([CONFIG, `${DIR}/principles.md`])
   // Again: the config says github, nothing is written twice and the exclude line stays one.
   await call($, { action: 'init' })
   expect(files.get(EXCLUDE)!.split('\n').filter(l => l === '.pipeline/').length).toBe(1)
@@ -382,6 +382,7 @@ Kysely only.
 
 ### Task 1: Schema
 - Files: src/schema.ts
+- Covers: 1
 
 Write the failing test first.
 
@@ -540,7 +541,7 @@ test('plan reads the worktree plan, seeds the ledger under .git/pipeline and com
   expect(commits(runs)).toEqual([])
 })
 
-test('a brief is written under .pipeline/<id>/ and names no docs/pipeline path except rules', async ($, on) => {
+test('a brief is written under .pipeline/<id>/ and names no docs/pipeline path except the rules and the principles', async ($, on) => {
   const { files } = world(on, { [CONFIG]: CONFIG_GH, [`${DIR}/rules.md`]: RULES })
   runWorld(on)
   await call($, { action: 'begin', item: '2' })
@@ -552,7 +553,7 @@ test('a brief is written under .pipeline/<id>/ and names no docs/pipeline path e
   const brief = files.get(`${WT2}/.pipeline/2/task-2-brief.md`)!
   expect(brief).toContain('No raw SQL.')
   expect(brief).toContain(`${WT2}/.pipeline/2/task-2-report.md`)
-  expect(brief.split('\n').filter(l => l.includes('docs/pipeline') && !l.includes('rules'))).toEqual([])
+  expect(brief.split('\n').filter(l => l.includes('docs/pipeline') && !l.includes('rules') && !l.includes('principles.md'))).toEqual([])
   const final = text(await call($, { action: 'brief', item: '2', kind: 'final' }))
   expect(final).toContain(`Read ${WT2}/.pipeline/2/final-brief.md`)
   expect(files.get(`${WT2}/.pipeline/2/final-brief.md`)).toContain('a csv downloads')

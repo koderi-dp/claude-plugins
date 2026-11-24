@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { isCall, restGithub } from '../../core/fixtures/github'
+import { principlesOf } from '../../core/plan'
 
 const TOOL = 'mcp__pipeline__pipeline'
 const MAIN = '/p/main'
@@ -256,15 +257,15 @@ test('status renders the sections and status <id> renders the ledger', async ($,
 test('init writes the defaults and an empty backlog, and a second init changes nothing', async ($, on) => {
   const { files, writes } = world(on)
   const r = text(await call($, { action: 'init' }))
-  expect(r).toBe('wrote docs/pipeline/config.json, docs/pipeline/backlog.json, docs/pipeline/BACKLOG.md\ncommit docs/pipeline/ on main now: git add docs/pipeline && git commit')
-  expect(writes).toEqual([CONFIG, BACKLOG, BACKLOG_MD, GITIGNORE])
+  expect(r).toBe('wrote docs/pipeline/config.json, docs/pipeline/backlog.json, docs/pipeline/BACKLOG.md, docs/pipeline/principles.md\ncommit docs/pipeline/ on main now: git add docs/pipeline && git commit')
+  expect(writes).toEqual([CONFIG, BACKLOG, BACKLOG_MD, `${DIR}/principles.md`, GITIGNORE])
   expect(files.get(GITIGNORE)).toBe('.claude/worktrees/\n')
   expect(JSON.parse(files.get(CONFIG)!)).toMatchObject({ version: 1, merge: 'pr', protectedPaths: ['.github/workflows/**'] })
   expect(JSON.parse(files.get(BACKLOG)!)).toEqual({ version: 1, items: [] })
   expect(files.get(BACKLOG_MD)).toContain('No items.')
   const again = text(await call($, { action: 'init' }))
   expect(again).toBe('exists: docs/pipeline/config.json')
-  expect(writes.length).toBe(4)
+  expect(writes.length).toBe(5)
 })
 
 test('init adds .claude/worktrees/ to the .gitignore once: appended to a file that lacks it, a line break first when the file ends without one', async ($, on) => {
@@ -604,6 +605,7 @@ Kysely only.
 ### Task 1: Schema
 - Files: db/schema.sql, src/job.ts
 - Check: npm test -- job
+- Covers: 1
 - Focus: the organization filter
 
 Write the failing test first.
@@ -1247,4 +1249,42 @@ test('add with the spec text writes and links the spec, so the item is ready in 
   await call($, { action: 'ledger', item: 'p1', set: { branch: 'feat/p1' } })
   await call($, { action: 'update', id: 'p1', set: { status: 'blocked', note: 'waits on the API key' } })
   expect(ledgerP1(files).blockers).toEqual(['waits on the API key'])
+})
+
+// ---------- 0.9.0: acceptance coverage and project principles ----------
+
+const TWO_SPEC = '# p1\n\n## What\n\nx\n\n## Acceptance\n\n- [ ] A CSV downloads.\n- [ ] The themes are checked in the running app.\n\n## Open\n'
+const COVERS_1 = PLAN_MD
+
+test('0.9.0: plan refuses a fresh plan that leaves an acceptance item uncovered, and takes it once a task covers it or the plan parks it', async ($, on) => {
+  const { files } = world(on, { ...BUILD_SEED, [`${DIR}/specs/p1.md`]: TWO_SPEC, [`${WT}/docs/pipeline/plans/p1.md`]: COVERS_1 })
+  const refused = text(await call($, { action: 'plan', item: 'p1' }))
+  expect(refused).toContain('refused: docs/pipeline/plans/p1.md leaves acceptance uncovered:\n- acceptance 2 is covered by no task: "The themes are checked in the running app."')
+  expect(refused).toContain('add `- Covers: <numbers>` to the task that delivers it, or name it under `## Parked` as `Acceptance 2`')
+  expect(buildLedger(files).tasks).toEqual([])
+  expect(items(files)[0]!.status).toBe('planning')
+  files.set(`${WT}/docs/pipeline/plans/p1.md`, COVERS_1.replace('- Needs: 1\n', '- Needs: 1\n- Covers: 2\n'))
+  expect(text(await call($, { action: 'plan', item: 'p1' }))).toMatch(/^p1 · building · 2 tasks · /)
+  expect(files.get(`${WT}/docs/pipeline/ledgers/p1/task-1-brief.md`)).toContain('must make true:\n1. A CSV downloads.\n')
+})
+
+test('0.9.0: a plan already being built is not refused for coverage: the answer notes what no task covers', async ($, on) => {
+  const { files } = world(on, { ...BUILD_SEED, [`${DIR}/specs/p1.md`]: TWO_SPEC, [`${WT}/docs/pipeline/plans/p1.md`]: PLAN_MD.replace('- Covers: 1\n', '') })
+  files.set(`${DIR}/ledgers/p1.json`, JSON.stringify({ item: 'p1', branch: 'feat/p1', worktree: '.claude/worktrees/p1', base: 'a1b2c3d', plan: 'docs/pipeline/plans/p1.md', tasks: [{ n: 1, title: 'Schema', status: 'accepted', dispatches: [], commits: 'a..b' }, { n: 2, title: 'Route', status: 'pending', dispatches: [] }], rulings: [], blockers: [], tokens: 0 }))
+  expect(text(await call($, { action: 'plan', item: 'p1' }))).toBe('p1 · building · 2 tasks · next: brief task 2 · note: acceptance 1, 2 covered by no task')
+})
+
+test('0.9.0: init writes a principles file to fill in, and a brief pastes what is in it', async ($, on) => {
+  const { files, writes } = world(on)
+  expect(text(await call($, { action: 'init' }))).toBe('wrote docs/pipeline/config.json, docs/pipeline/backlog.json, docs/pipeline/BACKLOG.md, docs/pipeline/principles.md\ncommit docs/pipeline/ on main now: git add docs/pipeline && git commit')
+  expect(writes).toContain(`${DIR}/principles.md`)
+  expect(files.get(`${DIR}/principles.md`)).toContain('# Principles')
+  // The starter holds only commented examples: a brief reads none.
+  expect(principlesOf(files.get(`${DIR}/principles.md`)!)).toBe('none written (docs/pipeline/principles.md)')
+})
+
+test('0.9.0: the principles of the project reach the implementer brief', async ($, on) => {
+  const { files } = world(on, { ...BUILD_SEED, [`${DIR}/principles.md`]: '# Principles\n\n- No new dependency without asking.\n', [`${WT}/docs/pipeline/plans/p1.md`]: COVERS_1 })
+  await call($, { action: 'plan', item: 'p1' })
+  expect(files.get(`${WT}/docs/pipeline/ledgers/p1/task-1-brief.md`)).toContain('keep to each:\n- No new dependency without asking.\n')
 })

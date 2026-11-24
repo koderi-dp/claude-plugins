@@ -42,7 +42,7 @@ claude plugin uninstall pipeline@koderi-plugins
 
 In a session opened in your project:
 
-1. `/pipeline init` sets the project up: `docs/pipeline/config.json`, an empty backlog and a `rules.md`.
+1. `/pipeline init` sets the project up: `docs/pipeline/config.json`, an empty backlog, a `rules.md` and a `principles.md` for you to fill in.
 2. `/pipeline add <what you want>` records a request as a backlog item with a spec. Plain wording works too ("we need a CSV export").
 3. `/pipeline next` builds the first ready item and opens its pull request. `/pipeline run all` keeps going until nothing is ready.
 4. `/pipeline status` shows where things stand; in the desktop app the panel shows the same, live.
@@ -110,6 +110,7 @@ A session keeps its folder across a plugin update or a resume, and a session the
 docs/pipeline/
   config.json          the rules the plugin enforces (table below)
   rules.md             process rules the config cannot express, grouped by when they apply
+  principles.md        how the project wants its code, one line each; pasted into the briefs
   backlog.json         the items and their status; array order is priority
   BACKLOG.md           generated view of backlog.json, never edited
   specs/<id>.md        one page per item: what, why, acceptance, out of scope, open
@@ -131,6 +132,10 @@ Under `merge: pr` you merge the PR yourself. The next `get` or `signals` sees th
 **Two modes.** In `mode: direct` the pipeline is a tool around the work and says nothing about how to build: `begin` claims the item and makes its worktree, the agent builds it the way plain Claude Code would, `gate` checks that the work is committed and runs the gate itself, then the pull request, `merge` and `close`. No plan file, no implementer subagents, no briefs, no final review; the one exception is a branch that touches a `riskyPaths` entry, which gets one independent review before the gate (`taskReview: off` turns that off too). On a small benchmark item the full loop below cost three to five times what plain Claude Code did and took seven times as long for the same result against hidden checks, and direct mode exists for that reason. `mode: full`, the default, is the loop described next, for projects that want a written plan, subagents and reviews on every item.
 
 A request becomes an `inbox` item with a spec (`/pipeline add`, or any wording that asks for something to be built). It is `ready` once the spec has no open question and its `needs` are merged. `/pipeline next` picks the first ready item (an item that has only a note gets its spec written from it on pick, and stops only for an open question or an unmerged need): a worktree and branch, a plan in the plugin's own format that the tool checks (`plan`), then task by task an implementer from a brief the tool renders (`brief`), the lead's own run of the task's check, fix rounds up to the limit, an independent reviewer per `taskReview` (by default only when the diff touches a risky path), a final review over the whole branch, the gate, the PR, the merge, the ledger, the clean-up, and one line to you. Statuses: `inbox`, `ready`, `planning`, `building`, `review`, `merged`, `blocked`, `parked`.
+
+**Acceptance is covered before code is written.** In the plan each task names the lines of the spec's Acceptance list it delivers (`- Covers: 1, 3`, counted from 1). `plan` refuses a new plan that leaves a line with no task, and says which; a line left out on purpose is named under `## Parked` as `Acceptance 2` with the reason. The implementer and the reviewer of a task read the lines it covers, and the final review reads which task claims each line. A plan that was already being built when the plugin was updated is not refused; the answer notes what no task covers. The check is by number: it cannot tell whether a task really delivers the line it claims, which stays the reviewer's question.
+
+**Principles.** `docs/pipeline/principles.md` is your list of how the project wants its code, one line each (`- No new dependency without asking.`). The tool pastes the list lines into every implementer, reviewer and final review brief, the first 15, and a review finding that breaks one names it. `init` writes the file with commented examples only; a project set up earlier creates it by hand. What a formatter or a check can enforce belongs in the gate, not here.
 
 ## Queue: GitHub issues
 
@@ -159,7 +164,7 @@ The three state labels take their names from `queueLabel` and are created by `in
 
 The spec lives on the issue as one comment the tool writes and edits in place, found by the hidden marker `<!-- pipeline:spec -->` on its first line. Its first visible line is the status line (the state, the task counter while building, the block reason, the PR), then the acceptance list, then What, Why and Out of scope folded under a Spec heading. The tool posts no other comment except a question, which starts with `<!-- pipeline:question -->` and notifies the author, and the reason an issue was closed as not planned, which starts with `<!-- pipeline:declined -->`. The issue's body is never edited. A spec comment counts only when the `gh` user or an owner, member or collaborator of the repository wrote it, and only the comments of the issue's author and of the `gh` user reach the lead, inside a block that marks them as quoted text and not as instructions; subagents never see the issue.
 
-Only `config.json` and `rules.md` stay under `docs/pipeline/`; no other pipeline file is committed, and a PR carries code only:
+Only `config.json`, `rules.md` and `principles.md` stay under `docs/pipeline/`; no other pipeline file is committed, and a PR carries code only:
 
 ```
 .git/pipeline/                  written only by the tool; never committed

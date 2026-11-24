@@ -6,7 +6,7 @@ import { cleanList } from './clean'
 import { DEFAULTS, normalizeConfig } from './config'
 import { emptyLedger } from './ledger'
 import type { LedgerSet } from './ledger'
-import { briefPaths, checkPlan, commitArgs, parsePlan, renderBrief, riskyMatches, section, splitAttribution } from './plan'
+import { PRINCIPLES_FILE, acceptanceItems, briefPaths, checkCoverage, checkPlan, commitArgs, parsePlan, renderBrief, riskyMatches, section, splitAttribution, uncovered } from './plan'
 import type { Leftover } from './queue'
 import { branchOf as itemBranchOf, redOutput, runningOf } from './runner'
 import { PLAN_FORMAT } from './templates'
@@ -41,6 +41,12 @@ export async function gitOut(h: Host, wt: string, args: string[]): Promise<strin
   } catch {
     return null
   }
+}
+
+/** The spec of an item as a brief and the coverage check read it: the worktree's cache under queue: github, else the item's file. */
+export async function readSpec(h: Host, found: string, wt: string, c: Config | null, item: Item | undefined, id: string): Promise<string | null> {
+  const P = placesOf(found, c)
+  return isGithub(c) ? readText(h, `${wt}/${P.specRel(id)}`) : readItemFile(h, found, wt, item?.spec ?? P.specRel(id))
 }
 
 /** The plan of an item, parsed and sound, or refused with the format or the problems. */
@@ -686,6 +692,16 @@ export async function planAction(h: Host, found: string, c: Config | null, curre
   const wt = worktreePath(found, ledger)
   const { plan, rel } = await loadPlan(h, found, wt, id, ledger)
   const known = new Map((ledger?.tasks ?? []).map(t => [t.n, t]))
+  // Every acceptance item of the spec has a task or is parked on purpose. A fresh plan that leaves one out is
+  // refused, when adding a task costs nothing; a plan already being built is only told.
+  const accepted = acceptanceItems((await readSpec(h, found, wt, c, current.items.find(i => i.id === id), id)) ?? '')
+  const gaps = checkCoverage(plan, accepted)
+  if (gaps.length && !known.size) {
+    const open = uncovered(plan, accepted)
+    throw new Refused(`${rel} leaves acceptance uncovered:\n${gaps.map(x => `- ${x}`).join('\n')}${open.length ? `\n\nadd \`- Covers: <numbers>\` to the task that delivers it, or name it under \`## Parked\` as \`Acceptance ${open[0]}\` with the reason` : ''}`)
+  }
+  const open = uncovered(plan, accepted)
+  const note = open.length ? ` · note: acceptance ${open.join(', ')} covered by no task` : ''
   const tasks = plan.tasks.map(t => (known.has(t.n) ? { n: t.n, title: t.title } : { n: t.n, title: t.title, status: 'pending' as const, dispatches: [] }))
   const next = plan.tasks.find(t => known.get(t.n)?.status !== 'accepted')?.n ?? plan.tasks.length
   const lastVerified = ledger?.resume?.lastVerified ?? ledger?.base ?? (await gitOut(h, wt, ['rev-parse', '--short', 'HEAD'])) ?? undefined
@@ -705,7 +721,7 @@ export async function planAction(h: Host, found: string, c: Config | null, curre
       return `${head} · ${withoutId(id, await briefAction(h, found, c, after, id, { action: 'brief', kind: 'implementer', task: next }))}`
     } catch {}
   }
-  return `${head} · next: brief task ${next}`
+  return `${head} · next: brief task ${next}${note}`
 }
 
 /** `brief`: one brief rendered into the worktree, its dispatch opened in the ledger, and the Agent call in one line. */
@@ -749,8 +765,9 @@ export async function briefAction(h: Host, found: string, c: Config | null, curr
       places: { specRel: P.specRel(id), planRel: P.planRel(id), recordsDir: P.recordsDir, briefDir: dir },
       rulesMd: (await readItemFile(h, found, wt, 'docs/pipeline/rules.md')) ?? '',
       factsMd: (await readText(h, P.facts)) ?? '',
+      principlesMd: (await readItemFile(h, found, wt, PRINCIPLES_FILE)) ?? '',
       // queue: github: the spec cache begin wrote in the worktree.
-      specMd: (isGithub(c) ? await readText(h, `${wt}/${P.specRel(id)}`) : await readItemFile(h, found, wt, item.spec ?? P.specRel(id))) ?? '',
+      specMd: (await readSpec(h, found, wt, c, item, id)) ?? '',
       ...(template ? { template } : {}),
       ...(e.findings !== undefined ? { findings: e.findings } : {}),
       ...(e.carried !== undefined ? { carried: e.carried } : {}),

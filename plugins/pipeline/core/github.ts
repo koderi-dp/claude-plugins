@@ -1,4 +1,5 @@
 // The GitHub queue: the open issues as the backlog, their spec comments, questions and answers.
+import { PRINCIPLES_FILE, PRINCIPLES_STARTER } from './plan'
 import { read, update } from './state'
 import type { Host } from './host'
 import type { Backlog, Config, Ledger } from '../types'
@@ -484,6 +485,8 @@ export async function initGithub(h: Host, found: string, c: Config | null, error
     await h.fs.write(p.config, serialize(next))
     await update(h, config, () => structuredClone(next))
   }
+  const hasPrinciples = await h.fs.exists(p.principles)
+  if (!hasPrinciples) await h.fs.write(p.principles, PRINCIPLES_STARTER)
   const L = labelsOf(next.queueLabel)
   const names = [L.queue, L.building, L.blocked, L.needsInfo]
   const labelled = await tracker.ensureLabels(run, names)
@@ -491,6 +494,7 @@ export async function initGithub(h: Host, found: string, c: Config | null, error
   await ensureExclude(h, found)
   await ensureIgnore(h, found)
   await update(h, fileError, () => null)
-  const head = hasConfig ? `exists: ${CONFIG_FILE}` : `wrote ${CONFIG_FILE}`
-  return `${head} · labels ${names.join(', ')}${hasConfig ? '' : ` · commit ${CONFIG_FILE} on ${next.mainBranch}`}`
+  const wrote = [...(hasConfig ? [] : [CONFIG_FILE]), ...(hasPrinciples ? [] : [PRINCIPLES_FILE])]
+  const head = hasConfig ? `exists: ${CONFIG_FILE}${hasPrinciples ? '' : ` · wrote ${PRINCIPLES_FILE}`}` : `wrote ${wrote.join(', ')}`
+  return `${head} · labels ${names.join(', ')}${wrote.length ? ` · commit ${wrote.join(' and ')} on ${next.mainBranch}` : ''}`
 }

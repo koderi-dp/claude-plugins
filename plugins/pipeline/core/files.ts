@@ -11,6 +11,7 @@ export function paths(root: string) {
     dir,
     config: `${dir}/config.json`,
     rules: `${dir}/rules.md`,
+    principles: `${dir}/principles.md`,
     backlog: `${dir}/backlog.json`,
     backlogMd: `${dir}/BACKLOG.md`,
     specs: `${dir}/specs`,

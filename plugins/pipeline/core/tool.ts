@@ -16,6 +16,7 @@ import { quoted } from './queue'
 import { tail } from './runner'
 import { statusText } from './status'
 import type { StatusInput } from './status'
+import { PRINCIPLES_FILE, PRINCIPLES_STARTER } from './plan'
 import { acceptAction, adoptAction, beginAction, briefAction, closeAction, gateAction, leftoverLines, mergeAction, planAction, prAction, shipAction, startsRun, withoutId } from './actions'
 import { startChild, stopChild } from './children'
 import { addIssue, answerIssue, declineIssue, editIssueText, ensureIgnore, extrasOrRefuse, initGithub, isGithub, issueState, labelOf, placesOf, questionIssue, relOf, specIssue, unparkIssue, writeIssueBacklog } from './github'
@@ -345,6 +346,10 @@ export async function runToolNow(h: Host, e: ToolInput): Promise<string> {
       await h.fs.write(p.backlogMd, renderBacklogMd(empty))
       await update(h, backlog, () => empty)
       wrote.push(BACKLOG_FILE, BACKLOG_MD_FILE)
+    }
+    if (!(await h.fs.exists(p.principles))) {
+      await h.fs.write(p.principles, PRINCIPLES_STARTER)
+      wrote.push(PRINCIPLES_FILE)
     }
     await ensureIgnore(h, found)
     await update(h, fileError, () => null)
